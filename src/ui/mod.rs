@@ -31,7 +31,7 @@ impl App {
         Task::none()
     }
 
-    pub fn view(&self) -> Element<Message> {
+    pub fn view(&self) -> Element<'_, Message> {
         match self.screen {
             Screen::Home => ui_home(),
             Screen::ScaleTrainer => ui_placeholder("Scale Trainer"),
@@ -42,12 +42,12 @@ impl App {
 }
 
 fn ui_home() -> Element<'static, Message> {
-    use iced::widget::{button, column, container, text};
     use iced::Length;
+    use iced::widget::{button, column, container, text};
 
     container(
         column![
-            text("Guitar Trainer").size(40),
+            text("Trastea").size(60),
             button("Scale Trainer").on_press(Message::Navigate(Screen::ScaleTrainer)),
             button("Note Trainer").on_press(Message::Navigate(Screen::NoteTrainer)),
             button("Interval Trainer").on_press(Message::Navigate(Screen::IntervalTrainer)),
@@ -61,19 +61,14 @@ fn ui_home() -> Element<'static, Message> {
     .into()
 }
 
-
-fn ui_placeholder(label: &str) -> Element<Message> {
-    use iced::widget::{column, container, text};
+fn ui_placeholder(label: &str) -> Element<'_, Message> {
     use iced::Length;
+    use iced::widget::{column, container, text};
 
-    container(
-            column![text(label).size(30),]
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
-    .into()
+    container(column![text(label).size(30),])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
 }
-
-
