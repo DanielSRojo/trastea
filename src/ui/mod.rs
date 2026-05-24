@@ -196,13 +196,33 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
         highlighted: scale_markers(root, kind),
     };
 
-    let details = container(
+    let current_scale_card = container(
         column![
             text(root.to_string()).size(48).color(INK),
             text(kind.name()).size(28).color(INK),
             text(kind.intervalic()).size(18).color(BODY),
+        ]
+        .spacing(8),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .padding(32)
+    .style(card_container);
+
+    let root_selector_card = container(
+        column![
             root_note_row(&Note::ALL[..6], root),
             root_note_row(&Note::ALL[6..], root),
+        ]
+        .spacing(8),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .padding(32)
+    .style(card_container);
+
+    let scale_selector_card = container(
+        column![
             scale_kind_row(&ScaleKind::ALL[..4], kind),
             scale_kind_row(&ScaleKind::ALL[4..8], kind),
             scale_kind_row(&ScaleKind::ALL[8..12], kind),
@@ -213,6 +233,15 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
     .width(Length::Fill)
     .padding(32)
     .style(card_container);
+
+    let top_cards = row![current_scale_card, root_selector_card]
+        .width(Length::Fill)
+        .height(Length::Shrink)
+        .spacing(16);
+
+    let details = column![top_cards, scale_selector_card]
+        .width(Length::Fill)
+        .spacing(16);
 
     container(row![fretboard(fb), details].spacing(32))
         .width(Length::Fill)
