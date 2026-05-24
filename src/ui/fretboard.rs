@@ -62,13 +62,13 @@ impl<Message> canvas::Program<Message> for Fretboard {
         let left_x = pad_x;
         let right_x = pad_x + (string_count - 1) as f32 * string_spacing;
 
-        let gray = Color::from_rgb(0.45, 0.45, 0.45);
-        let light_gray = Color::from_rgb(0.65, 0.65, 0.65);
+        let ink = Color::WHITE;
+        let gray = Color::from_rgb8(0x3a, 0x3a, 0x3a);
+        let light_gray = Color::from_rgb8(0x77, 0x77, 0x77);
 
-        // Nut — thick white line at fret 0
         frame.stroke(
             &Path::line(Point::new(left_x, top_y), Point::new(right_x, top_y)),
-            Stroke::default().with_color(Color::WHITE).with_width(3.0),
+            Stroke::default().with_color(ink).with_width(3.0),
         );
 
         // Frets — thin gray horizontal lines for frets 1–12
@@ -91,7 +91,7 @@ impl<Message> canvas::Program<Message> for Fretboard {
 
         // Fret markers — small dots to the right of the last string
         let marker_x = right_x + 10.0;
-        let dot_gray = Color::from_rgb(0.5, 0.5, 0.5);
+        let dot_gray = Color::from_rgb8(0x88, 0x88, 0x88);
 
         for &f in &[3_usize, 5, 7, 9] {
             let y = (fret_y(f - 1) + fret_y(f)) / 2.0;
@@ -147,7 +147,7 @@ impl<Message> canvas::Program<Message> for Fretboard {
 
 pub fn fretboard<Message: 'static>(fb: Fretboard) -> Element<'static, Message> {
     Canvas::new(fb)
-        .width(Length::Fixed(220.0))
+        .width(Length::Fixed(280.0))
         .height(Length::Fill)
         .into()
 }

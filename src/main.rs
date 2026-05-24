@@ -8,14 +8,14 @@ mod music;
 
 fn theme(_: &App) -> Theme {
     Theme::custom(
-        "Black".to_owned(),
+        "Trastea Black".to_owned(),
         Palette {
             background: Color::BLACK,
             text: Color::WHITE,
-            primary: Color::from_rgb(0.5, 0.5, 1.0),
-            success: Color::from_rgb(0.0, 0.8, 0.4),
-            warning: Color::from_rgb(1.0, 0.7, 0.0),
-            danger: Color::from_rgb(1.0, 0.3, 0.3),
+            primary: Color::WHITE,
+            success: Color::from_rgb8(0x50, 0xe3, 0xc2),
+            warning: Color::from_rgb8(0xf5, 0xa6, 0x23),
+            danger: Color::from_rgb8(0xff, 0x4d, 0x4d),
         },
     )
 }
