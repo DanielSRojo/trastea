@@ -39,8 +39,9 @@ impl<Message> canvas::Program<Message> for Fretboard {
         let mut frame = Frame::new(renderer, bounds.size());
 
         let pad_x = 20.0_f32;
-        let pad_y = 20.0_f32;
+        let pad_bottom = 20.0_f32;
         let marker_col_width = 20.0_f32;
+        let open_marker_gap = 4.0_f32;
 
         let fret_count = self.num_frets;
         let string_count = 6_usize;
@@ -49,16 +50,18 @@ impl<Message> canvas::Program<Message> for Fretboard {
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), Color::BLACK);
 
         let usable_w = bounds.width - 2.0 * pad_x - marker_col_width;
-        let usable_h = bounds.height - 2.0 * pad_y;
-
         let string_spacing = usable_w / (string_count - 1) as f32;
+        let note_radius = (string_spacing * 0.35).clamp(8.0, 14.0);
+        let pad_top = note_radius * 2.0 + open_marker_gap;
+        let usable_h = bounds.height - pad_top - pad_bottom;
+
         let fret_spacing = usable_h / fret_count as f32;
 
         let string_x = |s: usize| pad_x + s as f32 * string_spacing;
-        let fret_y = |f: usize| pad_y + f as f32 * fret_spacing;
+        let fret_y = |f: usize| pad_top + f as f32 * fret_spacing;
 
-        let top_y = pad_y;
-        let bottom_y = pad_y + usable_h;
+        let top_y = pad_top;
+        let bottom_y = pad_top + usable_h;
         let left_x = pad_x;
         let right_x = pad_x + (string_count - 1) as f32 * string_spacing;
 
@@ -115,12 +118,12 @@ impl<Message> canvas::Program<Message> for Fretboard {
         }
 
         // Highlighted note markers
-        let note_radius = (string_spacing.min(fret_spacing) * 0.35).clamp(8.0, 14.0);
+        let note_radius = note_radius.min((fret_spacing * 0.35).clamp(8.0, 14.0));
 
         for marker in &self.highlighted {
             let x = string_x(marker.string);
             let y = if marker.fret == 0 {
-                top_y - note_radius - 4.0
+                top_y - note_radius - open_marker_gap
             } else {
                 (fret_y(marker.fret - 1) + fret_y(marker.fret)) / 2.0
             };
