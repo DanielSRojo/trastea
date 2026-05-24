@@ -40,7 +40,6 @@ impl<Message> canvas::Program<Message> for Fretboard {
 
         let pad_x = 20.0_f32;
         let pad_bottom = 20.0_f32;
-        let marker_col_width = 20.0_f32;
         let open_marker_gap = 4.0_f32;
 
         let fret_count = self.num_frets;
@@ -49,7 +48,7 @@ impl<Message> canvas::Program<Message> for Fretboard {
         // Background
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), Color::BLACK);
 
-        let usable_w = bounds.width - 2.0 * pad_x - marker_col_width;
+        let usable_w = bounds.width - 2.0 * pad_x;
         let string_spacing = usable_w / (string_count - 1) as f32;
         let note_radius = (string_spacing * 0.35).clamp(8.0, 14.0);
         let pad_top = note_radius * 2.0 + open_marker_gap;
@@ -92,14 +91,16 @@ impl<Message> canvas::Program<Message> for Fretboard {
             );
         }
 
-        // Fret markers — small dots to the right of the last string
-        let marker_x = right_x + 10.0;
+        let marker_x = (string_x(2) + string_x(3)) / 2.0;
+        let lower_double_marker_x = (string_x(1) + string_x(2)) / 2.0;
+        let upper_double_marker_x = (string_x(3) + string_x(4)) / 2.0;
         let dot_gray = Color::from_rgb8(0x88, 0x88, 0x88);
+        let fret_marker_radius = 6.5;
 
         for &f in &[3_usize, 5, 7, 9] {
             let y = (fret_y(f - 1) + fret_y(f)) / 2.0;
             frame.fill(
-                &Path::circle(Point::new(marker_x, y), 4.0),
+                &Path::circle(Point::new(marker_x, y), fret_marker_radius),
                 Fill::from(dot_gray),
             );
         }
@@ -108,11 +109,11 @@ impl<Message> canvas::Program<Message> for Fretboard {
         {
             let y = (fret_y(11) + fret_y(12)) / 2.0;
             frame.fill(
-                &Path::circle(Point::new(marker_x - 5.0, y), 3.0),
+                &Path::circle(Point::new(lower_double_marker_x, y), fret_marker_radius),
                 Fill::from(dot_gray),
             );
             frame.fill(
-                &Path::circle(Point::new(marker_x + 5.0, y), 3.0),
+                &Path::circle(Point::new(upper_double_marker_x, y), fret_marker_radius),
                 Fill::from(dot_gray),
             );
         }
