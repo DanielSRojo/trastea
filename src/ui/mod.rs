@@ -39,6 +39,8 @@ pub enum Screen {
 pub enum Message {
     Navigate(Screen),
     GoBack,
+    SelectRoot(Note),
+    SelectScaleFormula(ScaleFormula),
 }
 
 impl Default for App {
@@ -73,6 +75,12 @@ impl App {
                 if let Some(prev) = self.history.pop() {
                     self.screen = prev;
                 }
+            }
+            Message::SelectRoot(root) => {
+                self.selected_root = root;
+            }
+            Message::SelectScaleFormula(formula) => {
+                self.selected_scale_formula = formula;
             }
         }
         Task::none()
@@ -191,6 +199,14 @@ fn ui_scale_trainer(root: Note, formula: ScaleFormula) -> Element<'static, Messa
             text("today's scale").size(12).color(MUTE),
             text(root.to_string()).size(48).color(INK),
             text(format!("{formula:?}")).size(28).color(INK),
+            text("root note").size(12).color(MUTE),
+            root_note_row(&Note::ALL[..6], root),
+            root_note_row(&Note::ALL[6..], root),
+            text("scale formula").size(12).color(MUTE),
+            scale_formula_row(&ScaleFormula::ALL[..4], formula),
+            scale_formula_row(&ScaleFormula::ALL[4..8], formula),
+            scale_formula_row(&ScaleFormula::ALL[8..12], formula),
+            scale_formula_row(&ScaleFormula::ALL[12..], formula),
             text("Press Esc to return home. Re-enter Scale Trainer for a new random prompt.")
                 .size(14)
                 .color(BODY),
@@ -207,6 +223,43 @@ fn ui_scale_trainer(root: Note, formula: ScaleFormula) -> Element<'static, Messa
         .padding([48, 64])
         .center_y(Length::Fill)
         .into()
+}
+
+fn root_note_row(notes: &[Note], selected: Note) -> iced::widget::Row<'static, Message> {
+    use iced::widget::{button, row, text};
+
+    notes.iter().fold(row![].spacing(8), |row, note| {
+        row.push(
+            button(text(note.to_string()).size(14))
+                .padding([8, 12])
+                .style(if *note == selected {
+                    selected_root_button
+                } else {
+                    ghost_button
+                })
+                .on_press(Message::SelectRoot(*note)),
+        )
+    })
+}
+
+fn scale_formula_row(
+    formulas: &[ScaleFormula],
+    selected: ScaleFormula,
+) -> iced::widget::Row<'static, Message> {
+    use iced::widget::{button, row, text};
+
+    formulas.iter().fold(row![].spacing(8), |row, formula| {
+        row.push(
+            button(text(format!("{formula:?}")).size(13))
+                .padding([8, 12])
+                .style(if *formula == selected {
+                    selected_root_button
+                } else {
+                    ghost_button
+                })
+                .on_press(Message::SelectScaleFormula(*formula)),
+        )
+    })
 }
 
 fn scale_markers(root: Note, formula: ScaleFormula) -> Vec<NoteMarker> {
@@ -227,7 +280,7 @@ fn scale_markers(root: Note, formula: ScaleFormula) -> Vec<NoteMarker> {
                     color: if note == root {
                         Color::from_rgb8(0xff, 0x4d, 0x4d)
                     } else {
-                        Color::from_rgb8(0x50, 0xe3, 0xc2)
+                        LINK
                     },
                 });
             }
@@ -358,6 +411,21 @@ fn ghost_button(
         background: Some(Background::Color(background)),
         text_color: INK,
         border: Border::default().rounded(64).width(1).color(HAIRLINE),
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
+
+fn selected_root_button(
+    _theme: &iced::Theme,
+    _status: iced::widget::button::Status,
+) -> iced::widget::button::Style {
+    let accent = Color::from_rgb8(0x50, 0xe3, 0xc2);
+
+    iced::widget::button::Style {
+        background: Some(Background::Color(accent)),
+        text_color: CANVAS,
+        border: Border::default().rounded(64).width(1).color(accent),
         shadow: Shadow::default(),
         snap: true,
     }
