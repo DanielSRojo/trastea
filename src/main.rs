@@ -4,6 +4,8 @@ use iced::{Color, Theme, application};
 mod ui;
 use ui::App;
 
+mod music;
+
 fn theme(_: &App) -> Theme {
     Theme::custom(
         "Black".to_owned(),
@@ -22,5 +24,6 @@ fn main() -> iced::Result {
     application(App::new, App::update, App::view)
         .title("Trastea")
         .theme(theme)
+        .subscription(App::subscription)
         .run()
 }
