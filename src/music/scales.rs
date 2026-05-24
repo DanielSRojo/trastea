@@ -2,6 +2,8 @@
 // Returns the enharmonic spelling of a pitch in the context of a given scale.
 // e.g. semitone 1 → "C#" in G major, "Db" in F minor.
 
+use std::fmt;
+
 use super::intervals::Interval;
 use super::notes::Note;
 
@@ -30,6 +32,29 @@ pub enum ScaleFormula {
 pub struct Scale {
     pub root: Note,
     pub formula: ScaleFormula,
+}
+
+impl fmt::Display for ScaleFormula {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ScaleFormula::Ionian => write!(f, "Ionian"),
+            ScaleFormula::Dorian => write!(f, "Dorian"),
+            ScaleFormula::Phrygian => write!(f, "Phrygian"),
+            ScaleFormula::Lydian => write!(f, "Lydian"),
+            ScaleFormula::Mixolydian => write!(f, "Mixolydian"),
+            ScaleFormula::Aeolian => write!(f, "Aeolian"),
+            ScaleFormula::Locrian => write!(f, "Locrian"),
+            ScaleFormula::HarmonicMinor => write!(f, "Harmonic Minor"),
+            ScaleFormula::MelodicMinor => write!(f, "Melodic Minor"),
+            ScaleFormula::MinorPentatonic => write!(f, "Minor Pentatonic"),
+            ScaleFormula::MajorPentatonic => write!(f, "Major Pentatonic"),
+            ScaleFormula::Blues => write!(f, "Blues"),
+            ScaleFormula::Voodoo => write!(f, "Voodoo"),
+            ScaleFormula::SpanishGypsy => write!(f, "Spanish Gypsy"),
+            ScaleFormula::WholeTone => write!(f, "Whole Tone"),
+            ScaleFormula::Diminished => write!(f, "Diminished"),
+        }
+    }
 }
 
 impl Scale {

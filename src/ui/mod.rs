@@ -3,7 +3,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use fretboard::{Fretboard, NoteMarker, fretboard};
 
-use iced::{Background, Border, Color, Element, Shadow, Subscription, Task, Vector, keyboard};
+use iced::{
+    Background, Border, Color, Element, Padding, Shadow, Subscription, Task, Vector, keyboard,
+};
 use keyboard::key::Named;
 
 use crate::music::{notes::Note, scales::Scale, scales::ScaleFormula};
@@ -196,20 +198,14 @@ fn ui_scale_trainer(root: Note, formula: ScaleFormula) -> Element<'static, Messa
 
     let details = container(
         column![
-            text("today's scale").size(12).color(MUTE),
             text(root.to_string()).size(48).color(INK),
-            text(format!("{formula:?}")).size(28).color(INK),
-            text("root note").size(12).color(MUTE),
+            text(formula.to_string()).size(28).color(INK),
             root_note_row(&Note::ALL[..6], root),
             root_note_row(&Note::ALL[6..], root),
-            text("scale formula").size(12).color(MUTE),
             scale_formula_row(&ScaleFormula::ALL[..4], formula),
             scale_formula_row(&ScaleFormula::ALL[4..8], formula),
             scale_formula_row(&ScaleFormula::ALL[8..12], formula),
             scale_formula_row(&ScaleFormula::ALL[12..], formula),
-            text("Press Esc to return home. Re-enter Scale Trainer for a new random prompt.")
-                .size(14)
-                .color(BODY),
         ]
         .spacing(12),
     )
@@ -220,7 +216,12 @@ fn ui_scale_trainer(root: Note, formula: ScaleFormula) -> Element<'static, Messa
     container(row![fretboard(fb), details].spacing(32))
         .width(Length::Fill)
         .height(Length::Fill)
-        .padding([48, 64])
+        .padding(Padding {
+            top: 24.0,
+            right: 64.0,
+            bottom: 48.0,
+            left: 64.0,
+        })
         .center_y(Length::Fill)
         .into()
 }
@@ -250,7 +251,7 @@ fn scale_formula_row(
 
     formulas.iter().fold(row![].spacing(8), |row, formula| {
         row.push(
-            button(text(format!("{formula:?}")).size(13))
+            button(text(formula.to_string()).size(13))
                 .padding([8, 12])
                 .style(if *formula == selected {
                     selected_root_button

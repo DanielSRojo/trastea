@@ -41,6 +41,7 @@ impl<Message> canvas::Program<Message> for Fretboard {
         let pad_x = 20.0_f32;
         let pad_bottom = 20.0_f32;
         let open_marker_gap = 4.0_f32;
+        let target_fret_cell_ratio = 1.35_f32;
 
         let fret_count = self.num_frets;
         let string_count = 6_usize;
@@ -48,21 +49,24 @@ impl<Message> canvas::Program<Message> for Fretboard {
         // Background
         frame.fill_rectangle(Point::ORIGIN, bounds.size(), Color::BLACK);
 
-        let usable_w = bounds.width - 2.0 * pad_x;
-        let string_spacing = usable_w / (string_count - 1) as f32;
-        let note_radius = (string_spacing * 0.35).clamp(8.0, 14.0);
-        let pad_top = note_radius * 2.0 + open_marker_gap;
+        let available_w = bounds.width - 2.0 * pad_x;
+        let available_string_spacing = available_w / (string_count - 1) as f32;
+        let max_note_radius = (available_string_spacing * 0.35).clamp(8.0, 14.0);
+        let pad_top = max_note_radius * 2.0 + open_marker_gap;
         let usable_h = bounds.height - pad_top - pad_bottom;
-
         let fret_spacing = usable_h / fret_count as f32;
+        let string_spacing = available_string_spacing.min(fret_spacing / target_fret_cell_ratio);
+        let usable_w = string_spacing * (string_count - 1) as f32;
+        let left_edge = (bounds.width - usable_w) / 2.0;
+        let note_radius = (string_spacing * 0.35).clamp(8.0, 14.0);
 
-        let string_x = |s: usize| pad_x + s as f32 * string_spacing;
+        let string_x = |s: usize| left_edge + s as f32 * string_spacing;
         let fret_y = |f: usize| pad_top + f as f32 * fret_spacing;
 
         let top_y = pad_top;
         let bottom_y = pad_top + usable_h;
-        let left_x = pad_x;
-        let right_x = pad_x + (string_count - 1) as f32 * string_spacing;
+        let left_x = left_edge;
+        let right_x = left_edge + usable_w;
 
         let ink = Color::WHITE;
         let gray = Color::from_rgb8(0x3a, 0x3a, 0x3a);
