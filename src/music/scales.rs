@@ -32,6 +32,15 @@ pub struct Scale {
     pub formula: ScaleFormula,
 }
 
+impl Scale {
+    pub fn notes(self) -> Vec<Note> {
+        self.formula
+            .intervals()
+            .iter()
+            .map(|interval| self.root.transpose(interval.to_semitone()))
+            .collect()
+    }
+}
 impl ScaleFormula {
     pub const ALL: &'static [ScaleFormula] = &[
         ScaleFormula::Ionian,

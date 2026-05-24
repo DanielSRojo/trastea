@@ -6,7 +6,7 @@ use fretboard::{Fretboard, NoteMarker, fretboard};
 use iced::{Background, Border, Color, Element, Shadow, Subscription, Task, Vector, keyboard};
 use keyboard::key::Named;
 
-use crate::music::{notes::Note, scales::ScaleFormula};
+use crate::music::{notes::Note, scales::Scale, scales::ScaleFormula};
 
 const INK: Color = Color::WHITE;
 const BODY: Color = Color::from_rgb8(0xb5, 0xb5, 0xb5);
@@ -16,6 +16,8 @@ const CANVAS: Color = Color::BLACK;
 const CANVAS_SOFT: Color = Color::from_rgb8(0x0a, 0x0a, 0x0a);
 const CANVAS_SOFT_2: Color = Color::from_rgb8(0x11, 0x11, 0x11);
 const LINK: Color = Color::from_rgb8(0x50, 0xa7, 0xff);
+
+const STANDARD_TUNING: [Note; 6] = [Note::E, Note::A, Note::D, Note::G, Note::B, Note::E];
 
 pub struct App {
     screen: Screen,
@@ -81,7 +83,7 @@ impl App {
             Screen::Home => ui_home(),
             Screen::ScaleTrainer => with_top_bar(
                 "Scale Trainer",
-                ui_scale_trainer(self.selected_scale_formula, self.selected_root),
+                ui_scale_trainer(self.selected_root, self.selected_scale_formula),
                 true,
             ),
             Screen::NoteTrainer => {
@@ -144,8 +146,11 @@ fn ui_home() -> Element<'static, Message> {
             .on_press(Message::Navigate(Screen::ScaleTrainer)),
         trainer_button("Note Trainer", "Build fretboard recall one pitch at a time")
             .on_press(Message::Navigate(Screen::NoteTrainer)),
-        trainer_button("Interval Trainer", "Recognize distances from a tonal center")
-            .on_press(Message::Navigate(Screen::IntervalTrainer)),
+        trainer_button(
+            "Interval Trainer",
+            "Recognize distances from a tonal center"
+        )
+        .on_press(Message::Navigate(Screen::IntervalTrainer)),
     ]
     .spacing(12);
 
@@ -154,9 +159,12 @@ fn ui_home() -> Element<'static, Message> {
         text("A focused guitar trainer for scales, intervals, and fretboard fluency.")
             .size(18)
             .color(BODY),
-        row![text("α").size(13).color(CANVAS), text("desktop practice lab").size(13).color(INK)]
-            .spacing(8)
-            .padding([6, 12])
+        row![
+            text("α").size(13).color(CANVAS),
+            text("desktop practice lab").size(13).color(INK)
+        ]
+        .spacing(8)
+        .padding([6, 12])
     ]
     .spacing(16);
 
@@ -169,50 +177,13 @@ fn ui_home() -> Element<'static, Message> {
     with_top_bar("Trastea", content.into(), false)
 }
 
-fn ui_scale_trainer(formula: ScaleFormula, root: Note) -> Element<'static, Message> {
+fn ui_scale_trainer(root: Note, formula: ScaleFormula) -> Element<'static, Message> {
     use iced::Length;
     use iced::widget::{column, container, row, text};
 
     let fb = Fretboard {
         num_frets: 12,
-        highlighted: vec![
-            NoteMarker {
-                string: 0,
-                fret: 0,
-                note: Note::E,
-                color: Color::from_rgb(0.2, 0.6, 1.0),
-            },
-            NoteMarker {
-                string: 1,
-                fret: 2,
-                note: Note::Fs,
-                color: Color::from_rgb(0.2, 0.6, 1.0),
-            },
-            NoteMarker {
-                string: 2,
-                fret: 2,
-                note: Note::B,
-                color: Color::from_rgb(0.2, 0.6, 1.0),
-            },
-            NoteMarker {
-                string: 3,
-                fret: 2,
-                note: Note::E,
-                color: Color::from_rgb(1.0, 0.4, 0.2),
-            },
-            NoteMarker {
-                string: 4,
-                fret: 0,
-                note: Note::B,
-                color: Color::from_rgb(0.2, 0.6, 1.0),
-            },
-            NoteMarker {
-                string: 5,
-                fret: 0,
-                note: Note::E,
-                color: Color::from_rgb(1.0, 0.4, 0.2),
-            },
-        ],
+        highlighted: scale_markers(root, formula),
     };
 
     let details = container(
@@ -235,7 +206,34 @@ fn ui_scale_trainer(formula: ScaleFormula, root: Note) -> Element<'static, Messa
         .height(Length::Fill)
         .padding([48, 64])
         .center_y(Length::Fill)
-    .into()
+        .into()
+}
+
+fn scale_markers(root: Note, formula: ScaleFormula) -> Vec<NoteMarker> {
+    let scale = Scale { root, formula };
+    let scale_notes = scale.notes();
+
+    let mut markers = Vec::new();
+
+    for (string, open_note) in STANDARD_TUNING.iter().enumerate() {
+        for fret in 0_u8..=12 {
+            let note = open_note.transpose(fret);
+
+            if scale_notes.contains(&note) {
+                markers.push(NoteMarker {
+                    string,
+                    fret: fret as usize,
+                    note,
+                    color: if note == root {
+                        Color::from_rgb8(0xff, 0x4d, 0x4d)
+                    } else {
+                        Color::from_rgb8(0x50, 0xe3, 0xc2)
+                    },
+                });
+            }
+        }
+    }
+    markers
 }
 
 fn random_scale_formula() -> ScaleFormula {
@@ -262,22 +260,37 @@ fn ui_placeholder(label: &str) -> Element<'_, Message> {
     use iced::Length;
     use iced::widget::{column, container, text};
 
-    container(column![text(label).size(30).color(INK), text("Coming soon").size(14).color(MUTE),].spacing(8))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .style(page_container)
-        .into()
+    container(
+        column![
+            text(label).size(30).color(INK),
+            text("Coming soon").size(14).color(MUTE),
+        ]
+        .spacing(8),
+    )
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .center_x(Length::Fill)
+    .center_y(Length::Fill)
+    .style(page_container)
+    .into()
 }
 
-fn trainer_button<'a>(title: &'static str, caption: &'static str) -> iced::widget::Button<'a, Message> {
+fn trainer_button<'a>(
+    title: &'static str,
+    caption: &'static str,
+) -> iced::widget::Button<'a, Message> {
     use iced::widget::{button, column, text};
 
-    button(column![text(title).size(16).color(INK), text(caption).size(13).color(BODY)].spacing(4))
-        .width(360)
-        .padding([16, 20])
-        .style(card_button)
+    button(
+        column![
+            text(title).size(16).color(INK),
+            text(caption).size(13).color(BODY)
+        ]
+        .spacing(4),
+    )
+    .width(360)
+    .padding([16, 20])
+    .style(card_button)
 }
 
 fn page_container(_theme: &iced::Theme) -> iced::widget::container::Style {
@@ -296,7 +309,10 @@ fn card_container(_theme: &iced::Theme) -> iced::widget::container::Style {
         background: Some(Background::Color(CANVAS_SOFT)),
         border: Border::default().rounded(12).width(1).color(HAIRLINE),
         shadow: Shadow {
-            color: Color { a: 0.45, ..Color::BLACK },
+            color: Color {
+                a: 0.45,
+                ..Color::BLACK
+            },
             offset: Vector::new(0.0, 12.0),
             blur_radius: 32.0,
         },
@@ -304,7 +320,10 @@ fn card_container(_theme: &iced::Theme) -> iced::widget::container::Style {
     }
 }
 
-fn card_button(_theme: &iced::Theme, status: iced::widget::button::Status) -> iced::widget::button::Style {
+fn card_button(
+    _theme: &iced::Theme,
+    status: iced::widget::button::Status,
+) -> iced::widget::button::Style {
     let border_color = match status {
         iced::widget::button::Status::Hovered => LINK,
         _ => HAIRLINE,
@@ -315,7 +334,10 @@ fn card_button(_theme: &iced::Theme, status: iced::widget::button::Status) -> ic
         text_color: INK,
         border: Border::default().rounded(12).width(1).color(border_color),
         shadow: Shadow {
-            color: Color { a: 0.40, ..Color::BLACK },
+            color: Color {
+                a: 0.40,
+                ..Color::BLACK
+            },
             offset: Vector::new(0.0, 8.0),
             blur_radius: 24.0,
         },
@@ -323,7 +345,10 @@ fn card_button(_theme: &iced::Theme, status: iced::widget::button::Status) -> ic
     }
 }
 
-fn ghost_button(_theme: &iced::Theme, status: iced::widget::button::Status) -> iced::widget::button::Style {
+fn ghost_button(
+    _theme: &iced::Theme,
+    status: iced::widget::button::Status,
+) -> iced::widget::button::Style {
     let background = match status {
         iced::widget::button::Status::Hovered => CANVAS_SOFT_2,
         _ => CANVAS,
