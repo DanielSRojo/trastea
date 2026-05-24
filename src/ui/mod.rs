@@ -8,7 +8,7 @@ use iced::{
 };
 use keyboard::key::Named;
 
-use crate::music::{notes::Note, scales::Scale, scales::ScaleFormula};
+use crate::music::{notes::Note, scales::Scale, scales::ScaleKind};
 
 const INK: Color = Color::WHITE;
 const BODY: Color = Color::from_rgb8(0xb5, 0xb5, 0xb5);
@@ -24,7 +24,7 @@ const STANDARD_TUNING: [Note; 6] = [Note::E, Note::A, Note::D, Note::G, Note::B,
 pub struct App {
     screen: Screen,
     history: Vec<Screen>,
-    selected_scale_formula: ScaleFormula,
+    selected_scale_kind: ScaleKind,
     selected_root: Note,
 }
 
@@ -42,7 +42,7 @@ pub enum Message {
     Navigate(Screen),
     GoBack,
     SelectRoot(Note),
-    SelectScaleFormula(ScaleFormula),
+    SelectScaleKind(ScaleKind),
 }
 
 impl Default for App {
@@ -50,7 +50,7 @@ impl Default for App {
         Self {
             screen: Screen::default(),
             history: Vec::new(),
-            selected_scale_formula: ScaleFormula::Ionian,
+            selected_scale_kind: ScaleKind::Ionian,
             selected_root: Note::C,
         }
     }
@@ -66,7 +66,7 @@ impl App {
             Message::Navigate(Screen::ScaleTrainer) => {
                 self.history.push(self.screen.clone());
                 self.screen = Screen::ScaleTrainer;
-                self.selected_scale_formula = random_scale_formula();
+                self.selected_scale_kind = random_scale_kind();
                 self.selected_root = random_note();
             }
             Message::Navigate(screen) => {
@@ -81,8 +81,8 @@ impl App {
             Message::SelectRoot(root) => {
                 self.selected_root = root;
             }
-            Message::SelectScaleFormula(formula) => {
-                self.selected_scale_formula = formula;
+            Message::SelectScaleKind(kind) => {
+                self.selected_scale_kind = kind;
             }
         }
         Task::none()
@@ -93,7 +93,7 @@ impl App {
             Screen::Home => ui_home(),
             Screen::ScaleTrainer => with_top_bar(
                 "Scale Trainer",
-                ui_scale_trainer(self.selected_root, self.selected_scale_formula),
+                ui_scale_trainer(self.selected_root, self.selected_scale_kind),
                 true,
             ),
             Screen::NoteTrainer => {
@@ -187,25 +187,26 @@ fn ui_home() -> Element<'static, Message> {
     with_top_bar("Trastea", content.into(), false)
 }
 
-fn ui_scale_trainer(root: Note, formula: ScaleFormula) -> Element<'static, Message> {
+fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
     use iced::Length;
     use iced::widget::{column, container, row, text};
 
     let fb = Fretboard {
         num_frets: 12,
-        highlighted: scale_markers(root, formula),
+        highlighted: scale_markers(root, kind),
     };
 
     let details = container(
         column![
             text(root.to_string()).size(48).color(INK),
-            text(formula.to_string()).size(28).color(INK),
+            text(kind.name()).size(28).color(INK),
+            text(kind.intervalic()).size(18).color(BODY),
             root_note_row(&Note::ALL[..6], root),
             root_note_row(&Note::ALL[6..], root),
-            scale_formula_row(&ScaleFormula::ALL[..4], formula),
-            scale_formula_row(&ScaleFormula::ALL[4..8], formula),
-            scale_formula_row(&ScaleFormula::ALL[8..12], formula),
-            scale_formula_row(&ScaleFormula::ALL[12..], formula),
+            scale_kind_row(&ScaleKind::ALL[..4], kind),
+            scale_kind_row(&ScaleKind::ALL[4..8], kind),
+            scale_kind_row(&ScaleKind::ALL[8..12], kind),
+            scale_kind_row(&ScaleKind::ALL[12..], kind),
         ]
         .spacing(12),
     )
@@ -243,28 +244,28 @@ fn root_note_row(notes: &[Note], selected: Note) -> iced::widget::Row<'static, M
     })
 }
 
-fn scale_formula_row(
-    formulas: &[ScaleFormula],
-    selected: ScaleFormula,
+fn scale_kind_row(
+    kinds: &[ScaleKind],
+    selected: ScaleKind,
 ) -> iced::widget::Row<'static, Message> {
     use iced::widget::{button, row, text};
 
-    formulas.iter().fold(row![].spacing(8), |row, formula| {
+    kinds.iter().fold(row![].spacing(8), |row, kind| {
         row.push(
-            button(text(formula.to_string()).size(13))
+            button(text(kind.name()).size(13))
                 .padding([8, 12])
-                .style(if *formula == selected {
+                .style(if *kind == selected {
                     selected_root_button
                 } else {
                     ghost_button
                 })
-                .on_press(Message::SelectScaleFormula(*formula)),
+                .on_press(Message::SelectScaleKind(*kind)),
         )
     })
 }
 
-fn scale_markers(root: Note, formula: ScaleFormula) -> Vec<NoteMarker> {
-    let scale = Scale { root, formula };
+fn scale_markers(root: Note, kind: ScaleKind) -> Vec<NoteMarker> {
+    let scale = Scale { root, kind };
     let scale_notes = scale.notes();
 
     let mut markers = Vec::new();
@@ -290,14 +291,14 @@ fn scale_markers(root: Note, formula: ScaleFormula) -> Vec<NoteMarker> {
     markers
 }
 
-fn random_scale_formula() -> ScaleFormula {
+fn random_scale_kind() -> ScaleKind {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
 
     let seed = duration.as_secs() as usize ^ duration.subsec_nanos() as usize;
 
-    ScaleFormula::ALL[seed % ScaleFormula::ALL.len()]
+    ScaleKind::ALL[seed % ScaleKind::ALL.len()]
 }
 
 fn random_note() -> Note {

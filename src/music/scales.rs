@@ -2,13 +2,11 @@
 // Returns the enharmonic spelling of a pitch in the context of a given scale.
 // e.g. semitone 1 → "C#" in G major, "Db" in F minor.
 
-use std::fmt;
-
 use super::intervals::Interval;
 use super::notes::Note;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScaleFormula {
+pub enum ScaleKind {
     // Diatonic Modes
     Ionian, // Major scale
     Dorian,
@@ -31,63 +29,83 @@ pub enum ScaleFormula {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Scale {
     pub root: Note,
-    pub formula: ScaleFormula,
-}
-
-impl fmt::Display for ScaleFormula {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ScaleFormula::Ionian => write!(f, "Ionian"),
-            ScaleFormula::Dorian => write!(f, "Dorian"),
-            ScaleFormula::Phrygian => write!(f, "Phrygian"),
-            ScaleFormula::Lydian => write!(f, "Lydian"),
-            ScaleFormula::Mixolydian => write!(f, "Mixolydian"),
-            ScaleFormula::Aeolian => write!(f, "Aeolian"),
-            ScaleFormula::Locrian => write!(f, "Locrian"),
-            ScaleFormula::HarmonicMinor => write!(f, "Harmonic Minor"),
-            ScaleFormula::MelodicMinor => write!(f, "Melodic Minor"),
-            ScaleFormula::MinorPentatonic => write!(f, "Minor Pentatonic"),
-            ScaleFormula::MajorPentatonic => write!(f, "Major Pentatonic"),
-            ScaleFormula::Blues => write!(f, "Blues"),
-            ScaleFormula::Voodoo => write!(f, "Voodoo"),
-            ScaleFormula::SpanishGypsy => write!(f, "Spanish Gypsy"),
-            ScaleFormula::WholeTone => write!(f, "Whole Tone"),
-            ScaleFormula::Diminished => write!(f, "Diminished"),
-        }
-    }
+    pub kind: ScaleKind,
 }
 
 impl Scale {
     pub fn notes(self) -> Vec<Note> {
-        self.formula
+        self.kind
             .intervals()
             .iter()
             .map(|interval| self.root.transpose(interval.to_semitone()))
             .collect()
     }
 }
-impl ScaleFormula {
-    pub const ALL: &'static [ScaleFormula] = &[
-        ScaleFormula::Ionian,
-        ScaleFormula::Dorian,
-        ScaleFormula::Phrygian,
-        ScaleFormula::Lydian,
-        ScaleFormula::Mixolydian,
-        ScaleFormula::Aeolian,
-        ScaleFormula::Locrian,
-        ScaleFormula::HarmonicMinor,
-        ScaleFormula::MelodicMinor,
-        ScaleFormula::MinorPentatonic,
-        ScaleFormula::MajorPentatonic,
-        ScaleFormula::Blues,
-        ScaleFormula::Voodoo,
-        ScaleFormula::SpanishGypsy,
-        ScaleFormula::WholeTone,
-        ScaleFormula::Diminished,
+impl ScaleKind {
+    pub const ALL: &'static [ScaleKind] = &[
+        ScaleKind::Ionian,
+        ScaleKind::Dorian,
+        ScaleKind::Phrygian,
+        ScaleKind::Lydian,
+        ScaleKind::Mixolydian,
+        ScaleKind::Aeolian,
+        ScaleKind::Locrian,
+        ScaleKind::HarmonicMinor,
+        ScaleKind::MelodicMinor,
+        ScaleKind::MinorPentatonic,
+        ScaleKind::MajorPentatonic,
+        ScaleKind::Blues,
+        ScaleKind::Voodoo,
+        ScaleKind::SpanishGypsy,
+        ScaleKind::WholeTone,
+        ScaleKind::Diminished,
     ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ScaleKind::Ionian => "Ionian",
+            ScaleKind::Dorian => "Dorian",
+            ScaleKind::Phrygian => "Phrygian",
+            ScaleKind::Lydian => "Lydian",
+            ScaleKind::Mixolydian => "Mixolydian",
+            ScaleKind::Aeolian => "Aeolian",
+            ScaleKind::Locrian => "Locrian",
+            ScaleKind::HarmonicMinor => "Harmonic Minor",
+            ScaleKind::MelodicMinor => "Melodic Minor",
+            ScaleKind::MinorPentatonic => "Minor Pentatonic",
+            ScaleKind::MajorPentatonic => "Major Pentatonic",
+            ScaleKind::Blues => "Blues",
+            ScaleKind::Voodoo => "Voodoo",
+            ScaleKind::SpanishGypsy => "Spanish Gypsy",
+            ScaleKind::WholeTone => "Whole Tone",
+            ScaleKind::Diminished => "Diminished",
+        }
+    }
+
+    pub fn intervalic(self) -> &'static str {
+        match self {
+            ScaleKind::Ionian => "1 2 3 4 5 6 7",
+            ScaleKind::Dorian => "1 2 ♭3 4 5 6 ♭7",
+            ScaleKind::Phrygian => "1 ♭2 ♭3 4 5 ♭6 ♭7",
+            ScaleKind::Lydian => "1 2 3 ♯4 5 6 7",
+            ScaleKind::Mixolydian => "1 2 3 4 5 6 ♭7",
+            ScaleKind::Aeolian => "1 2 ♭3 4 5 ♭6 ♭7",
+            ScaleKind::Locrian => "1 ♭2 ♭3 4 ♭5 ♭6 ♭7",
+            ScaleKind::HarmonicMinor => "1 2 ♭3 4 5 ♭6 7",
+            ScaleKind::MelodicMinor => "1 2 ♭3 4 5 6 7",
+            ScaleKind::MinorPentatonic => "1 ♭3 4 5 ♭7",
+            ScaleKind::MajorPentatonic => "1 2 3 5 6",
+            ScaleKind::Blues => "1 ♭3 4 ♭5 5 ♭7",
+            ScaleKind::Voodoo => "1 ♭2 ♭3 3 4 5 6 ♭7",
+            ScaleKind::SpanishGypsy => "1 ♭2 3 4 5 ♭6 ♭7",
+            ScaleKind::WholeTone => "1 2 3 ♯4 ♭6 ♭7",
+            ScaleKind::Diminished => "1 ♭2 ♭3 3 ♭5 5 6 ♭7",
+        }
+    }
+
     pub fn intervals(self) -> &'static [Interval] {
         match self {
-            ScaleFormula::Ionian => &[
+            ScaleKind::Ionian => &[
                 Interval::Unison,
                 Interval::MajorSecond,
                 Interval::MajorThird,
@@ -96,7 +114,7 @@ impl ScaleFormula {
                 Interval::MajorSixth,
                 Interval::MajorSeventh,
             ],
-            ScaleFormula::Dorian => &[
+            ScaleKind::Dorian => &[
                 Interval::Unison,
                 Interval::MajorSecond,
                 Interval::MinorThird,
@@ -105,7 +123,7 @@ impl ScaleFormula {
                 Interval::MajorSixth,
                 Interval::MinorSeventh,
             ],
-            ScaleFormula::Phrygian => &[
+            ScaleKind::Phrygian => &[
                 Interval::Unison,
                 Interval::MinorSecond,
                 Interval::MinorThird,
@@ -114,7 +132,7 @@ impl ScaleFormula {
                 Interval::MinorSixth,
                 Interval::MinorSeventh,
             ],
-            ScaleFormula::Lydian => &[
+            ScaleKind::Lydian => &[
                 Interval::Unison,
                 Interval::MajorSecond,
                 Interval::MajorThird,
@@ -123,7 +141,7 @@ impl ScaleFormula {
                 Interval::MajorSixth,
                 Interval::MajorSeventh,
             ],
-            ScaleFormula::Mixolydian => &[
+            ScaleKind::Mixolydian => &[
                 Interval::Unison,
                 Interval::MajorSecond,
                 Interval::MajorThird,
@@ -132,7 +150,7 @@ impl ScaleFormula {
                 Interval::MajorSixth,
                 Interval::MinorSeventh,
             ],
-            ScaleFormula::Aeolian => &[
+            ScaleKind::Aeolian => &[
                 Interval::Unison,
                 Interval::MajorSecond,
                 Interval::MinorThird,
@@ -141,7 +159,7 @@ impl ScaleFormula {
                 Interval::MinorSixth,
                 Interval::MinorSeventh,
             ],
-            ScaleFormula::Locrian => &[
+            ScaleKind::Locrian => &[
                 Interval::Unison,
                 Interval::MinorSecond,
                 Interval::MinorThird,
@@ -150,7 +168,7 @@ impl ScaleFormula {
                 Interval::MinorSixth,
                 Interval::MinorSeventh,
             ],
-            ScaleFormula::HarmonicMinor => &[
+            ScaleKind::HarmonicMinor => &[
                 Interval::Unison,
                 Interval::MajorSecond,
                 Interval::MinorThird,
@@ -159,7 +177,7 @@ impl ScaleFormula {
                 Interval::MinorSixth,
                 Interval::MajorSeventh,
             ],
-            ScaleFormula::MelodicMinor => &[
+            ScaleKind::MelodicMinor => &[
                 Interval::Unison,
                 Interval::MajorSecond,
                 Interval::MinorThird,
@@ -168,21 +186,21 @@ impl ScaleFormula {
                 Interval::MajorSixth,
                 Interval::MajorSeventh,
             ],
-            ScaleFormula::MinorPentatonic => &[
+            ScaleKind::MinorPentatonic => &[
                 Interval::Unison,
                 Interval::MinorThird,
                 Interval::PerfectFourth,
                 Interval::PerfectFifth,
                 Interval::MinorSeventh,
             ],
-            ScaleFormula::MajorPentatonic => &[
+            ScaleKind::MajorPentatonic => &[
                 Interval::Unison,
                 Interval::MajorSecond,
                 Interval::MajorThird,
                 Interval::PerfectFifth,
                 Interval::MajorSixth,
             ],
-            ScaleFormula::Blues => &[
+            ScaleKind::Blues => &[
                 Interval::Unison,
                 Interval::MinorThird,
                 Interval::PerfectFourth,
@@ -190,7 +208,7 @@ impl ScaleFormula {
                 Interval::PerfectFifth,
                 Interval::MinorSeventh,
             ],
-            ScaleFormula::Voodoo => &[
+            ScaleKind::Voodoo => &[
                 Interval::Unison,
                 Interval::MinorSecond,
                 Interval::MinorThird,
@@ -200,7 +218,7 @@ impl ScaleFormula {
                 Interval::MajorSixth,
                 Interval::MinorSeventh,
             ],
-            ScaleFormula::SpanishGypsy => &[
+            ScaleKind::SpanishGypsy => &[
                 Interval::Unison,
                 Interval::MinorSecond,
                 Interval::MajorThird,
@@ -209,7 +227,7 @@ impl ScaleFormula {
                 Interval::MinorSixth,
                 Interval::MinorSeventh,
             ],
-            ScaleFormula::WholeTone => &[
+            ScaleKind::WholeTone => &[
                 Interval::Unison,
                 Interval::MajorSecond,
                 Interval::MajorThird,
@@ -217,7 +235,7 @@ impl ScaleFormula {
                 Interval::MinorSixth,
                 Interval::MinorSeventh,
             ],
-            ScaleFormula::Diminished => &[
+            ScaleKind::Diminished => &[
                 Interval::Unison,
                 Interval::MinorSecond,
                 Interval::MinorThird,
