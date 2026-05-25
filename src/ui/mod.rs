@@ -18,9 +18,9 @@ const CANVAS: Color = Color::BLACK;
 const CANVAS_SOFT: Color = Color::from_rgb8(0x0a, 0x0a, 0x0a);
 const CANVAS_SOFT_2: Color = Color::from_rgb8(0x11, 0x11, 0x11);
 const LINK: Color = Color::from_rgb8(0x50, 0xa7, 0xff);
-const SUMMARY_CARD_WIDTH: f32 = 320.0;
-const TOP_CARD_HEIGHT: f32 = 220.0;
-const SCALE_SELECTOR_CARD_HEIGHT: f32 = 252.0;
+const SUMMARY_CARD_HEIGHT: f32 = 180.0;
+const ROOT_SELECTOR_CARD_WIDTH: f32 = 320.0;
+const SELECTOR_CARD_HEIGHT: f32 = 324.0;
 const EXPLANATION_CARD_HEIGHT: f32 = 188.0;
 const SMUFL_FLAT: char = '\u{E260}';
 const SMUFL_SHARP: char = '\u{E262}';
@@ -218,34 +218,56 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
         ]
         .spacing(8),
     )
-    .width(Length::Fixed(SUMMARY_CARD_WIDTH))
-    .height(Length::Fixed(TOP_CARD_HEIGHT))
+    .width(Length::Fill)
+    .height(Length::Fixed(SUMMARY_CARD_HEIGHT))
     .padding(32)
     .style(card_container);
 
-    let root_selector_card = container(
+    let root_selector_content = container(
         column![
-            root_note_row(&Note::ALL[..6], root),
-            root_note_row(&Note::ALL[6..], root),
+            container(root_note_row(&Note::ALL[..3], root))
+                .width(Length::Fill)
+                .center_x(Length::Fill),
+            container(root_note_row(&Note::ALL[3..6], root))
+                .width(Length::Fill)
+                .center_x(Length::Fill),
+            container(root_note_row(&Note::ALL[6..9], root))
+                .width(Length::Fill)
+                .center_x(Length::Fill),
+            container(root_note_row(&Note::ALL[9..], root))
+                .width(Length::Fill)
+                .center_x(Length::Fill),
         ]
-        .spacing(8),
+        .spacing(16),
     )
     .width(Length::Fill)
-    .height(Length::Fixed(TOP_CARD_HEIGHT))
+    .height(Length::Fill)
+    .center_x(Length::Fill)
+    .center_y(Length::Fill);
+
+    let root_selector_card = container(root_selector_content)
+    .width(Length::Fixed(ROOT_SELECTOR_CARD_WIDTH))
+    .height(Length::Fixed(SELECTOR_CARD_HEIGHT))
     .padding(32)
     .style(card_container);
 
-    let scale_selector_card = container(
+    let scale_selector_content = container(
         column![
             scale_kind_row(&ScaleKind::ALL[..4], kind),
-            scale_kind_row(&ScaleKind::ALL[4..8], kind),
-            scale_kind_row(&ScaleKind::ALL[8..12], kind),
+            scale_kind_row(&ScaleKind::ALL[4..7], kind),
+            scale_kind_row(&ScaleKind::ALL[7..9], kind),
+            scale_kind_row(&ScaleKind::ALL[9..12], kind),
             scale_kind_row(&ScaleKind::ALL[12..], kind),
         ]
         .spacing(12),
     )
     .width(Length::Fill)
-    .height(Length::Fixed(SCALE_SELECTOR_CARD_HEIGHT))
+    .height(Length::Fill)
+    .center_y(Length::Fill);
+
+    let scale_selector_card = container(scale_selector_content)
+    .width(Length::Fill)
+    .height(Length::Fixed(SELECTOR_CARD_HEIGHT))
     .padding(32)
     .style(card_container);
 
@@ -275,11 +297,11 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
     .padding(32)
     .style(card_container);
 
-    let top_cards = row![current_scale_card, root_selector_card]
+    let selector_cards = row![root_selector_card, scale_selector_card]
         .width(Length::Fill)
         .spacing(16);
 
-    let details = column![top_cards, scale_selector_card, explanation_card]
+    let details = column![current_scale_card, selector_cards, explanation_card]
         .width(Length::Fill)
         .spacing(16);
 
@@ -299,11 +321,11 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
 fn root_note_row(notes: &[Note], selected: Note) -> iced::widget::Row<'static, Message> {
     use iced::widget::{button, row};
 
-    notes.iter().fold(row![].spacing(8), |row, note| {
+    notes.iter().fold(row![].spacing(16), |row, note| {
         let color = if *note == selected { CANVAS } else { INK };
 
         row.push(
-            button(note_label(*note, 20, color))
+            button(note_label(*note, 28, color))
                 .padding([8, 12])
                 .style(if *note == selected {
                     selected_root_button
