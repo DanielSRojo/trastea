@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fretboard::{Fretboard, NoteMarker, fretboard};
 
 use iced::{
-    Background, Border, Color, Element, Padding, Shadow, Subscription, Task, Vector, keyboard,
+    Background, Border, Color, Element, Padding, Shadow, Subscription, Task, Vector, font, keyboard,
 };
 use keyboard::key::Named;
 
@@ -204,7 +204,7 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
         ]
         .spacing(8),
     )
-    .width(Length::Fill)
+    .width(Length::Shrink)
     .height(Length::Fill)
     .padding(32)
     .style(card_container);
@@ -234,12 +234,37 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
     .padding(32)
     .style(card_container);
 
+    let explanation_font = iced::Font {
+        family: font::Family::Cursive,
+        style: font::Style::Italic,
+        ..iced::Font::DEFAULT
+    };
+
+    let explanation_card = container(
+        column![
+            text(kind.feel())
+                .size(18)
+                .font(explanation_font)
+                .color(BODY)
+                .width(Length::Fill),
+            text(kind.common_usage())
+                .size(15)
+                .font(explanation_font)
+                .color(MUTE)
+                .width(Length::Fill),
+        ]
+        .spacing(12),
+    )
+    .width(Length::Fill)
+    .padding(32)
+    .style(card_container);
+
     let top_cards = row![current_scale_card, root_selector_card]
         .width(Length::Fill)
-        .height(Length::Shrink)
+        .height(Length::Fixed(176.0))
         .spacing(16);
 
-    let details = column![top_cards, scale_selector_card]
+    let details = column![top_cards, scale_selector_card, explanation_card]
         .width(Length::Fill)
         .spacing(16);
 
