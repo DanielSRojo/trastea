@@ -18,10 +18,10 @@ const CANVAS: Color = Color::BLACK;
 const CANVAS_SOFT: Color = Color::from_rgb8(0x0a, 0x0a, 0x0a);
 const CANVAS_SOFT_2: Color = Color::from_rgb8(0x11, 0x11, 0x11);
 const LINK: Color = Color::from_rgb8(0x50, 0xa7, 0xff);
-const SUMMARY_CARD_HEIGHT: f32 = 180.0;
+const SUMMARY_CARD_HEIGHT: f32 = 212.0;
 const ROOT_SELECTOR_CARD_WIDTH: f32 = 320.0;
 const SELECTOR_CARD_HEIGHT: f32 = 324.0;
-const EXPLANATION_CARD_HEIGHT: f32 = 188.0;
+const ROOT_BUTTON_SIZE: f32 = 50.0;
 const SMUFL_FLAT: char = '\u{E260}';
 const SMUFL_SHARP: char = '\u{E262}';
 const FEEL_FONT: iced::Font = iced::Font {
@@ -55,6 +55,7 @@ pub enum Message {
     GoBack,
     SelectRoot(Note),
     SelectScaleKind(ScaleKind),
+    RerollScale,
 }
 
 impl Default for App {
@@ -95,6 +96,10 @@ impl App {
             }
             Message::SelectScaleKind(kind) => {
                 self.selected_scale_kind = kind;
+            }
+            Message::RerollScale => {
+                self.selected_scale_kind = random_scale_kind();
+                self.selected_root = random_note();
             }
         }
         Task::none()
@@ -203,7 +208,7 @@ fn ui_home() -> Element<'static, Message> {
 
 fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
     use iced::Length;
-    use iced::widget::{column, container, row, text};
+    use iced::widget::{Space, button, column, container, row, text};
 
     let fb = Fretboard {
         num_frets: 12,
@@ -212,13 +217,20 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
 
     let current_scale_card = container(
         column![
-            note_label(root, 56, INK),
+            row![
+                note_label(root, 56, INK),
+                Space::new().width(Length::Fill),
+                button(text("R").size(20))
+                    .padding([8, 12])
+                    .style(ghost_button)
+                    .on_press(Message::RerollScale),
+            ],
             text(kind.name()).size(34).color(INK),
             intervalic_text(kind.intervalic()),
         ]
-        .spacing(8),
+        .spacing(10),
     )
-    .width(Length::Fill)
+    .width(Length::Fixed(ROOT_SELECTOR_CARD_WIDTH))
     .height(Length::Fixed(SUMMARY_CARD_HEIGHT))
     .padding(32)
     .style(card_container);
@@ -246,10 +258,10 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
     .center_y(Length::Fill);
 
     let root_selector_card = container(root_selector_content)
-    .width(Length::Fixed(ROOT_SELECTOR_CARD_WIDTH))
-    .height(Length::Fixed(SELECTOR_CARD_HEIGHT))
-    .padding(32)
-    .style(card_container);
+        .width(Length::Fixed(ROOT_SELECTOR_CARD_WIDTH))
+        .height(Length::Fixed(SELECTOR_CARD_HEIGHT))
+        .padding(32)
+        .style(card_container);
 
     let scale_selector_content = container(
         column![
@@ -266,10 +278,10 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
     .center_y(Length::Fill);
 
     let scale_selector_card = container(scale_selector_content)
-    .width(Length::Fill)
-    .height(Length::Fixed(SELECTOR_CARD_HEIGHT))
-    .padding(32)
-    .style(card_container);
+        .width(Length::Fill)
+        .height(Length::Fixed(SELECTOR_CARD_HEIGHT))
+        .padding(32)
+        .style(card_container);
 
     let explanation_font = iced::Font {
         family: font::Family::Cursive,
@@ -293,15 +305,19 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
         .spacing(12),
     )
     .width(Length::Fill)
-    .height(Length::Fixed(EXPLANATION_CARD_HEIGHT))
+    .height(Length::Fixed(SUMMARY_CARD_HEIGHT))
     .padding(32)
     .style(card_container);
+
+    let summary_cards = row![current_scale_card, explanation_card]
+        .width(Length::Fill)
+        .spacing(16);
 
     let selector_cards = row![root_selector_card, scale_selector_card]
         .width(Length::Fill)
         .spacing(16);
 
-    let details = column![current_scale_card, selector_cards, explanation_card]
+    let details = column![summary_cards, selector_cards]
         .width(Length::Fill)
         .spacing(16);
 
@@ -319,20 +335,35 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
 }
 
 fn root_note_row(notes: &[Note], selected: Note) -> iced::widget::Row<'static, Message> {
-    use iced::widget::{button, row};
+    use iced::Length;
+    use iced::widget::{button, container, row};
 
-    notes.iter().fold(row![].spacing(16), |row, note| {
+    notes.iter().fold(row![].spacing(28), |row, note| {
         let color = if *note == selected { CANVAS } else { INK };
 
+        let root_button = button(
+            container(note_label(*note, 24, color))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill),
+        )
+        .width(Length::Fixed(ROOT_BUTTON_SIZE))
+        .height(Length::Fixed(ROOT_BUTTON_SIZE))
+        .padding(0)
+        .style(if *note == selected {
+            selected_root_button
+        } else {
+            ghost_button
+        })
+        .on_press(Message::SelectRoot(*note));
+
         row.push(
-            button(note_label(*note, 28, color))
-                .padding([8, 12])
-                .style(if *note == selected {
-                    selected_root_button
-                } else {
-                    ghost_button
-                })
-                .on_press(Message::SelectRoot(*note)),
+            container(root_button)
+                .width(Length::Fixed(ROOT_BUTTON_SIZE))
+                .height(Length::Fixed(ROOT_BUTTON_SIZE))
+                .center_x(Length::Fixed(ROOT_BUTTON_SIZE))
+                .center_y(Length::Fixed(ROOT_BUTTON_SIZE)),
         )
     })
 }
@@ -376,7 +407,7 @@ fn scale_kind_row(kinds: &[ScaleKind], selected: ScaleKind) -> iced::widget::Row
 
     kinds.iter().fold(row![].spacing(8), |row, kind| {
         row.push(
-            button(text(kind.name()).size(15))
+            button(text(kind.name()).size(16))
                 .padding([8, 12])
                 .style(if *kind == selected {
                     selected_root_button
