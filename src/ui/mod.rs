@@ -18,6 +18,11 @@ const CANVAS: Color = Color::BLACK;
 const CANVAS_SOFT: Color = Color::from_rgb8(0x0a, 0x0a, 0x0a);
 const CANVAS_SOFT_2: Color = Color::from_rgb8(0x11, 0x11, 0x11);
 const LINK: Color = Color::from_rgb8(0x50, 0xa7, 0xff);
+const FEEL_FONT: iced::Font = iced::Font {
+    family: font::Family::Name("Dancing Script"),
+    weight: font::Weight::Bold,
+    ..iced::Font::DEFAULT
+};
 
 const STANDARD_TUNING: [Note; 6] = [Note::E, Note::A, Note::D, Note::G, Note::B, Note::E];
 
@@ -132,15 +137,17 @@ fn with_top_bar(
         .padding([6, 12])
         .on_press(Message::GoBack);
 
-    let header = if has_back {
-        row![back_button, text(label).size(20).color(INK)]
-    } else {
-        row![text(label).size(20).color(INK)]
-    }
-    .spacing(16)
-    .padding([18, 32]);
+    let page = if has_back {
+        let header = row![back_button, text(label).size(20).color(INK)]
+            .spacing(16)
+            .padding([18, 32]);
 
-    container(column![header, content].spacing(12))
+        column![header, content].spacing(12)
+    } else {
+        column![content]
+    };
+
+    container(page)
         .width(Length::Fill)
         .height(Length::Fill)
         .style(page_container)
@@ -170,8 +177,8 @@ fn ui_home() -> Element<'static, Message> {
             .size(18)
             .color(BODY),
         row![
-            text("α").size(13).color(CANVAS),
-            text("desktop practice lab").size(13).color(INK)
+            // text("α").size(13).color(CANVAS),
+            // text("desktop practice lab").size(13).color(INK)
         ]
         .spacing(8)
         .padding([6, 12])
@@ -244,7 +251,7 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
         column![
             text(kind.feel())
                 .size(18)
-                .font(explanation_font)
+                .font(FEEL_FONT)
                 .color(BODY)
                 .width(Length::Fill),
             text(kind.common_usage())
@@ -298,10 +305,7 @@ fn root_note_row(notes: &[Note], selected: Note) -> iced::widget::Row<'static, M
     })
 }
 
-fn scale_kind_row(
-    kinds: &[ScaleKind],
-    selected: ScaleKind,
-) -> iced::widget::Row<'static, Message> {
+fn scale_kind_row(kinds: &[ScaleKind], selected: ScaleKind) -> iced::widget::Row<'static, Message> {
     use iced::widget::{button, row, text};
 
     kinds.iter().fold(row![].spacing(8), |row, kind| {

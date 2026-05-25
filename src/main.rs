@@ -23,6 +23,8 @@ fn theme(_: &App) -> Theme {
 fn main() -> iced::Result {
     application(App::new, App::update, App::view)
         .title("Trastea")
+        .font(include_bytes!("../assets/fonts/DancingScript-Regular.ttf").as_slice())
+        .font(include_bytes!("../assets/fonts/DancingScript-Bold.ttf").as_slice())
         .theme(theme)
         .subscription(App::subscription)
         .run()
