@@ -18,11 +18,18 @@ const CANVAS: Color = Color::BLACK;
 const CANVAS_SOFT: Color = Color::from_rgb8(0x0a, 0x0a, 0x0a);
 const CANVAS_SOFT_2: Color = Color::from_rgb8(0x11, 0x11, 0x11);
 const LINK: Color = Color::from_rgb8(0x50, 0xa7, 0xff);
+const SUMMARY_CARD_WIDTH: f32 = 320.0;
+const TOP_CARD_HEIGHT: f32 = 220.0;
+const SCALE_SELECTOR_CARD_HEIGHT: f32 = 252.0;
+const EXPLANATION_CARD_HEIGHT: f32 = 188.0;
+const SMUFL_FLAT: char = '\u{E260}';
+const SMUFL_SHARP: char = '\u{E262}';
 const FEEL_FONT: iced::Font = iced::Font {
     family: font::Family::Name("Dancing Script"),
     weight: font::Weight::Bold,
     ..iced::Font::DEFAULT
 };
+const MUSIC_FONT: iced::Font = iced::Font::with_name("Leland Text");
 
 const STANDARD_TUNING: [Note; 6] = [Note::E, Note::A, Note::D, Note::G, Note::B, Note::E];
 
@@ -132,13 +139,13 @@ fn with_top_bar(
     use iced::Length;
     use iced::widget::{button, column, container, row, text};
 
-    let back_button = button(text("←").size(16))
+    let back_button = button(text("←").size(18))
         .style(ghost_button)
         .padding([6, 12])
         .on_press(Message::GoBack);
 
     let page = if has_back {
-        let header = row![back_button, text(label).size(20).color(INK)]
+        let header = row![back_button, text(label).size(24).color(INK)]
             .spacing(16)
             .padding([18, 32]);
 
@@ -172,9 +179,9 @@ fn ui_home() -> Element<'static, Message> {
     .spacing(12);
 
     let hero = column![
-        text("Trastea").size(48).color(INK),
+        text("Trastea").size(56).color(INK),
         text("A focused guitar trainer for scales, intervals, and fretboard fluency.")
-            .size(18)
+            .size(21)
             .color(BODY),
         row![
             // text("α").size(13).color(CANVAS),
@@ -205,14 +212,14 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
 
     let current_scale_card = container(
         column![
-            text(root.to_string()).size(48).color(INK),
-            text(kind.name()).size(28).color(INK),
-            text(kind.intervalic()).size(18).color(BODY),
+            note_label(root, 56, INK),
+            text(kind.name()).size(34).color(INK),
+            intervalic_text(kind.intervalic()),
         ]
         .spacing(8),
     )
-    .width(Length::Shrink)
-    .height(Length::Fill)
+    .width(Length::Fixed(SUMMARY_CARD_WIDTH))
+    .height(Length::Fixed(TOP_CARD_HEIGHT))
     .padding(32)
     .style(card_container);
 
@@ -224,7 +231,7 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
         .spacing(8),
     )
     .width(Length::Fill)
-    .height(Length::Fill)
+    .height(Length::Fixed(TOP_CARD_HEIGHT))
     .padding(32)
     .style(card_container);
 
@@ -238,6 +245,7 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
         .spacing(12),
     )
     .width(Length::Fill)
+    .height(Length::Fixed(SCALE_SELECTOR_CARD_HEIGHT))
     .padding(32)
     .style(card_container);
 
@@ -250,12 +258,12 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
     let explanation_card = container(
         column![
             text(kind.feel())
-                .size(18)
+                .size(22)
                 .font(FEEL_FONT)
                 .color(BODY)
                 .width(Length::Fill),
             text(kind.common_usage())
-                .size(15)
+                .size(18)
                 .font(explanation_font)
                 .color(MUTE)
                 .width(Length::Fill),
@@ -263,12 +271,12 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
         .spacing(12),
     )
     .width(Length::Fill)
+    .height(Length::Fixed(EXPLANATION_CARD_HEIGHT))
     .padding(32)
     .style(card_container);
 
     let top_cards = row![current_scale_card, root_selector_card]
         .width(Length::Fill)
-        .height(Length::Fixed(176.0))
         .spacing(16);
 
     let details = column![top_cards, scale_selector_card, explanation_card]
@@ -289,11 +297,13 @@ fn ui_scale_trainer(root: Note, kind: ScaleKind) -> Element<'static, Message> {
 }
 
 fn root_note_row(notes: &[Note], selected: Note) -> iced::widget::Row<'static, Message> {
-    use iced::widget::{button, row, text};
+    use iced::widget::{button, row};
 
     notes.iter().fold(row![].spacing(8), |row, note| {
+        let color = if *note == selected { CANVAS } else { INK };
+
         row.push(
-            button(text(note.to_string()).size(14))
+            button(note_label(*note, 20, color))
                 .padding([8, 12])
                 .style(if *note == selected {
                     selected_root_button
@@ -305,12 +315,46 @@ fn root_note_row(notes: &[Note], selected: Note) -> iced::widget::Row<'static, M
     })
 }
 
+fn note_label(note: Note, size: u32, color: Color) -> iced::widget::Row<'static, Message> {
+    use iced::widget::{row, text};
+
+    let label = note.to_string();
+    let mut chars = label.chars();
+    let letter = chars.next().unwrap_or_default().to_string();
+    let label = row![text(letter).size(size).color(color)].spacing(0);
+
+    if chars.next().is_some() {
+        label.push(
+            text(SMUFL_SHARP.to_string())
+                .size(size)
+                .font(MUSIC_FONT)
+                .color(color),
+        )
+    } else {
+        label
+    }
+}
+
+fn intervalic_text(formula: &'static str) -> iced::widget::Row<'static, Message> {
+    use iced::widget::{row, text};
+
+    formula.chars().fold(row![].spacing(0), |row, ch| {
+        let text = text(ch.to_string()).size(24).color(BODY);
+
+        if ch == SMUFL_FLAT || ch == SMUFL_SHARP {
+            row.push(text.font(MUSIC_FONT))
+        } else {
+            row.push(text)
+        }
+    })
+}
+
 fn scale_kind_row(kinds: &[ScaleKind], selected: ScaleKind) -> iced::widget::Row<'static, Message> {
     use iced::widget::{button, row, text};
 
     kinds.iter().fold(row![].spacing(8), |row, kind| {
         row.push(
-            button(text(kind.name()).size(13))
+            button(text(kind.name()).size(15))
                 .padding([8, 12])
                 .style(if *kind == selected {
                     selected_root_button
@@ -375,8 +419,8 @@ fn ui_placeholder(label: &str) -> Element<'_, Message> {
 
     container(
         column![
-            text(label).size(30).color(INK),
-            text("Coming soon").size(14).color(MUTE),
+            text(label).size(36).color(INK),
+            text("Coming soon").size(17).color(MUTE),
         ]
         .spacing(8),
     )
@@ -396,8 +440,8 @@ fn trainer_button<'a>(
 
     button(
         column![
-            text(title).size(16).color(INK),
-            text(caption).size(13).color(BODY)
+            text(title).size(19).color(INK),
+            text(caption).size(16).color(BODY)
         ]
         .spacing(4),
     )

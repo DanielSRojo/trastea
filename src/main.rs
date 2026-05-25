@@ -1,5 +1,5 @@
 use iced::theme::palette::Palette;
-use iced::{Color, Theme, application};
+use iced::{Color, Size, Theme, application};
 
 mod ui;
 use ui::App;
@@ -23,8 +23,11 @@ fn theme(_: &App) -> Theme {
 fn main() -> iced::Result {
     application(App::new, App::update, App::view)
         .title("Trastea")
+        .window_size(Size::new(1280.0, 960.0))
         .font(include_bytes!("../assets/fonts/DancingScript-Regular.ttf").as_slice())
         .font(include_bytes!("../assets/fonts/DancingScript-Bold.ttf").as_slice())
+        .font(include_bytes!("../assets/fonts/Leland.otf").as_slice())
+        .font(include_bytes!("../assets/fonts/LelandText.otf").as_slice())
         .theme(theme)
         .subscription(App::subscription)
         .run()
