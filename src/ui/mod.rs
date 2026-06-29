@@ -38,6 +38,7 @@ pub struct App {
     history: Vec<Screen>,
     selected_scale_kind: ScaleKind,
     selected_root: Note,
+    focused: FocusTarget,
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -56,6 +57,22 @@ pub enum Message {
     SelectRoot(Note),
     SelectScaleKind(ScaleKind),
     RerollScale,
+    FocusNext,
+    FocusPrevious,
+    FocusUp,
+    FocusDown,
+    FocusLeft,
+    FocusRight,
+    ActivateFocused,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusTarget {
+    HomeMenuItem(usize),
+    Back,
+    RerollScale,
+    Root(usize),
+    ScaleKind(usize),
 }
 
 impl Default for App {
@@ -65,6 +82,7 @@ impl Default for App {
             history: Vec::new(),
             selected_scale_kind: ScaleKind::Ionian,
             selected_root: Note::C,
+            focused: FocusTarget::HomeMenuItem(0),
         }
     }
 }
@@ -101,6 +119,44 @@ impl App {
                 self.selected_scale_kind = random_scale_kind();
                 self.selected_root = random_note();
             }
+            Message::FocusNext => {}
+            Message::FocusPrevious => {}
+            Message::FocusUp => {}
+            Message::FocusDown => {}
+            Message::FocusLeft => {}
+            Message::FocusRight => {}
+            Message::ActivateFocused => match self.focused {
+                FocusTarget::HomeMenuItem(0) => {
+                    self.history.push(self.screen.clone());
+                    self.screen = Screen::ScaleTrainer;
+                    self.selected_scale_kind = random_scale_kind();
+                    self.selected_root = random_note();
+                }
+                FocusTarget::HomeMenuItem(1) => {
+                    self.history.push(self.screen.clone());
+                    self.screen = Screen::NoteTrainer;
+                }
+                FocusTarget::HomeMenuItem(2) => {
+                    self.history.push(self.screen.clone());
+                    self.screen = Screen::NoteTrainer;
+                }
+                FocusTarget::HomeMenuItem(_) => {}
+                FocusTarget::Back => {
+                    if let Some(prev) = self.history.pop() {
+                        self.screen = prev;
+                    }
+                }
+                FocusTarget::RerollScale => {
+                    self.selected_scale_kind = random_scale_kind();
+                    self.selected_root = random_note();
+                }
+                FocusTarget::Root(index) => {
+                    self.selected_root = random_note();
+                }
+                FocusTarget::ScaleKind(index) => {
+                    self.selected_scale_kind = random_scale_kind();
+                }
+            },
         }
         Task::none()
     }
@@ -127,12 +183,22 @@ impl App {
             let keyboard::Event::KeyPressed { key, .. } = event else {
                 return None;
             };
-            if matches!(key.as_ref(), keyboard::Key::Named(Named::Escape)) {
-                Some(Message::GoBack)
-            } else {
-                None
-            }
+            translate_key(key)
         })
+    }
+}
+
+fn translate_key(key: keyboard::Key) -> Option<Message> {
+    match key.as_ref() {
+        keyboard::Key::Named(Named::Escape) => Some(Message::GoBack),
+        keyboard::Key::Named(Named::Tab) => Some(Message::FocusNext),
+        keyboard::Key::Named(Named::Enter) => Some(Message::ActivateFocused),
+        keyboard::Key::Named(Named::Space) => Some(Message::ActivateFocused),
+        keyboard::Key::Named(Named::ArrowUp) => Some(Message::FocusUp),
+        keyboard::Key::Named(Named::ArrowDown) => Some(Message::FocusDown),
+        keyboard::Key::Named(Named::ArrowLeft) => Some(Message::FocusLeft),
+        keyboard::Key::Named(Named::ArrowRight) => Some(Message::FocusRight),
+        _ => None,
     }
 }
 
@@ -171,7 +237,7 @@ fn ui_home() -> Element<'static, Message> {
     use iced::widget::{column, container, row, text};
 
     let menu = column![
-        trainer_button("Scale Trainer", "Explore a random key and scale formula")
+        trainer_button("Scale Trainer", "Explore and learn guitar scales")
             .on_press(Message::Navigate(Screen::ScaleTrainer)),
         trainer_button("Note Trainer", "Build fretboard recall one pitch at a time")
             .on_press(Message::Navigate(Screen::NoteTrainer)),
