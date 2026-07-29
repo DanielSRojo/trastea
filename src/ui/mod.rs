@@ -414,6 +414,18 @@ fn translate_key(key: keyboard::Key, modifiers: keyboard::Modifiers) -> Option<M
         keyboard::Key::Named(Named::ArrowDown) => Some(Message::FocusDown),
         keyboard::Key::Named(Named::ArrowLeft) => Some(Message::FocusLeft),
         keyboard::Key::Named(Named::ArrowRight) => Some(Message::FocusRight),
+        keyboard::Key::Character(c) if modifiers.is_empty() => vim_motion(c),
+        _ => None,
+    }
+}
+
+/// Maps the vim motion keys onto the same focus moves the arrow keys make.
+fn vim_motion(c: &str) -> Option<Message> {
+    match c {
+        "h" => Some(Message::FocusLeft),
+        "j" => Some(Message::FocusDown),
+        "k" => Some(Message::FocusUp),
+        "l" => Some(Message::FocusRight),
         _ => None,
     }
 }
@@ -1157,10 +1169,56 @@ mod tests {
         assert_eq!(step_focus_2d(&grid, first, Direction::Left), first);
     }
 
+    /// Presses a character key with the given modifiers held.
+    fn press(c: &str, modifiers: keyboard::Modifiers) -> Option<Message> {
+        translate_key(keyboard::Key::Character(c.into()), modifiers)
+    }
+
+    #[test]
+    fn vim_motions_move_the_focus_ring() {
+        let none = keyboard::Modifiers::empty();
+
+        assert!(matches!(press("h", none), Some(Message::FocusLeft)));
+        assert!(matches!(press("j", none), Some(Message::FocusDown)));
+        assert!(matches!(press("k", none), Some(Message::FocusUp)));
+        assert!(matches!(press("l", none), Some(Message::FocusRight)));
+    }
+
+    #[test]
+    fn modified_vim_letters_are_not_motions() {
+        for modifiers in [
+            keyboard::Modifiers::LOGO,
+            keyboard::Modifiers::CTRL,
+            keyboard::Modifiers::ALT,
+        ] {
+            assert!(press("h", modifiers).is_none(), "{modifiers:?}+h");
+        }
+    }
+
+    #[test]
+    fn capital_vim_letters_are_unbound() {
+        assert!(press("h", keyboard::Modifiers::SHIFT).is_none());
+    }
+
+    #[test]
+    fn unbound_letters_are_ignored() {
+        assert!(press("x", keyboard::Modifiers::empty()).is_none());
+    }
+
+    #[test]
+    fn adding_vim_motions_did_not_shadow_the_named_keys() {
+        let escape = keyboard::Key::Named(Named::Escape);
+        let modifiers = keyboard::Modifiers::empty();
+
+        assert!(matches!(
+            translate_key(escape, modifiers),
+            Some(Message::GoBack)
+        ));
+    }
+
     #[test]
     fn arrows_snap_stale_focus_back_onto_the_grid() {
         let grid = focus_grid(&Screen::Home);
-        // Back is not on Home, so any arrow recovers to the first menu item.
         assert_eq!(
             step_focus_2d(&grid, FocusTarget::Back, Direction::Down),
             FocusTarget::HomeMenuItem(0)
