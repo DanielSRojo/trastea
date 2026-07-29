@@ -354,3 +354,333 @@ impl ScaleKind {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SMUFL_FLAT: char = '\u{E260}';
+    const SMUFL_SHARP: char = '\u{E262}';
+
+    /// The semitones a scale spans above its root.
+    fn semitones(kind: ScaleKind) -> Vec<u8> {
+        kind.intervals()
+            .iter()
+            .map(|interval| interval.to_semitone())
+            .collect()
+    }
+
+    /// A scale's pitch classes, sorted, for comparing scales that share notes but
+    /// start in different places.
+    fn pitch_classes(root: Note, kind: ScaleKind) -> Vec<u8> {
+        let mut classes: Vec<u8> = Scale { root, kind }
+            .notes()
+            .iter()
+            .map(|note| note.to_semitone())
+            .collect();
+        classes.sort_unstable();
+        classes
+    }
+
+    /// Semitones above the root of the unaltered degrees, i.e. the major scale.
+    fn degree_semitone(degree: u32) -> i16 {
+        match degree {
+            1 => 0,
+            2 => 2,
+            3 => 4,
+            4 => 5,
+            5 => 7,
+            6 => 9,
+            7 => 11,
+            other => panic!("{other} is not a scale degree"),
+        }
+    }
+
+    /// Reads a formula like `1 ♭3 4 ♭5 5 ♭7` into semitones above the root.
+    ///
+    /// Going through semitones rather than comparing text is deliberate: `♭5` and
+    /// `♯4` name the same distance, and the two are not interchangeable as strings.
+    fn parse_intervalic(formula: &str) -> Vec<u8> {
+        formula
+            .split_whitespace()
+            .map(|token| {
+                let mut chars = token.chars();
+                let first = chars.next().expect("split_whitespace yields no empties");
+
+                let (accidental, digit) = match first {
+                    SMUFL_FLAT => (-1, chars.next().expect("a flat precedes a degree")),
+                    SMUFL_SHARP => (1, chars.next().expect("a sharp precedes a degree")),
+                    digit => (0, digit),
+                };
+
+                let degree = digit.to_digit(10).expect("a degree is a digit");
+                let semitone = degree_semitone(degree) + accidental;
+
+                u8::try_from(semitone).expect("a degree does not fall below the root")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn all_lists_every_kind() {
+        // Adding a variant already fails to compile in name, intervalic, feel,
+        // common_usage and intervals, which all match exhaustively. ALL is the one
+        // place the compiler cannot help, so the count is pinned here instead.
+        assert_eq!(ScaleKind::ALL.len(), 16);
+    }
+
+    #[test]
+    fn interval_lists_ascend_from_the_root_without_repeats() {
+        for &kind in ScaleKind::ALL {
+            let semitones = semitones(kind);
+
+            assert_eq!(
+                semitones.first(),
+                Some(&0),
+                "{} does not start on its root",
+                kind.name()
+            );
+
+            for pair in semitones.windows(2) {
+                assert!(
+                    pair[0] < pair[1],
+                    "{} is out of order or repeats at {pair:?}",
+                    kind.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_two_kinds_share_a_name_or_an_interval_list() {
+        for (i, &kind) in ScaleKind::ALL.iter().enumerate() {
+            for &other in &ScaleKind::ALL[i + 1..] {
+                assert_ne!(kind.name(), other.name(), "duplicated name");
+                assert_ne!(
+                    kind.intervals(),
+                    other.intervals(),
+                    "{} and {} have identical intervals",
+                    kind.name(),
+                    other.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_intervalic_formula_agrees_with_the_interval_list() {
+        // The two are written out separately, so they can drift apart. This is what
+        // catches it.
+        for &kind in ScaleKind::ALL {
+            assert_eq!(
+                parse_intervalic(kind.intervalic()),
+                semitones(kind),
+                "{}: formula {:?} and interval list disagree",
+                kind.name(),
+                kind.intervalic()
+            );
+        }
+    }
+
+    #[test]
+    fn one_interval_variant_spells_two_different_degrees() {
+        // AugmentedFourth is a pitch-class distance, so Lydian's ♯4 and Locrian's ♭5
+        // are the very same value. That is why intervalic() is hand-written instead
+        // of rendered from intervals(), and why the test above compares semitones
+        // rather than text. It should stop holding once Interval carries a spelling.
+        for kind in [ScaleKind::Lydian, ScaleKind::Locrian] {
+            assert!(kind.intervals().contains(&Interval::AugmentedFourth));
+        }
+
+        assert!(ScaleKind::Lydian.intervalic().contains(SMUFL_SHARP));
+        assert!(ScaleKind::Locrian.intervalic().contains(SMUFL_FLAT));
+    }
+
+    #[test]
+    fn notes_are_distinct_and_match_the_interval_count() {
+        for &root in Note::ALL {
+            for &kind in ScaleKind::ALL {
+                let notes = Scale { root, kind }.notes();
+
+                assert_eq!(
+                    notes.len(),
+                    kind.intervals().len(),
+                    "{root} {} lost a note",
+                    kind.name()
+                );
+
+                for (i, note) in notes.iter().enumerate() {
+                    assert!(
+                        !notes[..i].contains(note),
+                        "{root} {} repeats {note}",
+                        kind.name()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reference_scales_have_the_textbook_notes() {
+        // Ordered from the root and wrapping past B, not sorted by pitch: A Aeolian
+        // ends on G rather than starting on C.
+        let cases: &[(Note, ScaleKind, &[Note])] = &[
+            (
+                Note::C,
+                ScaleKind::Ionian,
+                &[
+                    Note::C,
+                    Note::D,
+                    Note::E,
+                    Note::F,
+                    Note::G,
+                    Note::A,
+                    Note::B,
+                ],
+            ),
+            (
+                Note::G,
+                ScaleKind::Ionian,
+                &[
+                    Note::G,
+                    Note::A,
+                    Note::B,
+                    Note::C,
+                    Note::D,
+                    Note::E,
+                    Note::Fs,
+                ],
+            ),
+            (
+                Note::A,
+                ScaleKind::Aeolian,
+                &[
+                    Note::A,
+                    Note::B,
+                    Note::C,
+                    Note::D,
+                    Note::E,
+                    Note::F,
+                    Note::G,
+                ],
+            ),
+            (
+                Note::E,
+                ScaleKind::Phrygian,
+                &[
+                    Note::E,
+                    Note::F,
+                    Note::G,
+                    Note::A,
+                    Note::B,
+                    Note::C,
+                    Note::D,
+                ],
+            ),
+            (
+                Note::C,
+                ScaleKind::HarmonicMinor,
+                &[
+                    Note::C,
+                    Note::D,
+                    Note::Ds,
+                    Note::F,
+                    Note::G,
+                    Note::Gs,
+                    Note::B,
+                ],
+            ),
+            (
+                Note::A,
+                ScaleKind::MinorPentatonic,
+                &[Note::A, Note::C, Note::D, Note::E, Note::G],
+            ),
+            (
+                // The ♭5 between D and E is the blue note.
+                Note::A,
+                ScaleKind::Blues,
+                &[Note::A, Note::C, Note::D, Note::Ds, Note::E, Note::G],
+            ),
+            (
+                Note::C,
+                ScaleKind::WholeTone,
+                &[Note::C, Note::D, Note::E, Note::Fs, Note::Gs, Note::As],
+            ),
+        ];
+
+        for &(root, kind, expected) in cases {
+            assert_eq!(
+                Scale { root, kind }.notes(),
+                expected,
+                "{root} {}",
+                kind.name()
+            );
+        }
+    }
+
+    #[test]
+    fn the_seven_diatonic_modes_share_one_pitch_class_set() {
+        // Each mode rooted on its own degree of C major must yield exactly C major's
+        // notes. One wrong interval anywhere in the seven breaks this.
+        let c_major = pitch_classes(Note::C, ScaleKind::Ionian);
+
+        for (root, kind) in [
+            (Note::C, ScaleKind::Ionian),
+            (Note::D, ScaleKind::Dorian),
+            (Note::E, ScaleKind::Phrygian),
+            (Note::F, ScaleKind::Lydian),
+            (Note::G, ScaleKind::Mixolydian),
+            (Note::A, ScaleKind::Aeolian),
+            (Note::B, ScaleKind::Locrian),
+        ] {
+            assert_eq!(
+                pitch_classes(root, kind),
+                c_major,
+                "{root} {} is not a mode of C major",
+                kind.name()
+            );
+        }
+    }
+
+    #[test]
+    fn a_relative_minor_shares_its_majors_notes() {
+        assert_eq!(
+            pitch_classes(Note::A, ScaleKind::Aeolian),
+            pitch_classes(Note::C, ScaleKind::Ionian)
+        );
+        assert_eq!(
+            pitch_classes(Note::E, ScaleKind::Aeolian),
+            pitch_classes(Note::G, ScaleKind::Ionian)
+        );
+    }
+
+    #[test]
+    fn the_symmetric_scales_repeat_under_transposition() {
+        // Whole tone maps onto itself a whole step up, and the diminished scale a
+        // minor third up. Getting one of their steps wrong breaks the symmetry.
+        assert_eq!(
+            pitch_classes(Note::C, ScaleKind::WholeTone),
+            pitch_classes(Note::D, ScaleKind::WholeTone)
+        );
+        assert_eq!(
+            pitch_classes(Note::C, ScaleKind::Diminished),
+            pitch_classes(Note::Ds, ScaleKind::Diminished)
+        );
+    }
+
+    #[test]
+    fn scales_are_currently_spelled_with_sharps_only() {
+        // F Ionian is F G A B♭ C D E, but Note holds no flats, so the fourth degree
+        // comes out as A♯ — the right pitch under the wrong name. This is the spell
+        // TODO at the top of the module; when spelling lands this expectation should
+        // be rewritten rather than deleted.
+        let f_major = Scale {
+            root: Note::F,
+            kind: ScaleKind::Ionian,
+        }
+        .notes();
+
+        assert_eq!(f_major[3], Note::As);
+        assert!(!f_major.iter().any(|note| note.to_string().contains('b')));
+    }
+}
