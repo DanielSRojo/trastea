@@ -1,6 +1,5 @@
 mod fretboard;
 use std::ops::Range;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use fretboard::{Fretboard, NoteMarker, fretboard};
 
@@ -10,6 +9,7 @@ use iced::{
 use keyboard::key::Named;
 
 use crate::music::{notes::Note, scales::Scale, scales::ScaleKind};
+use crate::rng::Rng;
 
 const INK: Color = Color::WHITE;
 const BODY: Color = Color::from_rgb8(0xb5, 0xb5, 0xb5);
@@ -40,6 +40,11 @@ pub struct App {
     selected_scale_kind: ScaleKind,
     selected_root: Note,
     focused: FocusTarget,
+    /// Owned rather than reached for globally, so every draw is a state change the
+    /// borrow checker can see. Note this makes `App` un-`Default`-able on purpose:
+    /// a `Default` seed would have to be a constant, and an app that replays the
+    /// same scales every launch is worse than no `Default` at all.
+    rng: Rng,
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -95,29 +100,25 @@ const HOME_MENU_ITEMS: usize = 3;
 const ROOT_ROW_WIDTH: usize = 3;
 const KIND_ROW_WIDTHS: [usize; 5] = [4, 3, 2, 3, 4];
 
-impl Default for App {
-    fn default() -> Self {
-        Self {
+impl App {
+    pub fn new() -> (Self, Task<Message>) {
+        let app = Self {
             screen: Screen::default(),
             history: Vec::new(),
             selected_scale_kind: ScaleKind::Ionian,
             selected_root: Note::C,
             focused: FocusTarget::HomeMenuItem(0),
-        }
-    }
-}
+            rng: Rng::from_clock(),
+        };
 
-impl App {
-    pub fn new() -> (Self, Task<Message>) {
-        (Self::default(), Task::none())
+        (app, Task::none())
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Navigate(Screen::ScaleTrainer) => {
                 self.navigate_to(Screen::ScaleTrainer);
-                self.selected_scale_kind = random_scale_kind();
-                self.selected_root = random_note();
+                self.reroll_scale();
             }
             Message::Navigate(screen) => self.navigate_to(screen),
             Message::GoBack => self.go_back(),
@@ -127,10 +128,7 @@ impl App {
             Message::SelectScaleKind(kind) => {
                 self.selected_scale_kind = kind;
             }
-            Message::RerollScale => {
-                self.selected_scale_kind = random_scale_kind();
-                self.selected_root = random_note();
-            }
+            Message::RerollScale => self.reroll_scale(),
             Message::FocusNext => self.cycle_focus(1),
             Message::FocusPrevious => self.cycle_focus(-1),
             Message::FocusUp => self.move_focus(Direction::Up),
@@ -152,6 +150,27 @@ impl App {
         if let Some(prev) = self.history.pop() {
             self.screen = prev;
             self.reset_focus();
+        }
+    }
+
+    /// Picks a new scale, never the one already on screen.
+    ///
+    /// Root and kind are drawn from the same advancing stream, so the second draw
+    /// cannot be a function of the first. Rerolling onto the current scale would
+    /// make the button look broken, so that one outcome is rejected and redrawn —
+    /// which is also why the very first scale of a session is never C Ionian.
+    fn reroll_scale(&mut self) {
+        let current = (self.selected_root, self.selected_scale_kind);
+
+        loop {
+            let root = Note::ALL[self.rng.below(Note::ALL.len())];
+            let kind = ScaleKind::ALL[self.rng.below(ScaleKind::ALL.len())];
+
+            if (root, kind) != current {
+                self.selected_root = root;
+                self.selected_scale_kind = kind;
+                return;
+            }
         }
     }
 
@@ -178,17 +197,13 @@ impl App {
         match self.focused {
             FocusTarget::HomeMenuItem(0) => {
                 self.navigate_to(Screen::ScaleTrainer);
-                self.selected_scale_kind = random_scale_kind();
-                self.selected_root = random_note();
+                self.reroll_scale();
             }
             FocusTarget::HomeMenuItem(1) => self.navigate_to(Screen::NoteTrainer),
             FocusTarget::HomeMenuItem(2) => self.navigate_to(Screen::IntervalTrainer),
             FocusTarget::HomeMenuItem(_) => {}
             FocusTarget::Back => self.go_back(),
-            FocusTarget::RerollScale => {
-                self.selected_scale_kind = random_scale_kind();
-                self.selected_root = random_note();
-            }
+            FocusTarget::RerollScale => self.reroll_scale(),
             FocusTarget::Root(index) => {
                 if let Some(&note) = Note::ALL.get(index) {
                     self.selected_root = note;
@@ -801,26 +816,6 @@ fn scale_markers(root: Note, kind: ScaleKind) -> Vec<NoteMarker> {
     markers
 }
 
-fn random_scale_kind() -> ScaleKind {
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-
-    let seed = duration.as_secs() as usize ^ duration.subsec_nanos() as usize;
-
-    ScaleKind::ALL[seed % ScaleKind::ALL.len()]
-}
-
-fn random_note() -> Note {
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-
-    let seed = duration.as_secs() as usize ^ duration.subsec_nanos() as usize;
-
-    Note::ALL[seed % Note::ALL.len()]
-}
-
 fn ui_placeholder(label: &str) -> Element<'_, Message> {
     use iced::Length;
     use iced::widget::{column, container, text};
@@ -946,6 +941,72 @@ fn selected_root_button(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
+    /// An app whose scale rolls are reproducible.
+    fn app_with_seed(seed: u64) -> App {
+        let (mut app, _) = App::new();
+        app.rng = Rng::from_seed(seed);
+        app
+    }
+
+    /// The current scale as a pair of indices into `Note::ALL` and `ScaleKind::ALL`.
+    fn scale_indices(app: &App) -> (usize, usize) {
+        let root = Note::ALL
+            .iter()
+            .position(|n| *n == app.selected_root)
+            .expect("root is one of Note::ALL");
+        let kind = ScaleKind::ALL
+            .iter()
+            .position(|k| *k == app.selected_scale_kind)
+            .expect("kind is one of ScaleKind::ALL");
+
+        (root, kind)
+    }
+
+    #[test]
+    fn every_root_and_kind_combination_is_reachable() {
+        let mut app = app_with_seed(0x5ca1e);
+        let mut seen = HashSet::new();
+
+        for _ in 0..20_000 {
+            app.reroll_scale();
+            seen.insert(scale_indices(&app));
+        }
+
+        // Reseeding from the clock on every draw made root and kind both functions
+        // of the same instant, so only lcm(12, 16) = 48 of the 192 pairs could ever
+        // come up — C Dorian, for one, was unreachable.
+        let total = Note::ALL.len() * ScaleKind::ALL.len();
+        assert_eq!(
+            seen.len(),
+            total,
+            "only {} of {total} pairs seen",
+            seen.len()
+        );
+    }
+
+    #[test]
+    fn rerolling_always_changes_the_scale() {
+        let mut app = app_with_seed(7);
+
+        for _ in 0..2_000 {
+            let before = (app.selected_root, app.selected_scale_kind);
+            app.reroll_scale();
+            assert_ne!((app.selected_root, app.selected_scale_kind), before);
+        }
+    }
+
+    #[test]
+    fn rolls_are_reproducible_from_a_seed() {
+        let (mut a, mut b) = (app_with_seed(42), app_with_seed(42));
+
+        for _ in 0..64 {
+            a.reroll_scale();
+            b.reroll_scale();
+            assert_eq!(scale_indices(&a), scale_indices(&b));
+        }
+    }
 
     #[test]
     fn home_has_three_focusables() {

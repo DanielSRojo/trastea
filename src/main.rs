@@ -5,6 +5,7 @@ mod ui;
 use ui::App;
 
 mod music;
+mod rng;
 
 fn theme(_: &App) -> Theme {
     Theme::custom(
