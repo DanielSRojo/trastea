@@ -223,7 +223,14 @@ impl App {
     }
 
     fn activate_focused(&mut self) {
-        match self.focused {
+        self.activate(self.focused);
+    }
+
+    /// Performs `target`'s action. Focus is left alone: an accelerator fires a widget
+    /// without walking the ring onto it, so the only focus changes here are the ones
+    /// the action itself causes — navigating resets focus exactly as a click would.
+    fn activate(&mut self, target: FocusTarget) {
+        match target {
             FocusTarget::HomeMenuItem(0) => {
                 self.navigate_to(Screen::ScaleTrainer);
                 self.reroll_scale();
