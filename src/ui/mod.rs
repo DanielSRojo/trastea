@@ -457,6 +457,16 @@ fn step_focus(list: &[FocusTarget], current: FocusTarget, delta: isize) -> Focus
     }
 }
 
+/// The modifiers that suppress a character binding.
+///
+/// Shift is deliberately absent. `Key::Character` already reports the shifted character,
+/// so Shift has done its work by the time the key arrives and testing for it again would
+/// make `?` — Shift+`/` on most layouts — unreachable. Capital letters stay unbound because
+/// nothing claims `H`, not because a guard stopped the lookup.
+const COMMAND_MODIFIERS: keyboard::Modifiers = keyboard::Modifiers::LOGO
+    .union(keyboard::Modifiers::CTRL)
+    .union(keyboard::Modifiers::ALT);
+
 fn translate_key(key: keyboard::Key, modifiers: keyboard::Modifiers) -> Option<Message> {
     match key.as_ref() {
         keyboard::Key::Named(Named::Escape | Named::Backspace) => Some(Message::GoBack),
@@ -468,7 +478,7 @@ fn translate_key(key: keyboard::Key, modifiers: keyboard::Modifiers) -> Option<M
         keyboard::Key::Named(Named::ArrowDown) => Some(Message::FocusDown),
         keyboard::Key::Named(Named::ArrowLeft) => Some(Message::FocusLeft),
         keyboard::Key::Named(Named::ArrowRight) => Some(Message::FocusRight),
-        keyboard::Key::Character(c) if modifiers.is_empty() => vim_motion(c),
+        keyboard::Key::Character(c) if !modifiers.intersects(COMMAND_MODIFIERS) => vim_motion(c),
         _ => None,
     }
 }
@@ -1429,9 +1439,12 @@ mod tests {
         }
     }
 
+    /// Shift+h delivers the capital, not the lowercase letter with a flag set. An earlier
+    /// version of this test pressed `"h"` with SHIFT — which no keyboard produces — and
+    /// passed only because the guard rejected every modifier, Shift included.
     #[test]
     fn capital_vim_letters_are_unbound() {
-        assert!(press("h", keyboard::Modifiers::SHIFT).is_none());
+        assert!(press("H", keyboard::Modifiers::SHIFT).is_none());
     }
 
     #[test]
