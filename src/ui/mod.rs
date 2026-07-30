@@ -363,10 +363,19 @@ impl App {
 
     pub fn subscription(&self) -> Subscription<Message> {
         keyboard::listen().filter_map(|event| {
-            let keyboard::Event::KeyPressed { key, modifiers, .. } = event else {
+            // `modified_key`, not `key`: iced reports `key` *without* modifiers applied, so
+            // Shift+/ arrives there as `/` and `?` could never match. `modified_key` is the
+            // character the user actually typed, which is also what makes Shift+R read as
+            // `R` — unbound — rather than as a plain `r` that would reroll.
+            let keyboard::Event::KeyPressed {
+                modified_key,
+                modifiers,
+                ..
+            } = event
+            else {
                 return None;
             };
-            translate_key(key, modifiers)
+            translate_key(modified_key, modifiers)
         })
     }
 }
@@ -1137,6 +1146,7 @@ fn scrim_container(_theme: &iced::Theme) -> iced::widget::container::Style {
         snap: true,
     }
 }
+
 fn ui_placeholder(label: &str) -> Element<'_, Message> {
     use iced::Length;
     use iced::widget::{column, container, text};
@@ -1645,6 +1655,12 @@ mod tests {
     }
 
     /// Presses a character key with the given modifiers held.
+    ///
+    /// `c` is the *modified* key — the character the keyboard actually produces, which is
+    /// what the subscription feeds `translate_key`. So Shift+/ is `press("?", SHIFT)` and
+    /// Shift+r is `press("R", SHIFT)`; writing those as `"/"` or `"r"` would describe an
+    /// event no keyboard sends, which is exactly how `?` shipped broken behind a passing
+    /// test.
     fn press(c: &str, modifiers: keyboard::Modifiers) -> Option<Message> {
         translate_key(keyboard::Key::Character(c.into()), modifiers)
     }
