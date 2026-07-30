@@ -9,7 +9,8 @@ use iced::{
 use keyboard::key::Named;
 
 use crate::music::{
-    notes::{Note, PitchClass, Spelling},
+    intervals::Interval,
+    notes::{Accidental, Note, PitchClass, Spelling},
     scales::Scale,
     scales::ScaleKind,
 };
@@ -29,6 +30,8 @@ const SELECTOR_CARD_HEIGHT: f32 = 324.0;
 const ROOT_BUTTON_SIZE: f32 = 50.0;
 const SMUFL_FLAT: char = '\u{E260}';
 const SMUFL_SHARP: char = '\u{E262}';
+const SMUFL_DOUBLE_SHARP: char = '\u{E263}';
+const SMUFL_DOUBLE_FLAT: char = '\u{E264}';
 const FEEL_FONT: iced::Font = iced::Font {
     family: font::Family::Name("Dancing Script"),
     weight: font::Weight::Bold,
@@ -48,8 +51,7 @@ const STANDARD_TUNING: [PitchClass; 6] = [
 pub struct App {
     screen: Screen,
     history: Vec<Screen>,
-    selected_scale_kind: ScaleKind,
-    selected_root: PitchClass,
+    scale: Scale,
     focused: FocusTarget,
     /// Owned rather than reached for globally, so every draw is a state change the
     /// borrow checker can see. Note this makes `App` un-`Default`-able on purpose:
@@ -116,8 +118,11 @@ impl App {
         let app = Self {
             screen: Screen::default(),
             history: Vec::new(),
-            selected_scale_kind: ScaleKind::Ionian,
-            selected_root: PitchClass::new(0),
+            scale: Scale {
+                root: PitchClass::new(0),
+                spelling: Spelling::Sharps,
+                kind: ScaleKind::Ionian,
+            },
             focused: FocusTarget::HomeMenuItem(0),
             rng: Rng::from_clock(),
         };
@@ -134,10 +139,10 @@ impl App {
             Message::Navigate(screen) => self.navigate_to(screen),
             Message::GoBack => self.go_back(),
             Message::SelectRoot(root) => {
-                self.selected_root = root;
+                self.scale.root = root;
             }
             Message::SelectScaleKind(kind) => {
-                self.selected_scale_kind = kind;
+                self.scale.kind = kind;
             }
             Message::RerollScale => self.reroll_scale(),
             Message::FocusNext => self.cycle_focus(1),
@@ -171,15 +176,15 @@ impl App {
     /// make the button look broken, so that one outcome is rejected and redrawn —
     /// which is also why the very first scale of a session is never C Ionian.
     fn reroll_scale(&mut self) {
-        let current = (self.selected_root, self.selected_scale_kind);
+        let current = (self.scale.root, self.scale.kind);
 
         loop {
             let root = PitchClass::ALL[self.rng.below(PitchClass::ALL.len())];
             let kind = ScaleKind::ALL[self.rng.below(ScaleKind::ALL.len())];
 
             if (root, kind) != current {
-                self.selected_root = root;
-                self.selected_scale_kind = kind;
+                self.scale.root = root;
+                self.scale.kind = kind;
                 return;
             }
         }
@@ -217,12 +222,12 @@ impl App {
             FocusTarget::RerollScale => self.reroll_scale(),
             FocusTarget::Root(index) => {
                 if let Some(&pitch_class) = PitchClass::ALL.get(index) {
-                    self.selected_root = pitch_class;
+                    self.scale.root = pitch_class;
                 }
             }
             FocusTarget::ScaleKind(index) => {
                 if let Some(&kind) = ScaleKind::ALL.get(index) {
-                    self.selected_scale_kind = kind;
+                    self.scale.kind = kind;
                 }
             }
         }
@@ -233,7 +238,7 @@ impl App {
             Screen::Home => ui_home(self.focused),
             Screen::ScaleTrainer => with_top_bar(
                 "Scale Trainer",
-                ui_scale_trainer(self.selected_root, self.selected_scale_kind, self.focused),
+                ui_scale_trainer(self.scale, self.focused),
                 true,
                 self.focused,
             ),
@@ -563,23 +568,19 @@ fn ui_home(focused: FocusTarget) -> Element<'static, Message> {
     with_top_bar("Trastea", content.into(), false, focused)
 }
 
-fn ui_scale_trainer(
-    root: PitchClass,
-    kind: ScaleKind,
-    focused: FocusTarget,
-) -> Element<'static, Message> {
+fn ui_scale_trainer(scale: Scale, focused: FocusTarget) -> Element<'static, Message> {
     use iced::Length;
     use iced::widget::{Space, button, column, container, row, text};
 
     let fb = Fretboard {
         num_frets: 12,
-        highlighted: scale_markers(root, kind),
+        highlighted: scale_markers(scale),
     };
 
     let current_scale_card = container(
         column![
             row![
-                note_label(Spelling::Sharps.spell(root), 56, INK),
+                note_label(scale.root_note(), 56, INK),
                 Space::new().width(Length::Fill),
                 focus_ring(
                     button(text("R").size(20))
@@ -589,8 +590,8 @@ fn ui_scale_trainer(
                     focused == FocusTarget::RerollScale,
                 ),
             ],
-            text(kind.name()).size(34).color(INK),
-            intervalic_text(kind.intervalic()),
+            text(scale.kind.name()).size(34).color(INK),
+            intervalic_text(scale.kind.intervals()),
         ]
         .spacing(10),
     )
@@ -605,7 +606,7 @@ fn ui_scale_trainer(
             rows.push(
                 container(root_note_row(
                     &PitchClass::ALL[start..start + len],
-                    root,
+                    scale,
                     start,
                     focused,
                 ))
@@ -630,7 +631,7 @@ fn ui_scale_trainer(
         |rows, (start, len)| {
             rows.push(scale_kind_row(
                 &ScaleKind::ALL[start..start + len],
-                kind,
+                scale.kind,
                 start,
                 focused,
             ))
@@ -654,12 +655,12 @@ fn ui_scale_trainer(
 
     let explanation_card = container(
         column![
-            text(kind.feel())
+            text(scale.kind.feel())
                 .size(22)
                 .font(FEEL_FONT)
                 .color(BODY)
                 .width(Length::Fill),
-            text(kind.common_usage())
+            text(scale.kind.common_usage())
                 .size(18)
                 .font(explanation_font)
                 .color(MUTE)
@@ -699,7 +700,7 @@ fn ui_scale_trainer(
 
 fn root_note_row(
     pitch_classes: &[PitchClass],
-    selected: PitchClass,
+    scale: Scale,
     start_index: usize,
     focused: FocusTarget,
 ) -> iced::widget::Row<'static, Message> {
@@ -710,11 +711,11 @@ fn root_note_row(
         .iter()
         .enumerate()
         .fold(row![].spacing(28), |row, (i, pitch_class)| {
-            let is_selected = *pitch_class == selected;
+            let is_selected = *pitch_class == scale.root;
             let color = if is_selected { CANVAS } else { INK };
 
             let root_button = button(
-                container(note_label(Spelling::Sharps.spell(*pitch_class), 24, color))
+                container(note_label(scale.spelling.spell(*pitch_class), 24, color))
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .center_x(Length::Fill)
@@ -761,18 +762,37 @@ fn note_label(note: Note, size: u32, color: Color) -> iced::widget::Row<'static,
     }
 }
 
-fn intervalic_text(formula: &'static str) -> iced::widget::Row<'static, Message> {
+/// The SMuFL glyph for an accidental. `None` for a natural: a natural sign would
+/// be wrong in a note label, and the major scale's degrees carry no glyph.
+fn accidental_glyph(accidental: Accidental) -> Option<char> {
+    match accidental {
+        Accidental::DoubleFlat => Some(SMUFL_DOUBLE_FLAT),
+        Accidental::Flat => Some(SMUFL_FLAT),
+        Accidental::Natural => None,
+        Accidental::Sharp => Some(SMUFL_SHARP),
+        Accidental::DoubleSharp => Some(SMUFL_DOUBLE_SHARP),
+    }
+}
+
+fn intervalic_text(intervals: &'static [Interval]) -> iced::widget::Row<'static, Message> {
     use iced::widget::{row, text};
 
-    formula.chars().fold(row![].spacing(0), |row, ch| {
-        let text = text(ch.to_string()).size(24).color(BODY);
+    intervals
+        .iter()
+        .fold(row![].spacing(8), |tokens, interval| {
+            let mut token = row![].spacing(0);
 
-        if ch == SMUFL_FLAT || ch == SMUFL_SHARP {
-            row.push(text.font(MUSIC_FONT))
-        } else {
-            row.push(text)
-        }
-    })
+            if let Some(glyph) = accidental_glyph(interval.alteration()) {
+                token = token.push(
+                    text(glyph.to_string())
+                        .size(24)
+                        .font(MUSIC_FONT)
+                        .color(BODY),
+                );
+            }
+
+            tokens.push(token.push(text(interval.number().to_string()).size(24).color(BODY)))
+        })
 }
 
 fn scale_kind_row(
@@ -801,22 +821,19 @@ fn scale_kind_row(
         })
 }
 
-fn scale_markers(root: PitchClass, kind: ScaleKind) -> Vec<NoteMarker> {
-    let scale = Scale { root, kind };
-    let scale_pitch_classes = scale.notes();
-
+fn scale_markers(scale: Scale) -> Vec<NoteMarker> {
     let mut markers = Vec::new();
 
     for (string, open) in STANDARD_TUNING.iter().enumerate() {
         for fret in 0_u8..=12 {
             let pitch_class = open.transpose(fret);
 
-            if scale_pitch_classes.contains(&pitch_class) {
+            if let Some(note) = scale.spell(pitch_class) {
                 markers.push(NoteMarker {
                     string,
                     fret: fret as usize,
-                    note: Spelling::Sharps.spell(pitch_class),
-                    color: if pitch_class == root {
+                    note,
+                    color: if pitch_class == scale.root {
                         Color::from_rgb8(0xff, 0x4d, 0x4d)
                     } else {
                         LINK
@@ -967,11 +984,11 @@ mod tests {
     fn scale_indices(app: &App) -> (usize, usize) {
         let root = PitchClass::ALL
             .iter()
-            .position(|pitch_class| *pitch_class == app.selected_root)
+            .position(|pitch_class| *pitch_class == app.scale.root)
             .expect("root is one of PitchClass::ALL");
         let kind = ScaleKind::ALL
             .iter()
-            .position(|k| *k == app.selected_scale_kind)
+            .position(|k| *k == app.scale.kind)
             .expect("kind is one of ScaleKind::ALL");
 
         (root, kind)
@@ -1004,9 +1021,9 @@ mod tests {
         let mut app = app_with_seed(7);
 
         for _ in 0..2_000 {
-            let before = (app.selected_root, app.selected_scale_kind);
+            let before = (app.scale.root, app.scale.kind);
             app.reroll_scale();
-            assert_ne!((app.selected_root, app.selected_scale_kind), before);
+            assert_ne!((app.scale.root, app.scale.kind), before);
         }
     }
 

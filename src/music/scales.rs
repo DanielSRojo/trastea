@@ -1,9 +1,5 @@
-// TODO: implement spell(semitone: u8, scale: &Scale) -> &str
-// Returns the enharmonic spelling of a pitch in the context of a given scale.
-// e.g. semitone 1 → "C#" in G major, "Db" in F minor.
-
 use super::intervals::Interval;
-use super::notes::PitchClass;
+use super::notes::{Accidental, Letter, Note, PitchClass, Spelling};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScaleKind {
@@ -29,18 +25,62 @@ pub enum ScaleKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Scale {
     pub root: PitchClass,
+    pub spelling: Spelling,
     pub kind: ScaleKind,
 }
 
 impl Scale {
-    pub fn notes(self) -> Vec<PitchClass> {
+    pub fn root_note(self) -> Note {
+        self.spelling.spell(self.root)
+    }
+
+    /// Every degree spelled: the degree number forces the letter, and the
+    /// accidental is whatever the arithmetic then demands. No lookup tables, no
+    /// sharp-or-flat heuristic, no key signatures.
+    ///
+    /// Total rather than fallible. Storing a `PitchClass` and a `Spelling` means
+    /// only 24 root combinations exist and every one carries at most one
+    /// accidental, which bounds every degree within ±2 — see
+    /// `every_scale_spells_without_failing`.
+    pub fn notes(self) -> Vec<Note> {
+        let root = self.root_note();
+
         self.kind
             .intervals()
             .iter()
-            .map(|interval| self.root.transpose(interval.semitones()))
+            .map(|interval| {
+                let letter = root.letter.step(interval.number() - 1);
+                let target = self.root.transpose(interval.semitones());
+                let accidental = Accidental::from_offset(nearest_offset(target, letter))
+                    .expect("every_scale_spells_without_failing proves ±2 is enough");
+
+                Note { letter, accidental }
+            })
             .collect()
     }
+
+    /// This scale's name for a pitch class, or `None` when the pitch class is not
+    /// in the scale. The `Option` is the membership test.
+    pub fn spell(self, pitch_class: PitchClass) -> Option<Note> {
+        self.notes()
+            .into_iter()
+            .find(|note| note.pitch_class() == pitch_class)
+    }
 }
+
+/// How far `target` sits from `letter`'s natural pitch, as the nearest signed
+/// distance in −5..=6.
+///
+/// The fold is the fiddly part: `rem_euclid(12)` gives 0..=11, then anything
+/// above 6 has 12 subtracted. Without it a difference reads as +11 where −1 is
+/// meant, and no accidental covers +11.
+fn nearest_offset(target: PitchClass, letter: Letter) -> i8 {
+    let raw = (i16::from(target.semitone()) - i16::from(letter.natural_semitone())).rem_euclid(12);
+    let folded = if raw > 6 { raw - 12 } else { raw };
+
+    i8::try_from(folded).expect("the fold yields -5..=6")
+}
+
 impl ScaleKind {
     pub const ALL: &'static [ScaleKind] = &[
         ScaleKind::Ionian,
@@ -79,27 +119,6 @@ impl ScaleKind {
             ScaleKind::SpanishGypsy => "Spanish Gypsy",
             ScaleKind::WholeTone => "Whole Tone",
             ScaleKind::Diminished => "Diminished",
-        }
-    }
-
-    pub fn intervalic(self) -> &'static str {
-        match self {
-            ScaleKind::Ionian => "1 2 3 4 5 6 7",
-            ScaleKind::Dorian => "1 2 \u{E260}3 4 5 6 \u{E260}7",
-            ScaleKind::Phrygian => "1 \u{E260}2 \u{E260}3 4 5 \u{E260}6 \u{E260}7",
-            ScaleKind::Lydian => "1 2 3 \u{E262}4 5 6 7",
-            ScaleKind::Mixolydian => "1 2 3 4 5 6 \u{E260}7",
-            ScaleKind::Aeolian => "1 2 \u{E260}3 4 5 \u{E260}6 \u{E260}7",
-            ScaleKind::Locrian => "1 \u{E260}2 \u{E260}3 4 \u{E260}5 \u{E260}6 \u{E260}7",
-            ScaleKind::HarmonicMinor => "1 2 \u{E260}3 4 5 \u{E260}6 7",
-            ScaleKind::MelodicMinor => "1 2 \u{E260}3 4 5 6 7",
-            ScaleKind::MinorPentatonic => "1 \u{E260}3 4 5 \u{E260}7",
-            ScaleKind::MajorPentatonic => "1 2 3 5 6",
-            ScaleKind::Blues => "1 \u{E260}3 4 \u{E260}5 5 \u{E260}7",
-            ScaleKind::Voodoo => "1 \u{E260}2 \u{E260}3 3 4 5 6 \u{E260}7",
-            ScaleKind::SpanishGypsy => "1 \u{E260}2 3 4 5 \u{E260}6 \u{E260}7",
-            ScaleKind::WholeTone => "1 2 3 \u{E262}4 \u{E260}6 \u{E260}7",
-            ScaleKind::Diminished => "1 \u{E260}2 \u{E260}3 3 \u{E260}5 5 6 \u{E260}7",
         }
     }
 
@@ -358,9 +377,13 @@ impl ScaleKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use Accidental::{DoubleFlat, DoubleSharp, Flat, Natural, Sharp};
+    use Letter::{A, B, C, D, E, F, G};
 
-    const SMUFL_FLAT: char = '\u{E260}';
-    const SMUFL_SHARP: char = '\u{E262}';
+    /// A written note, for the expectation tables below.
+    fn spelled(letter: Letter, accidental: Accidental) -> Note {
+        Note { letter, accidental }
+    }
 
     /// The semitones a scale spans above its root.
     fn semitones(kind: ScaleKind) -> Vec<u8> {
@@ -376,54 +399,19 @@ mod tests {
     }
 
     /// A scale's pitch classes, sorted, for comparing scales that share notes but
-    /// start in different places.
+    /// start in different places. Spelling does not affect these.
     fn pitch_classes(root: PitchClass, kind: ScaleKind) -> Vec<u8> {
-        let mut classes: Vec<u8> = Scale { root, kind }
-            .notes()
-            .iter()
-            .map(|pitch_class| pitch_class.semitone())
-            .collect();
+        let mut classes: Vec<u8> = Scale {
+            root,
+            spelling: Spelling::Sharps,
+            kind,
+        }
+        .notes()
+        .iter()
+        .map(|note| note.pitch_class().semitone())
+        .collect();
         classes.sort_unstable();
         classes
-    }
-
-    /// Semitones above the root of the unaltered degrees, i.e. the major scale.
-    fn degree_semitone(degree: u32) -> i16 {
-        match degree {
-            1 => 0,
-            2 => 2,
-            3 => 4,
-            4 => 5,
-            5 => 7,
-            6 => 9,
-            7 => 11,
-            other => panic!("{other} is not a scale degree"),
-        }
-    }
-
-    /// Reads a formula like `1 ♭3 4 ♭5 5 ♭7` into semitones above the root.
-    ///
-    /// Going through semitones rather than comparing text is deliberate: `♭5` and
-    /// `♯4` name the same distance, and the two are not interchangeable as strings.
-    fn parse_intervalic(formula: &str) -> Vec<u8> {
-        formula
-            .split_whitespace()
-            .map(|token| {
-                let mut chars = token.chars();
-                let first = chars.next().expect("split_whitespace yields no empties");
-
-                let (accidental, digit) = match first {
-                    SMUFL_FLAT => (-1, chars.next().expect("a flat precedes a degree")),
-                    SMUFL_SHARP => (1, chars.next().expect("a sharp precedes a degree")),
-                    digit => (0, digit),
-                };
-
-                let degree = digit.to_digit(10).expect("a degree is a digit");
-                let semitone = degree_semitone(degree) + accidental;
-
-                u8::try_from(semitone).expect("a degree does not fall below the root")
-            })
-            .collect()
     }
 
     #[test]
@@ -473,21 +461,6 @@ mod tests {
     }
 
     #[test]
-    fn the_intervalic_formula_agrees_with_the_interval_list() {
-        // The two are written out separately, so they can drift apart. This is what
-        // catches it.
-        for &kind in ScaleKind::ALL {
-            assert_eq!(
-                parse_intervalic(kind.intervalic()),
-                semitones(kind),
-                "{}: formula {:?} and interval list disagree",
-                kind.name(),
-                kind.intervalic()
-            );
-        }
-    }
-
-    #[test]
     fn the_tritone_kinds_use_the_degree_they_are_written_with() {
         // ♯4 and ♭5 are the same distance, so putting one where the other belongs
         // is invisible to every other test here: the formula check compares
@@ -520,60 +493,6 @@ mod tests {
                 "{} has no ♯4",
                 kind.name()
             );
-        }
-    }
-
-    #[test]
-    fn notes_are_distinct_and_match_the_interval_count() {
-        for root in PitchClass::ALL {
-            for &kind in ScaleKind::ALL {
-                let notes = Scale { root, kind }.notes();
-
-                assert_eq!(
-                    notes.len(),
-                    kind.intervals().len(),
-                    "{root:?} {} lost a note",
-                    kind.name()
-                );
-
-                for (i, note) in notes.iter().enumerate() {
-                    assert!(
-                        !notes[..i].contains(note),
-                        "{root:?} {} repeats {note:?}",
-                        kind.name()
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn reference_scales_have_the_textbook_pitch_classes() {
-        // Ordered from the root and wrapping past 11, not sorted: A Aeolian ends
-        // on 7 rather than starting at 0.
-        let cases: &[(u8, ScaleKind, &[u8])] = &[
-            (0, ScaleKind::Ionian, &[0, 2, 4, 5, 7, 9, 11]),
-            (7, ScaleKind::Ionian, &[7, 9, 11, 0, 2, 4, 6]),
-            (9, ScaleKind::Aeolian, &[9, 11, 0, 2, 4, 5, 7]),
-            (4, ScaleKind::Phrygian, &[4, 5, 7, 9, 11, 0, 2]),
-            (0, ScaleKind::HarmonicMinor, &[0, 2, 3, 5, 7, 8, 11]),
-            (9, ScaleKind::MinorPentatonic, &[9, 0, 2, 4, 7]),
-            // The ♭5 between D and E is the blue note.
-            (9, ScaleKind::Blues, &[9, 0, 2, 3, 4, 7]),
-            (0, ScaleKind::WholeTone, &[0, 2, 4, 6, 8, 10]),
-        ];
-
-        for &(root, kind, expected) in cases {
-            let actual: Vec<u8> = Scale {
-                root: pc(root),
-                kind,
-            }
-            .notes()
-            .iter()
-            .map(|pitch_class| pitch_class.semitone())
-            .collect();
-
-            assert_eq!(actual, expected, "{root} {}", kind.name());
         }
     }
 
@@ -625,5 +544,237 @@ mod tests {
             pitch_classes(pc(0), ScaleKind::Diminished),
             pitch_classes(pc(3), ScaleKind::Diminished)
         );
+    }
+
+    #[test]
+    fn every_scale_spells_without_failing() {
+        // 12 pitch classes × 2 spellings × 16 kinds = 384. The domain is closed
+        // and tiny, so this is a real proof that ±2 accidentals are enough — and
+        // it is what licenses the expect inside notes().
+        let mut checked = 0;
+
+        for spelling in [Spelling::Sharps, Spelling::Flats] {
+            for root in PitchClass::ALL {
+                for &kind in ScaleKind::ALL {
+                    let scale = Scale {
+                        root,
+                        spelling,
+                        kind,
+                    };
+                    let notes = scale.notes();
+
+                    assert_eq!(
+                        notes.len(),
+                        kind.intervals().len(),
+                        "{} {} lost a note",
+                        scale.root_note(),
+                        kind.name()
+                    );
+
+                    let mut pitch_classes: Vec<u8> = notes
+                        .iter()
+                        .map(|note| note.pitch_class().semitone())
+                        .collect();
+                    pitch_classes.sort_unstable();
+                    let total = pitch_classes.len();
+                    pitch_classes.dedup();
+
+                    assert_eq!(
+                        pitch_classes.len(),
+                        total,
+                        "{} {} repeats a pitch class",
+                        scale.root_note(),
+                        kind.name()
+                    );
+
+                    checked += 1;
+                }
+            }
+        }
+
+        assert_eq!(checked, 384, "the sweep did not cover every scale");
+    }
+
+    #[test]
+    fn seven_note_scales_use_each_letter_once() {
+        // True by construction — degrees 1..7 are seven distinct letter steps —
+        // but it is exactly the property F Ionian violated, so it gets pinned.
+        // The eight-note kinds correctly reuse a letter and are excluded.
+        for spelling in [Spelling::Sharps, Spelling::Flats] {
+            for root in PitchClass::ALL {
+                for &kind in ScaleKind::ALL {
+                    if kind.intervals().len() != 7 {
+                        continue;
+                    }
+
+                    let scale = Scale {
+                        root,
+                        spelling,
+                        kind,
+                    };
+                    let letters: Vec<Letter> =
+                        scale.notes().iter().map(|note| note.letter).collect();
+
+                    for (i, letter) in letters.iter().enumerate() {
+                        assert!(
+                            !letters[..i].contains(letter),
+                            "{} {} repeats the letter {letter}",
+                            scale.root_note(),
+                            kind.name()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn reference_scales_have_the_textbook_notes() {
+        // Ordered from the root and wrapping past B, not sorted by pitch.
+        let cases: &[(u8, Spelling, ScaleKind, &[Note])] = &[
+            (
+                5,
+                Spelling::Sharps,
+                ScaleKind::Ionian,
+                &[
+                    spelled(F, Natural),
+                    spelled(G, Natural),
+                    spelled(A, Natural),
+                    spelled(B, Flat),
+                    spelled(C, Natural),
+                    spelled(D, Natural),
+                    spelled(E, Natural),
+                ],
+            ),
+            (
+                0,
+                Spelling::Sharps,
+                ScaleKind::HarmonicMinor,
+                &[
+                    spelled(C, Natural),
+                    spelled(D, Natural),
+                    spelled(E, Flat),
+                    spelled(F, Natural),
+                    spelled(G, Natural),
+                    spelled(A, Flat),
+                    spelled(B, Natural),
+                ],
+            ),
+            (
+                3,
+                Spelling::Flats,
+                ScaleKind::Ionian,
+                &[
+                    spelled(E, Flat),
+                    spelled(F, Natural),
+                    spelled(G, Natural),
+                    spelled(A, Flat),
+                    spelled(B, Flat),
+                    spelled(C, Natural),
+                    spelled(D, Natural),
+                ],
+            ),
+            (
+                1,
+                Spelling::Sharps,
+                ScaleKind::Ionian,
+                &[
+                    spelled(C, Sharp),
+                    spelled(D, Sharp),
+                    spelled(E, Sharp),
+                    spelled(F, Sharp),
+                    spelled(G, Sharp),
+                    spelled(A, Sharp),
+                    spelled(B, Sharp),
+                ],
+            ),
+            (
+                // The ♭5 is the blue note, and it is spelled E♭, not D♯.
+                9,
+                Spelling::Sharps,
+                ScaleKind::Blues,
+                &[
+                    spelled(A, Natural),
+                    spelled(C, Natural),
+                    spelled(D, Natural),
+                    spelled(E, Flat),
+                    spelled(E, Natural),
+                    spelled(G, Natural),
+                ],
+            ),
+            (
+                // Eight notes, so E and G each appear twice — as they are written.
+                0,
+                Spelling::Flats,
+                ScaleKind::Diminished,
+                &[
+                    spelled(C, Natural),
+                    spelled(D, Flat),
+                    spelled(E, Flat),
+                    spelled(E, Natural),
+                    spelled(G, Flat),
+                    spelled(G, Natural),
+                    spelled(A, Natural),
+                    spelled(B, Flat),
+                ],
+            ),
+        ];
+
+        for &(root, spelling, kind, expected) in cases {
+            let scale = Scale {
+                root: pc(root),
+                spelling,
+                kind,
+            };
+            assert_eq!(
+                scale.notes(),
+                expected,
+                "{} {}",
+                scale.root_note(),
+                kind.name()
+            );
+        }
+    }
+
+    #[test]
+    fn the_double_accidental_extremes_are_reached_and_not_exceeded() {
+        // The two furthest scales in the domain. If the fold in notes() is wrong,
+        // these break first.
+        let g_sharp_harmonic_minor = Scale {
+            root: pc(8),
+            spelling: Spelling::Sharps,
+            kind: ScaleKind::HarmonicMinor,
+        };
+        assert_eq!(
+            g_sharp_harmonic_minor.notes()[6],
+            spelled(F, DoubleSharp),
+            "G♯ harmonic minor's seventh"
+        );
+
+        let d_flat_aeolian = Scale {
+            root: pc(1),
+            spelling: Spelling::Flats,
+            kind: ScaleKind::Aeolian,
+        };
+        assert_eq!(
+            d_flat_aeolian.notes()[5],
+            spelled(B, DoubleFlat),
+            "D♭ aeolian's sixth"
+        );
+    }
+
+    #[test]
+    fn spell_names_the_scales_own_pitch_classes_and_rejects_the_rest() {
+        let f_ionian = Scale {
+            root: pc(5),
+            spelling: Spelling::Sharps,
+            kind: ScaleKind::Ionian,
+        };
+
+        // Pitch class 10 is in F major, and in it the name is B♭ — not A♯.
+        assert_eq!(f_ionian.spell(pc(10)), Some(spelled(B, Flat)));
+        assert_eq!(f_ionian.spell(pc(5)), Some(spelled(F, Natural)));
+        // Pitch class 6 (F♯/G♭) is not in F major at all.
+        assert_eq!(f_ionian.spell(pc(6)), None);
     }
 }
