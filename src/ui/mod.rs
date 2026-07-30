@@ -8,7 +8,11 @@ use iced::{
 };
 use keyboard::key::Named;
 
-use crate::music::{notes::Note, scales::Scale, scales::ScaleKind};
+use crate::music::{
+    notes::{Note, PitchClass, Spelling},
+    scales::Scale,
+    scales::ScaleKind,
+};
 use crate::rng::Rng;
 
 const INK: Color = Color::WHITE;
@@ -32,13 +36,20 @@ const FEEL_FONT: iced::Font = iced::Font {
 };
 const MUSIC_FONT: iced::Font = iced::Font::with_name("Leland Text");
 
-const STANDARD_TUNING: [Note; 6] = [Note::E, Note::A, Note::D, Note::G, Note::B, Note::E];
+const STANDARD_TUNING: [PitchClass; 6] = [
+    PitchClass::new(4),  // E
+    PitchClass::new(9),  // A
+    PitchClass::new(2),  // D
+    PitchClass::new(7),  // G
+    PitchClass::new(11), // B
+    PitchClass::new(4),  // e
+];
 
 pub struct App {
     screen: Screen,
     history: Vec<Screen>,
     selected_scale_kind: ScaleKind,
-    selected_root: Note,
+    selected_root: PitchClass,
     focused: FocusTarget,
     /// Owned rather than reached for globally, so every draw is a state change the
     /// borrow checker can see. Note this makes `App` un-`Default`-able on purpose:
@@ -60,7 +71,7 @@ pub enum Screen {
 pub enum Message {
     Navigate(Screen),
     GoBack,
-    SelectRoot(Note),
+    SelectRoot(PitchClass),
     SelectScaleKind(ScaleKind),
     RerollScale,
     FocusNext,
@@ -106,7 +117,7 @@ impl App {
             screen: Screen::default(),
             history: Vec::new(),
             selected_scale_kind: ScaleKind::Ionian,
-            selected_root: Note::C,
+            selected_root: PitchClass::new(0),
             focused: FocusTarget::HomeMenuItem(0),
             rng: Rng::from_clock(),
         };
@@ -163,7 +174,7 @@ impl App {
         let current = (self.selected_root, self.selected_scale_kind);
 
         loop {
-            let root = Note::ALL[self.rng.below(Note::ALL.len())];
+            let root = PitchClass::ALL[self.rng.below(PitchClass::ALL.len())];
             let kind = ScaleKind::ALL[self.rng.below(ScaleKind::ALL.len())];
 
             if (root, kind) != current {
@@ -205,8 +216,8 @@ impl App {
             FocusTarget::Back => self.go_back(),
             FocusTarget::RerollScale => self.reroll_scale(),
             FocusTarget::Root(index) => {
-                if let Some(&note) = Note::ALL.get(index) {
-                    self.selected_root = note;
+                if let Some(&pitch_class) = PitchClass::ALL.get(index) {
+                    self.selected_root = pitch_class;
                 }
             }
             FocusTarget::ScaleKind(index) => {
@@ -252,9 +263,9 @@ impl App {
 }
 
 /// Yields the `(start, len)` of each row of the root selector, derived from
-/// `Note::ALL` so adding a note reshapes the grid and the view together.
+/// `PitchClass::ALL` so adding a note reshapes the grid and the view together.
 fn root_row_spans() -> impl Iterator<Item = (usize, usize)> {
-    let total = Note::ALL.len();
+    let total = PitchClass::ALL.len();
     (0..total)
         .step_by(ROOT_ROW_WIDTH)
         .map(move |start| (start, ROOT_ROW_WIDTH.min(total - start)))
@@ -553,7 +564,7 @@ fn ui_home(focused: FocusTarget) -> Element<'static, Message> {
 }
 
 fn ui_scale_trainer(
-    root: Note,
+    root: PitchClass,
     kind: ScaleKind,
     focused: FocusTarget,
 ) -> Element<'static, Message> {
@@ -568,7 +579,7 @@ fn ui_scale_trainer(
     let current_scale_card = container(
         column![
             row![
-                note_label(root, 56, INK),
+                note_label(Spelling::Sharps.spell(root), 56, INK),
                 Space::new().width(Length::Fill),
                 focus_ring(
                     button(text("R").size(20))
@@ -593,7 +604,7 @@ fn ui_scale_trainer(
         |rows, (start, len)| {
             rows.push(
                 container(root_note_row(
-                    &Note::ALL[start..start + len],
+                    &PitchClass::ALL[start..start + len],
                     root,
                     start,
                     focused,
@@ -687,22 +698,23 @@ fn ui_scale_trainer(
 }
 
 fn root_note_row(
-    notes: &[Note],
-    selected: Note,
+    pitch_classes: &[PitchClass],
+    selected: PitchClass,
     start_index: usize,
     focused: FocusTarget,
 ) -> iced::widget::Row<'static, Message> {
     use iced::Length;
     use iced::widget::{button, container, row};
 
-    notes
+    pitch_classes
         .iter()
         .enumerate()
-        .fold(row![].spacing(28), |row, (i, note)| {
-            let color = if *note == selected { CANVAS } else { INK };
+        .fold(row![].spacing(28), |row, (i, pitch_class)| {
+            let is_selected = *pitch_class == selected;
+            let color = if is_selected { CANVAS } else { INK };
 
             let root_button = button(
-                container(note_label(*note, 24, color))
+                container(note_label(Spelling::Sharps.spell(*pitch_class), 24, color))
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .center_x(Length::Fill)
@@ -711,12 +723,12 @@ fn root_note_row(
             .width(Length::Fixed(ROOT_BUTTON_SIZE))
             .height(Length::Fixed(ROOT_BUTTON_SIZE))
             .padding(0)
-            .style(if *note == selected {
+            .style(if is_selected {
                 selected_root_button
             } else {
                 ghost_button
             })
-            .on_press(Message::SelectRoot(*note));
+            .on_press(Message::SelectRoot(*pitch_class));
 
             row.push(focus_ring(
                 container(root_button)
@@ -789,22 +801,22 @@ fn scale_kind_row(
         })
 }
 
-fn scale_markers(root: Note, kind: ScaleKind) -> Vec<NoteMarker> {
+fn scale_markers(root: PitchClass, kind: ScaleKind) -> Vec<NoteMarker> {
     let scale = Scale { root, kind };
-    let scale_notes = scale.notes();
+    let scale_pitch_classes = scale.notes();
 
     let mut markers = Vec::new();
 
-    for (string, open_note) in STANDARD_TUNING.iter().enumerate() {
+    for (string, open) in STANDARD_TUNING.iter().enumerate() {
         for fret in 0_u8..=12 {
-            let note = open_note.transpose(fret);
+            let pitch_class = open.transpose(fret);
 
-            if scale_notes.contains(&note) {
+            if scale_pitch_classes.contains(&pitch_class) {
                 markers.push(NoteMarker {
                     string,
                     fret: fret as usize,
-                    note,
-                    color: if note == root {
+                    note: Spelling::Sharps.spell(pitch_class),
+                    color: if pitch_class == root {
                         Color::from_rgb8(0xff, 0x4d, 0x4d)
                     } else {
                         LINK
@@ -950,12 +962,13 @@ mod tests {
         app
     }
 
-    /// The current scale as a pair of indices into `Note::ALL` and `ScaleKind::ALL`.
+    /// The current scale as a pair of indices into `PitchClass::ALL` and
+    /// `ScaleKind::ALL`.
     fn scale_indices(app: &App) -> (usize, usize) {
-        let root = Note::ALL
+        let root = PitchClass::ALL
             .iter()
-            .position(|n| *n == app.selected_root)
-            .expect("root is one of Note::ALL");
+            .position(|pitch_class| *pitch_class == app.selected_root)
+            .expect("root is one of PitchClass::ALL");
         let kind = ScaleKind::ALL
             .iter()
             .position(|k| *k == app.selected_scale_kind)
@@ -977,7 +990,7 @@ mod tests {
         // Reseeding from the clock on every draw made root and kind both functions
         // of the same instant, so only lcm(12, 16) = 48 of the 192 pairs could ever
         // come up — C Dorian, for one, was unreachable.
-        let total = Note::ALL.len() * ScaleKind::ALL.len();
+        let total = PitchClass::ALL.len() * ScaleKind::ALL.len();
         assert_eq!(
             seen.len(),
             total,
@@ -1016,9 +1029,12 @@ mod tests {
     #[test]
     fn scale_trainer_reaches_every_widget_exactly_once() {
         let targets = focusables(&Screen::ScaleTrainer);
-        assert_eq!(targets.len(), 2 + Note::ALL.len() + ScaleKind::ALL.len());
+        assert_eq!(
+            targets.len(),
+            2 + PitchClass::ALL.len() + ScaleKind::ALL.len()
+        );
 
-        for i in 0..Note::ALL.len() {
+        for i in 0..PitchClass::ALL.len() {
             assert!(targets.contains(&FocusTarget::Root(i)), "missing root {i}");
         }
         for i in 0..ScaleKind::ALL.len() {
@@ -1032,7 +1048,7 @@ mod tests {
     #[test]
     fn tab_walks_one_card_at_a_time() {
         let mut expected = vec![FocusTarget::Back, FocusTarget::RerollScale];
-        expected.extend((0..Note::ALL.len()).map(FocusTarget::Root));
+        expected.extend((0..PitchClass::ALL.len()).map(FocusTarget::Root));
         expected.extend((0..ScaleKind::ALL.len()).map(FocusTarget::ScaleKind));
 
         // Every root before any kind — not C, C#, D, Ionian, Dorian, ...

@@ -1,92 +1,210 @@
 use std::fmt;
 
-#[derive(PartialEq, Debug, Clone, Copy, Eq, Hash)]
-pub enum Note {
+/// One of twelve pitch classes. All arithmetic lives here.
+///
+/// The field is private because it carries an invariant — always 0..=11 — and
+/// `new` is the only way in. There is deliberately no `Display`: naming a pitch
+/// class means choosing a letter, and that choice needs context this type does
+/// not have. See [`Spelling::spell`] and `Scale::spell`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PitchClass(u8);
+
+impl PitchClass {
+    /// A fixed-size array, unlike the slices elsewhere: a miscount is then a
+    /// compile error. It does not catch a thirteenth pitch class going unlisted,
+    /// but there will never be one.
+    pub const ALL: [PitchClass; 12] = [
+        PitchClass::new(0),
+        PitchClass::new(1),
+        PitchClass::new(2),
+        PitchClass::new(3),
+        PitchClass::new(4),
+        PitchClass::new(5),
+        PitchClass::new(6),
+        PitchClass::new(7),
+        PitchClass::new(8),
+        PitchClass::new(9),
+        PitchClass::new(10),
+        PitchClass::new(11),
+    ];
+
+    pub const fn new(semitone: u8) -> PitchClass {
+        PitchClass(semitone % 12)
+    }
+
+    pub fn semitone(self) -> u8 {
+        self.0
+    }
+
+    pub fn transpose(self, semitones: u8) -> PitchClass {
+        // `semitones % 12` first, so the sum cannot exceed 22 and overflow a u8.
+        PitchClass::new(self.0 + semitones % 12)
+    }
+}
+
+/// The seven letter names, ordered from C rather than A, so `as usize` indexes
+/// [`Letter::ALL`] and `step` is one modular add.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Letter {
     C,
-    Cs,
     D,
-    Ds,
     E,
     F,
-    Fs,
     G,
-    Gs,
     A,
-    As,
     B,
 }
 
-impl fmt::Display for Note {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Letter {
+    /// Private: `step` is the only reason this list exists, and nothing outside
+    /// this module needs to enumerate letters.
+    const ALL: [Letter; 7] = [
+        Letter::C,
+        Letter::D,
+        Letter::E,
+        Letter::F,
+        Letter::G,
+        Letter::A,
+        Letter::B,
+    ];
+
+    pub fn natural_semitone(self) -> u8 {
         match self {
-            Note::C => write!(f, "C"),
-            Note::Cs => write!(f, "C#"),
-            Note::D => write!(f, "D"),
-            Note::Ds => write!(f, "D#"),
-            Note::E => write!(f, "E"),
-            Note::F => write!(f, "F"),
-            Note::Fs => write!(f, "F#"),
-            Note::G => write!(f, "G"),
-            Note::Gs => write!(f, "G#"),
-            Note::A => write!(f, "A"),
-            Note::As => write!(f, "A#"),
-            Note::B => write!(f, "B"),
+            Letter::C => 0,
+            Letter::D => 2,
+            Letter::E => 4,
+            Letter::F => 5,
+            Letter::G => 7,
+            Letter::A => 9,
+            Letter::B => 11,
+        }
+    }
+
+    /// Walks up the letters, wrapping past B: `D.step(2) == F`, `step(7) == self`.
+    pub fn step(self, degrees: u8) -> Letter {
+        Letter::ALL[(self as usize + degrees as usize) % Letter::ALL.len()]
+    }
+}
+
+impl fmt::Display for Letter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let letter = match self {
+            Letter::C => "C",
+            Letter::D => "D",
+            Letter::E => "E",
+            Letter::F => "F",
+            Letter::G => "G",
+            Letter::A => "A",
+            Letter::B => "B",
+        };
+        write!(f, "{letter}")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Accidental {
+    DoubleFlat,
+    Flat,
+    Natural,
+    Sharp,
+    DoubleSharp,
+}
+
+impl Accidental {
+    pub fn offset(self) -> i8 {
+        match self {
+            Accidental::DoubleFlat => -2,
+            Accidental::Flat => -1,
+            Accidental::Natural => 0,
+            Accidental::Sharp => 1,
+            Accidental::DoubleSharp => 2,
+        }
+    }
+
+    /// `None` beyond ±2. Triple accidentals are unreachable in this domain, so
+    /// they stay unrepresentable rather than being rounded into range.
+    pub fn from_offset(offset: i8) -> Option<Accidental> {
+        match offset {
+            -2 => Some(Accidental::DoubleFlat),
+            -1 => Some(Accidental::Flat),
+            0 => Some(Accidental::Natural),
+            1 => Some(Accidental::Sharp),
+            2 => Some(Accidental::DoubleSharp),
+            _ => None,
         }
     }
 }
 
+/// A note as written: a letter plus an accidental.
+///
+/// The fields are public because there is no invariant to hold — every pair is a
+/// legitimate note, B♯ and F♭♭ included — so private fields would buy nothing
+/// but ceremony.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Note {
+    pub letter: Letter,
+    pub accidental: Accidental,
+}
+
 impl Note {
-    pub const ALL: &'static [Note] = &[
-        Note::C,
-        Note::Cs,
-        Note::D,
-        Note::Ds,
-        Note::E,
-        Note::F,
-        Note::Fs,
-        Note::G,
-        Note::Gs,
-        Note::A,
-        Note::As,
-        Note::B,
-    ];
-    pub fn to_semitone(self) -> u8 {
-        match self {
-            Note::C => 0,
-            Note::Cs => 1,
-            Note::D => 2,
-            Note::Ds => 3,
-            Note::E => 4,
-            Note::F => 5,
-            Note::Fs => 6,
-            Note::G => 7,
-            Note::Gs => 8,
-            Note::A => 9,
-            Note::As => 10,
-            Note::B => 11,
-        }
+    /// Total and infallible — the direction that needs no context.
+    pub fn pitch_class(self) -> PitchClass {
+        let semitone =
+            i16::from(self.letter.natural_semitone()) + i16::from(self.accidental.offset());
+        PitchClass::new(
+            u8::try_from(semitone.rem_euclid(12)).expect("rem_euclid(12) yields 0..=11"),
+        )
     }
+}
 
-    pub fn from_semitone(n: u8) -> Note {
-        match n % 12 {
-            0 => Note::C,
-            1 => Note::Cs,
-            2 => Note::D,
-            3 => Note::Ds,
-            4 => Note::E,
-            5 => Note::F,
-            6 => Note::Fs,
-            7 => Note::G,
-            8 => Note::Gs,
-            9 => Note::A,
-            10 => Note::As,
-            11 => Note::B,
-            _ => unreachable!("n % 12 cannot be anything other than 0..11"),
-        }
+/// ASCII, for the fretboard markers: the canvas draws with one font, so SMuFL
+/// glyphs cannot render inside a marker. The cards use the glyphs instead.
+impl fmt::Display for Note {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let accidental = match self.accidental {
+            Accidental::DoubleFlat => "bb",
+            Accidental::Flat => "b",
+            Accidental::Natural => "",
+            Accidental::Sharp => "#",
+            Accidental::DoubleSharp => "##",
+        };
+        write!(f, "{}{accidental}", self.letter)
     }
+}
 
-    pub fn transpose(self, semitones: u8) -> Note {
-        Note::from_semitone(self.to_semitone() + semitones)
+/// The minimum context needed to name a pitch class on its own — the ♯/♭ toggle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Spelling {
+    Sharps,
+    Flats,
+}
+
+impl Spelling {
+    /// The seven naturals are the same under both; the five black keys are the
+    /// whole of the difference.
+    pub fn spell(self, pitch_class: PitchClass) -> Note {
+        let (letter, accidental) = match (pitch_class.semitone(), self) {
+            (0, _) => (Letter::C, Accidental::Natural),
+            (1, Spelling::Sharps) => (Letter::C, Accidental::Sharp),
+            (1, Spelling::Flats) => (Letter::D, Accidental::Flat),
+            (2, _) => (Letter::D, Accidental::Natural),
+            (3, Spelling::Sharps) => (Letter::D, Accidental::Sharp),
+            (3, Spelling::Flats) => (Letter::E, Accidental::Flat),
+            (4, _) => (Letter::E, Accidental::Natural),
+            (5, _) => (Letter::F, Accidental::Natural),
+            (6, Spelling::Sharps) => (Letter::F, Accidental::Sharp),
+            (6, Spelling::Flats) => (Letter::G, Accidental::Flat),
+            (7, _) => (Letter::G, Accidental::Natural),
+            (8, Spelling::Sharps) => (Letter::G, Accidental::Sharp),
+            (8, Spelling::Flats) => (Letter::A, Accidental::Flat),
+            (9, _) => (Letter::A, Accidental::Natural),
+            (10, Spelling::Sharps) => (Letter::A, Accidental::Sharp),
+            (10, Spelling::Flats) => (Letter::B, Accidental::Flat),
+            (11, _) => (Letter::B, Accidental::Natural),
+            (semitone, _) => unreachable!("PitchClass holds 0..=11, got {semitone}"),
+        };
+
+        Note { letter, accidental }
     }
 }
 
@@ -96,34 +214,131 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let all = [
-            Note::C,
-            Note::Cs,
-            Note::D,
-            Note::Ds,
-            Note::E,
-            Note::F,
-            Note::Fs,
-            Note::G,
-            Note::Gs,
-            Note::A,
-            Note::As,
-            Note::B,
-        ];
-
-        for note in all {
-            let s = note.to_semitone();
-            assert_eq!(note, Note::from_semitone(s));
+        for pitch_class in PitchClass::ALL {
+            assert_eq!(pitch_class, PitchClass::new(pitch_class.semitone()));
         }
     }
 
     #[test]
     fn transpose_test() {
-        assert_eq!(Note::E.transpose(7), Note::B);
+        assert_eq!(PitchClass::new(4).transpose(7), PitchClass::new(11));
     }
 
     #[test]
     fn wrapping() {
-        assert_eq!(Note::B.transpose(1), Note::C);
+        assert_eq!(PitchClass::new(11).transpose(1), PitchClass::new(0));
+    }
+
+    #[test]
+    fn letter_step_wraps_past_b() {
+        assert_eq!(Letter::D.step(2), Letter::F);
+        assert_eq!(Letter::B.step(1), Letter::C);
+
+        for letter in Letter::ALL {
+            assert_eq!(letter.step(7), letter, "{letter} moved a full octave");
+        }
+    }
+
+    #[test]
+    fn accidental_offsets_round_trip() {
+        for accidental in [
+            Accidental::DoubleFlat,
+            Accidental::Flat,
+            Accidental::Natural,
+            Accidental::Sharp,
+            Accidental::DoubleSharp,
+        ] {
+            assert_eq!(
+                Accidental::from_offset(accidental.offset()),
+                Some(accidental)
+            );
+        }
+
+        // Triple accidentals have no representation, by design.
+        assert_eq!(Accidental::from_offset(3), None);
+        assert_eq!(Accidental::from_offset(-3), None);
+    }
+
+    #[test]
+    fn pitch_class_on_the_enharmonic_edges() {
+        // Where an off-by-one in the fold surfaces first.
+        let cases = [
+            (Letter::B, Accidental::Sharp, 0),
+            (Letter::C, Accidental::Flat, 11),
+            (Letter::F, Accidental::DoubleFlat, 3),
+        ];
+
+        for (letter, accidental, expected) in cases {
+            let note = Note { letter, accidental };
+            assert_eq!(note.pitch_class().semitone(), expected, "{note}");
+        }
+    }
+
+    #[test]
+    fn every_pitch_class_round_trips_through_both_spellings() {
+        for spelling in [Spelling::Sharps, Spelling::Flats] {
+            for pitch_class in PitchClass::ALL {
+                assert_eq!(
+                    spelling.spell(pitch_class).pitch_class(),
+                    pitch_class,
+                    "{spelling:?} lost {pitch_class:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sharps_never_yield_a_flat_and_flats_never_yield_a_sharp() {
+        for pitch_class in PitchClass::ALL {
+            assert_ne!(
+                Spelling::Sharps.spell(pitch_class).accidental,
+                Accidental::Flat
+            );
+            assert_ne!(
+                Spelling::Flats.spell(pitch_class).accidental,
+                Accidental::Sharp
+            );
+        }
+    }
+
+    #[test]
+    fn the_naturals_agree_under_both_spellings() {
+        for pitch_class in PitchClass::ALL {
+            let sharp = Spelling::Sharps.spell(pitch_class);
+            let flat = Spelling::Flats.spell(pitch_class);
+
+            if sharp.accidental == Accidental::Natural {
+                assert_eq!(sharp, flat, "{pitch_class:?} disagrees");
+            }
+        }
+    }
+
+    #[test]
+    fn display_is_ascii_for_the_fretboard_markers() {
+        // What a canvas marker draws — one font, so no SMuFL glyphs here.
+        assert_eq!(
+            Note {
+                letter: Letter::B,
+                accidental: Accidental::Flat
+            }
+            .to_string(),
+            "Bb"
+        );
+        assert_eq!(
+            Note {
+                letter: Letter::F,
+                accidental: Accidental::DoubleSharp
+            }
+            .to_string(),
+            "F##"
+        );
+        assert_eq!(
+            Note {
+                letter: Letter::C,
+                accidental: Accidental::Natural
+            }
+            .to_string(),
+            "C"
+        );
     }
 }

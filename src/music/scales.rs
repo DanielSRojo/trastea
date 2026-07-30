@@ -3,7 +3,7 @@
 // e.g. semitone 1 → "C#" in G major, "Db" in F minor.
 
 use super::intervals::Interval;
-use super::notes::Note;
+use super::notes::PitchClass;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScaleKind {
@@ -28,12 +28,12 @@ pub enum ScaleKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Scale {
-    pub root: Note,
+    pub root: PitchClass,
     pub kind: ScaleKind,
 }
 
 impl Scale {
-    pub fn notes(self) -> Vec<Note> {
+    pub fn notes(self) -> Vec<PitchClass> {
         self.kind
             .intervals()
             .iter()
@@ -370,13 +370,18 @@ mod tests {
             .collect()
     }
 
+    /// A pitch class from its semitone, for the tables below.
+    fn pc(semitone: u8) -> PitchClass {
+        PitchClass::new(semitone)
+    }
+
     /// A scale's pitch classes, sorted, for comparing scales that share notes but
     /// start in different places.
-    fn pitch_classes(root: Note, kind: ScaleKind) -> Vec<u8> {
+    fn pitch_classes(root: PitchClass, kind: ScaleKind) -> Vec<u8> {
         let mut classes: Vec<u8> = Scale { root, kind }
             .notes()
             .iter()
-            .map(|note| note.to_semitone())
+            .map(|pitch_class| pitch_class.semitone())
             .collect();
         classes.sort_unstable();
         classes
@@ -498,21 +503,21 @@ mod tests {
 
     #[test]
     fn notes_are_distinct_and_match_the_interval_count() {
-        for &root in Note::ALL {
+        for root in PitchClass::ALL {
             for &kind in ScaleKind::ALL {
                 let notes = Scale { root, kind }.notes();
 
                 assert_eq!(
                     notes.len(),
                     kind.intervals().len(),
-                    "{root} {} lost a note",
+                    "{root:?} {} lost a note",
                     kind.name()
                 );
 
                 for (i, note) in notes.iter().enumerate() {
                     assert!(
                         !notes[..i].contains(note),
-                        "{root} {} repeats {note}",
+                        "{root:?} {} repeats {note:?}",
                         kind.name()
                     );
                 }
@@ -521,100 +526,32 @@ mod tests {
     }
 
     #[test]
-    fn reference_scales_have_the_textbook_notes() {
-        // Ordered from the root and wrapping past B, not sorted by pitch: A Aeolian
-        // ends on G rather than starting on C.
-        let cases: &[(Note, ScaleKind, &[Note])] = &[
-            (
-                Note::C,
-                ScaleKind::Ionian,
-                &[
-                    Note::C,
-                    Note::D,
-                    Note::E,
-                    Note::F,
-                    Note::G,
-                    Note::A,
-                    Note::B,
-                ],
-            ),
-            (
-                Note::G,
-                ScaleKind::Ionian,
-                &[
-                    Note::G,
-                    Note::A,
-                    Note::B,
-                    Note::C,
-                    Note::D,
-                    Note::E,
-                    Note::Fs,
-                ],
-            ),
-            (
-                Note::A,
-                ScaleKind::Aeolian,
-                &[
-                    Note::A,
-                    Note::B,
-                    Note::C,
-                    Note::D,
-                    Note::E,
-                    Note::F,
-                    Note::G,
-                ],
-            ),
-            (
-                Note::E,
-                ScaleKind::Phrygian,
-                &[
-                    Note::E,
-                    Note::F,
-                    Note::G,
-                    Note::A,
-                    Note::B,
-                    Note::C,
-                    Note::D,
-                ],
-            ),
-            (
-                Note::C,
-                ScaleKind::HarmonicMinor,
-                &[
-                    Note::C,
-                    Note::D,
-                    Note::Ds,
-                    Note::F,
-                    Note::G,
-                    Note::Gs,
-                    Note::B,
-                ],
-            ),
-            (
-                Note::A,
-                ScaleKind::MinorPentatonic,
-                &[Note::A, Note::C, Note::D, Note::E, Note::G],
-            ),
-            (
-                // The ♭5 between D and E is the blue note.
-                Note::A,
-                ScaleKind::Blues,
-                &[Note::A, Note::C, Note::D, Note::Ds, Note::E, Note::G],
-            ),
-            (
-                Note::C,
-                ScaleKind::WholeTone,
-                &[Note::C, Note::D, Note::E, Note::Fs, Note::Gs, Note::As],
-            ),
+    fn reference_scales_have_the_textbook_pitch_classes() {
+        // Ordered from the root and wrapping past 11, not sorted: A Aeolian ends
+        // on 7 rather than starting at 0.
+        let cases: &[(u8, ScaleKind, &[u8])] = &[
+            (0, ScaleKind::Ionian, &[0, 2, 4, 5, 7, 9, 11]),
+            (7, ScaleKind::Ionian, &[7, 9, 11, 0, 2, 4, 6]),
+            (9, ScaleKind::Aeolian, &[9, 11, 0, 2, 4, 5, 7]),
+            (4, ScaleKind::Phrygian, &[4, 5, 7, 9, 11, 0, 2]),
+            (0, ScaleKind::HarmonicMinor, &[0, 2, 3, 5, 7, 8, 11]),
+            (9, ScaleKind::MinorPentatonic, &[9, 0, 2, 4, 7]),
+            // The ♭5 between D and E is the blue note.
+            (9, ScaleKind::Blues, &[9, 0, 2, 3, 4, 7]),
+            (0, ScaleKind::WholeTone, &[0, 2, 4, 6, 8, 10]),
         ];
 
         for &(root, kind, expected) in cases {
-            assert_eq!(
-                Scale { root, kind }.notes(),
-                expected,
-                "{root} {}",
-                kind.name()
-            );
+            let actual: Vec<u8> = Scale {
+                root: pc(root),
+                kind,
+            }
+            .notes()
+            .iter()
+            .map(|pitch_class| pitch_class.semitone())
+            .collect();
+
+            assert_eq!(actual, expected, "{root} {}", kind.name());
         }
     }
 
@@ -622,19 +559,19 @@ mod tests {
     fn the_seven_diatonic_modes_share_one_pitch_class_set() {
         // Each mode rooted on its own degree of C major must yield exactly C major's
         // notes. One wrong interval anywhere in the seven breaks this.
-        let c_major = pitch_classes(Note::C, ScaleKind::Ionian);
+        let c_major = pitch_classes(pc(0), ScaleKind::Ionian);
 
         for (root, kind) in [
-            (Note::C, ScaleKind::Ionian),
-            (Note::D, ScaleKind::Dorian),
-            (Note::E, ScaleKind::Phrygian),
-            (Note::F, ScaleKind::Lydian),
-            (Note::G, ScaleKind::Mixolydian),
-            (Note::A, ScaleKind::Aeolian),
-            (Note::B, ScaleKind::Locrian),
+            (0, ScaleKind::Ionian),
+            (2, ScaleKind::Dorian),
+            (4, ScaleKind::Phrygian),
+            (5, ScaleKind::Lydian),
+            (7, ScaleKind::Mixolydian),
+            (9, ScaleKind::Aeolian),
+            (11, ScaleKind::Locrian),
         ] {
             assert_eq!(
-                pitch_classes(root, kind),
+                pitch_classes(pc(root), kind),
                 c_major,
                 "{root} {} is not a mode of C major",
                 kind.name()
@@ -645,12 +582,12 @@ mod tests {
     #[test]
     fn a_relative_minor_shares_its_majors_notes() {
         assert_eq!(
-            pitch_classes(Note::A, ScaleKind::Aeolian),
-            pitch_classes(Note::C, ScaleKind::Ionian)
+            pitch_classes(pc(9), ScaleKind::Aeolian),
+            pitch_classes(pc(0), ScaleKind::Ionian)
         );
         assert_eq!(
-            pitch_classes(Note::E, ScaleKind::Aeolian),
-            pitch_classes(Note::G, ScaleKind::Ionian)
+            pitch_classes(pc(4), ScaleKind::Aeolian),
+            pitch_classes(pc(7), ScaleKind::Ionian)
         );
     }
 
@@ -659,28 +596,12 @@ mod tests {
         // Whole tone maps onto itself a whole step up, and the diminished scale a
         // minor third up. Getting one of their steps wrong breaks the symmetry.
         assert_eq!(
-            pitch_classes(Note::C, ScaleKind::WholeTone),
-            pitch_classes(Note::D, ScaleKind::WholeTone)
+            pitch_classes(pc(0), ScaleKind::WholeTone),
+            pitch_classes(pc(2), ScaleKind::WholeTone)
         );
         assert_eq!(
-            pitch_classes(Note::C, ScaleKind::Diminished),
-            pitch_classes(Note::Ds, ScaleKind::Diminished)
+            pitch_classes(pc(0), ScaleKind::Diminished),
+            pitch_classes(pc(3), ScaleKind::Diminished)
         );
-    }
-
-    #[test]
-    fn scales_are_currently_spelled_with_sharps_only() {
-        // F Ionian is F G A B♭ C D E, but Note holds no flats, so the fourth degree
-        // comes out as A♯ — the right pitch under the wrong name. This is the spell
-        // TODO at the top of the module; when spelling lands this expectation should
-        // be rewritten rather than deleted.
-        let f_major = Scale {
-            root: Note::F,
-            kind: ScaleKind::Ionian,
-        }
-        .notes();
-
-        assert_eq!(f_major[3], Note::As);
-        assert!(!f_major.iter().any(|note| note.to_string().contains('b')));
     }
 }

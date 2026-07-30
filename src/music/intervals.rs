@@ -1,4 +1,4 @@
-use super::notes::Note;
+use super::notes::PitchClass;
 use std::fmt;
 
 #[derive(PartialEq, Debug, Clone, Copy, Eq, Hash)]
@@ -37,8 +37,8 @@ impl fmt::Display for Interval {
 }
 
 impl Interval {
-    pub fn between(from: Note, to: Note) -> Interval {
-        let d = (to.to_semitone() + 12 - from.to_semitone()) % 12;
+    pub fn between(from: PitchClass, to: PitchClass) -> Interval {
+        let d = (to.semitone() + 12 - from.semitone()) % 12;
         Interval::from_semitone(d)
     }
 
@@ -92,10 +92,12 @@ mod tests {
 
     #[test]
     fn between_test() {
-        assert_eq!(Interval::Unison, Interval::between(Note::C, Note::C));
-        assert_eq!(Interval::MajorSecond, Interval::between(Note::C, Note::D));
-        assert_eq!(Interval::MinorSeventh, Interval::between(Note::D, Note::C));
-        assert_eq!(Interval::MajorSeventh, Interval::between(Note::Cs, Note::C));
+        let (c, cs, d) = (PitchClass::new(0), PitchClass::new(1), PitchClass::new(2));
+
+        assert_eq!(Interval::Unison, Interval::between(c, c));
+        assert_eq!(Interval::MajorSecond, Interval::between(c, d));
+        assert_eq!(Interval::MinorSeventh, Interval::between(d, c));
+        assert_eq!(Interval::MajorSeventh, Interval::between(cs, c));
     }
 
     #[test]
