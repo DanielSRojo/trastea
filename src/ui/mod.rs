@@ -805,15 +805,28 @@ fn accidental_glyph(accidental: Accidental) -> Option<char> {
     }
 }
 
+/// The glyph (if any) and the degree digit that together label one interval in
+/// the formula card — e.g. Blues's ♭5 is `(Some(SMUFL_FLAT), 5)`.
+///
+/// Split out as a pure decision rather than a rendered `String` because the two
+/// parts render in different fonts — the glyph in `MUSIC_FONT`, the digit in the
+/// body font — so `intervalic_text` still needs two separate `text` widgets per
+/// token; this is what lets that per-part font split be tested without building
+/// an iced widget tree.
+fn interval_token(interval: Interval) -> (Option<char>, u8) {
+    (accidental_glyph(interval.alteration()), interval.number())
+}
+
 fn intervalic_text(intervals: &'static [Interval]) -> iced::widget::Row<'static, Message> {
     use iced::widget::{row, text};
 
     intervals
         .iter()
         .fold(row![].spacing(8), |tokens, interval| {
+            let (glyph, digit) = interval_token(*interval);
             let mut token = row![].spacing(0);
 
-            if let Some(glyph) = accidental_glyph(interval.alteration()) {
+            if let Some(glyph) = glyph {
                 token = token.push(
                     text(glyph.to_string())
                         .size(24)
@@ -822,7 +835,7 @@ fn intervalic_text(intervals: &'static [Interval]) -> iced::widget::Row<'static,
                 );
             }
 
-            tokens.push(token.push(text(interval.number().to_string()).size(24).color(BODY)))
+            tokens.push(token.push(text(digit.to_string()).size(24).color(BODY)))
         })
 }
 
