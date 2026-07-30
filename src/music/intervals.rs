@@ -1,5 +1,4 @@
-use super::notes::PitchClass;
-use std::fmt;
+use super::notes::{Accidental, Letter, Note};
 
 #[derive(PartialEq, Debug, Clone, Copy, Eq, Hash)]
 pub enum Interval {
@@ -10,6 +9,7 @@ pub enum Interval {
     MajorThird,
     PerfectFourth,
     AugmentedFourth,
+    DiminishedFifth,
     PerfectFifth,
     MinorSixth,
     MajorSixth,
@@ -17,72 +17,100 @@ pub enum Interval {
     MajorSeventh,
 }
 
-impl fmt::Display for Interval {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Interval::Unison => write!(f, "r"),
-            Interval::MinorSecond => write!(f, "b2"),
-            Interval::MajorSecond => write!(f, "2"),
-            Interval::MinorThird => write!(f, "b3"),
-            Interval::MajorThird => write!(f, "3"),
-            Interval::PerfectFourth => write!(f, "4"),
-            Interval::AugmentedFourth => write!(f, "#4"),
-            Interval::PerfectFifth => write!(f, "5"),
-            Interval::MinorSixth => write!(f, "b6"),
-            Interval::MajorSixth => write!(f, "6"),
-            Interval::MinorSeventh => write!(f, "b7"),
-            Interval::MajorSeventh => write!(f, "7"),
-        }
-    }
-}
-
 impl Interval {
-    pub fn between(from: PitchClass, to: PitchClass) -> Interval {
-        let d = (to.semitone() + 12 - from.semitone()) % 12;
-        Interval::from_semitone(d)
-    }
+    /// A slice with a tripwire test, unlike `PitchClass::ALL`: this set does
+    /// grow. Thirteen is what the sixteen scale kinds need — no augmented second,
+    /// no diminished seventh. Add one when a scale wants it, and the compiler
+    /// will point at every `match` that needs a new arm.
+    pub const ALL: &'static [Interval] = &[
+        Interval::Unison,
+        Interval::MinorSecond,
+        Interval::MajorSecond,
+        Interval::MinorThird,
+        Interval::MajorThird,
+        Interval::PerfectFourth,
+        Interval::AugmentedFourth,
+        Interval::DiminishedFifth,
+        Interval::PerfectFifth,
+        Interval::MinorSixth,
+        Interval::MajorSixth,
+        Interval::MinorSeventh,
+        Interval::MajorSeventh,
+    ];
 
-    pub fn invert(self) -> Interval {
-        Interval::from_semitone(12 - self.to_semitone())
-    }
-
-    pub fn add(self, other: Interval) -> Interval {
-        Interval::from_semitone((self.to_semitone() + other.to_semitone()) % 12)
-    }
-
-    pub fn to_semitone(self) -> u8 {
+    /// Which degree, 1..=7. This is what decides the letter.
+    pub fn number(self) -> u8 {
         match self {
-            Interval::Unison => 0,
-            Interval::MinorSecond => 1,
-            Interval::MajorSecond => 2,
-            Interval::MinorThird => 3,
-            Interval::MajorThird => 4,
-            Interval::PerfectFourth => 5,
-            Interval::AugmentedFourth => 6,
-            Interval::PerfectFifth => 7,
-            Interval::MinorSixth => 8,
-            Interval::MajorSixth => 9,
-            Interval::MinorSeventh => 10,
-            Interval::MajorSeventh => 11,
+            Interval::Unison => 1,
+            Interval::MinorSecond | Interval::MajorSecond => 2,
+            Interval::MinorThird | Interval::MajorThird => 3,
+            Interval::PerfectFourth | Interval::AugmentedFourth => 4,
+            Interval::DiminishedFifth | Interval::PerfectFifth => 5,
+            Interval::MinorSixth | Interval::MajorSixth => 6,
+            Interval::MinorSeventh | Interval::MajorSeventh => 7,
         }
     }
 
-    pub fn from_semitone(d: u8) -> Interval {
-        match d % 12 {
-            0 => Interval::Unison,
-            1 => Interval::MinorSecond,
-            2 => Interval::MajorSecond,
-            3 => Interval::MinorThird,
-            4 => Interval::MajorThird,
-            5 => Interval::PerfectFourth,
-            6 => Interval::AugmentedFourth,
-            7 => Interval::PerfectFifth,
-            8 => Interval::MinorSixth,
-            9 => Interval::MajorSixth,
-            10 => Interval::MinorSeventh,
-            11 => Interval::MajorSeventh,
-            _ => unreachable!("d % 12 cannot be anything other than 0..11"),
+    /// How this degree differs from the major scale's. This decides the glyph.
+    pub fn alteration(self) -> Accidental {
+        match self {
+            Interval::Unison
+            | Interval::MajorSecond
+            | Interval::MajorThird
+            | Interval::PerfectFourth
+            | Interval::PerfectFifth
+            | Interval::MajorSixth
+            | Interval::MajorSeventh => Accidental::Natural,
+            Interval::MinorSecond
+            | Interval::MinorThird
+            | Interval::DiminishedFifth
+            | Interval::MinorSixth
+            | Interval::MinorSeventh => Accidental::Flat,
+            Interval::AugmentedFourth => Accidental::Sharp,
         }
+    }
+
+    /// Derived from the degree's letter rather than a second hand-written table:
+    /// degree 4 is the letter F, F natural is 5 semitones up, so a perfect
+    /// fourth is 5 and an augmented fourth is 6.
+    pub fn semitones(self) -> u8 {
+        let natural = i16::from(Letter::C.step(self.number() - 1).natural_semitone());
+        let altered = natural + i16::from(self.alteration().offset());
+
+        u8::try_from(altered).expect("no degree's alteration reaches below the root")
+    }
+
+    /// The interval from one written note up to another.
+    ///
+    /// `Option` because two spelled notes can sit a doubly augmented distance
+    /// apart that is not among the thirteen — `F♭` to `B♯` — and saying
+    /// "genuinely partial" beats picking a wrong answer. The letters are what
+    /// resolve `F`→`B` as an augmented fourth and `F`→`B♭` as a perfect fourth.
+    ///
+    /// Nothing in the app calls this yet — the interval trainer is still a
+    /// placeholder. It is kept because it is the one function whose meaning gets
+    /// sharper under spelling, and `expect` rather than `allow` so that the day a
+    /// caller appears, the stale attribute is a compile error rather than a
+    /// silent leftover.
+    ///
+    /// `cfg_attr(not(test), ...)`, not a bare `#[expect]`, because this module's
+    /// own tests call `between` directly: under a test build the function is no
+    /// longer dead, and a bare `#[expect(dead_code)]` would itself warn as
+    /// unfulfilled. Gating on `not(test)` keeps the tripwire pointed at the one
+    /// build — the real binary — where "no caller yet" is actually true.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the interval trainer screen will call this")
+    )]
+    pub fn between(from: Note, to: Note) -> Option<Interval> {
+        let steps = (to.letter as u8 + 7 - from.letter as u8) % 7;
+        let number = steps + 1;
+        let semitones = (to.pitch_class().semitone() + 12 - from.pitch_class().semitone()) % 12;
+
+        Interval::ALL
+            .iter()
+            .copied()
+            .find(|interval| interval.number() == number && interval.semitones() == semitones)
     }
 }
 
@@ -90,33 +118,99 @@ impl Interval {
 mod tests {
     use super::*;
 
+    fn note(letter: Letter, accidental: Accidental) -> Note {
+        Note { letter, accidental }
+    }
+
+    #[test]
+    fn all_lists_every_variant() {
+        // The same tripwire ScaleKind::ALL carries: the tests below iterate ALL,
+        // so a variant added to the enum and not to the list is silently skipped.
+        assert_eq!(Interval::ALL.len(), 13);
+    }
+
+    #[test]
+    fn semitones_matches_the_written_out_distances() {
+        // semitones() derives these from Letter; this table is the independent
+        // statement of what they must come to.
+        let expected: &[(Interval, u8)] = &[
+            (Interval::Unison, 0),
+            (Interval::MinorSecond, 1),
+            (Interval::MajorSecond, 2),
+            (Interval::MinorThird, 3),
+            (Interval::MajorThird, 4),
+            (Interval::PerfectFourth, 5),
+            (Interval::AugmentedFourth, 6),
+            (Interval::DiminishedFifth, 6),
+            (Interval::PerfectFifth, 7),
+            (Interval::MinorSixth, 8),
+            (Interval::MajorSixth, 9),
+            (Interval::MinorSeventh, 10),
+            (Interval::MajorSeventh, 11),
+        ];
+
+        assert_eq!(expected.len(), Interval::ALL.len(), "a variant is unlisted");
+
+        for &(interval, semitones) in expected {
+            assert_eq!(interval.semitones(), semitones, "{interval:?}");
+        }
+    }
+
+    #[test]
+    fn no_two_variants_share_a_number_and_an_alteration() {
+        // What makes between's lookup well-defined.
+        for (i, &interval) in Interval::ALL.iter().enumerate() {
+            for &other in &Interval::ALL[i + 1..] {
+                assert_ne!(
+                    (interval.number(), interval.alteration()),
+                    (other.number(), other.alteration()),
+                    "{interval:?} and {other:?} are indistinguishable"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_two_tritones_differ_by_degree() {
+        // Replaces scales.rs's one_interval_variant_spells_two_different_degrees,
+        // which documented the conflation. This asserts the split.
+        assert_eq!(
+            Interval::AugmentedFourth.semitones(),
+            Interval::DiminishedFifth.semitones()
+        );
+
+        assert_eq!(Interval::AugmentedFourth.number(), 4);
+        assert_eq!(Interval::DiminishedFifth.number(), 5);
+        assert_eq!(Interval::AugmentedFourth.alteration(), Accidental::Sharp);
+        assert_eq!(Interval::DiminishedFifth.alteration(), Accidental::Flat);
+    }
+
+    #[test]
+    fn between_reads_letters_not_just_distances() {
+        let f = note(Letter::F, Accidental::Natural);
+        let b = note(Letter::B, Accidental::Natural);
+        let b_flat = note(Letter::B, Accidental::Flat);
+
+        assert_eq!(Interval::between(f, b), Some(Interval::AugmentedFourth));
+        assert_eq!(Interval::between(f, b_flat), Some(Interval::PerfectFourth));
+    }
+
+    #[test]
+    fn between_is_none_beyond_the_thirteen() {
+        // A doubly augmented fourth is a real distance and not one of ours.
+        let f_flat = note(Letter::F, Accidental::Flat);
+        let b_sharp = note(Letter::B, Accidental::Sharp);
+
+        assert_eq!(Interval::between(f_flat, b_sharp), None);
+    }
+
     #[test]
     fn between_test() {
-        let (c, cs, d) = (PitchClass::new(0), PitchClass::new(1), PitchClass::new(2));
+        let c = note(Letter::C, Accidental::Natural);
+        let d = note(Letter::D, Accidental::Natural);
 
-        assert_eq!(Interval::Unison, Interval::between(c, c));
-        assert_eq!(Interval::MajorSecond, Interval::between(c, d));
-        assert_eq!(Interval::MinorSeventh, Interval::between(d, c));
-        assert_eq!(Interval::MajorSeventh, Interval::between(cs, c));
-    }
-
-    #[test]
-    fn invert_test() {
-        assert_eq!(Interval::Unison.invert(), Interval::Unison);
-        assert_eq!(Interval::MajorThird.invert(), Interval::MinorSixth);
-        assert_eq!(Interval::MajorSeventh.invert(), Interval::MinorSecond);
-        assert_eq!(Interval::MinorSixth.invert(), Interval::MajorThird);
-    }
-
-    #[test]
-    fn add_test() {
-        assert_eq!(
-            Interval::MajorSecond.add(Interval::MajorSecond),
-            Interval::MajorThird
-        );
-        assert_eq!(
-            Interval::MajorSeventh.add(Interval::MajorSeventh),
-            Interval::MinorSeventh
-        );
+        assert_eq!(Interval::between(c, c), Some(Interval::Unison));
+        assert_eq!(Interval::between(c, d), Some(Interval::MajorSecond));
+        assert_eq!(Interval::between(d, c), Some(Interval::MinorSeventh));
     }
 }

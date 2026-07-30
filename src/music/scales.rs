@@ -37,7 +37,7 @@ impl Scale {
         self.kind
             .intervals()
             .iter()
-            .map(|interval| self.root.transpose(interval.to_semitone()))
+            .map(|interval| self.root.transpose(interval.semitones()))
             .collect()
     }
 }
@@ -270,7 +270,7 @@ impl ScaleKind {
                 Interval::MinorSecond,
                 Interval::MinorThird,
                 Interval::PerfectFourth,
-                Interval::AugmentedFourth,
+                Interval::DiminishedFifth,
                 Interval::MinorSixth,
                 Interval::MinorSeventh,
             ],
@@ -310,7 +310,7 @@ impl ScaleKind {
                 Interval::Unison,
                 Interval::MinorThird,
                 Interval::PerfectFourth,
-                Interval::AugmentedFourth,
+                Interval::DiminishedFifth,
                 Interval::PerfectFifth,
                 Interval::MinorSeventh,
             ],
@@ -346,7 +346,7 @@ impl ScaleKind {
                 Interval::MinorSecond,
                 Interval::MinorThird,
                 Interval::MajorThird,
-                Interval::AugmentedFourth,
+                Interval::DiminishedFifth,
                 Interval::PerfectFifth,
                 Interval::MajorSixth,
                 Interval::MinorSeventh,
@@ -366,7 +366,7 @@ mod tests {
     fn semitones(kind: ScaleKind) -> Vec<u8> {
         kind.intervals()
             .iter()
-            .map(|interval| interval.to_semitone())
+            .map(|interval| interval.semitones())
             .collect()
     }
 
@@ -488,17 +488,39 @@ mod tests {
     }
 
     #[test]
-    fn one_interval_variant_spells_two_different_degrees() {
-        // AugmentedFourth is a pitch-class distance, so Lydian's ♯4 and Locrian's ♭5
-        // are the very same value. That is why intervalic() is hand-written instead
-        // of rendered from intervals(), and why the test above compares semitones
-        // rather than text. It should stop holding once Interval carries a spelling.
-        for kind in [ScaleKind::Lydian, ScaleKind::Locrian] {
-            assert!(kind.intervals().contains(&Interval::AugmentedFourth));
+    fn the_tritone_kinds_use_the_degree_they_are_written_with() {
+        // ♯4 and ♭5 are the same distance, so putting one where the other belongs
+        // is invisible to every other test here: the formula check compares
+        // semitones, and the spelling only diverges once a scale is spelled from a
+        // root. Lydian's ♯4 really is a sharpened fourth; Locrian's ♭5 really is a
+        // flattened fifth. This is the assertion that keeps them apart.
+        for kind in [ScaleKind::Lydian, ScaleKind::WholeTone] {
+            let intervals = kind.intervals();
+            assert!(
+                intervals.contains(&Interval::AugmentedFourth),
+                "{} is written with a ♯4",
+                kind.name()
+            );
+            assert!(
+                !intervals.contains(&Interval::DiminishedFifth),
+                "{} has no ♭5",
+                kind.name()
+            );
         }
 
-        assert!(ScaleKind::Lydian.intervalic().contains(SMUFL_SHARP));
-        assert!(ScaleKind::Locrian.intervalic().contains(SMUFL_FLAT));
+        for kind in [ScaleKind::Locrian, ScaleKind::Blues, ScaleKind::Diminished] {
+            let intervals = kind.intervals();
+            assert!(
+                intervals.contains(&Interval::DiminishedFifth),
+                "{} is written with a ♭5",
+                kind.name()
+            );
+            assert!(
+                !intervals.contains(&Interval::AugmentedFourth),
+                "{} has no ♯4",
+                kind.name()
+            );
+        }
     }
 
     #[test]
