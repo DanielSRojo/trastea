@@ -452,7 +452,7 @@ fn step_focus(list: &[FocusTarget], current: FocusTarget, delta: isize) -> Focus
 
 fn translate_key(key: keyboard::Key, modifiers: keyboard::Modifiers) -> Option<Message> {
     match key.as_ref() {
-        keyboard::Key::Named(Named::Escape) => Some(Message::GoBack),
+        keyboard::Key::Named(Named::Escape | Named::Backspace) => Some(Message::GoBack),
         keyboard::Key::Named(Named::Tab) if modifiers.shift() => Some(Message::FocusPrevious),
         keyboard::Key::Named(Named::Tab) => Some(Message::FocusNext),
         keyboard::Key::Named(Named::Enter) => Some(Message::ActivateFocused),
