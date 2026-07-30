@@ -77,6 +77,11 @@ pub enum Message {
     SelectScaleKind(ScaleKind),
     ToggleSpelling,
     RerollScale,
+    /// A character key that may be an accelerator on the current screen.
+    ///
+    /// Carries the character rather than an action because `translate_key` has no screen
+    /// to look it up against; `update` resolves it, and ignores the ones nothing claims.
+    Accelerate(char),
     FocusNext,
     FocusPrevious,
     FocusUp,
@@ -148,6 +153,7 @@ impl App {
             }
             Message::ToggleSpelling => self.toggle_spelling(),
             Message::RerollScale => self.reroll_scale(),
+            Message::Accelerate(c) => self.accelerate(c),
             Message::FocusNext => self.cycle_focus(1),
             Message::FocusPrevious => self.cycle_focus(-1),
             Message::FocusUp => self.move_focus(Direction::Up),
@@ -224,6 +230,20 @@ impl App {
 
     fn activate_focused(&mut self) {
         self.activate(self.focused);
+    }
+
+    /// Fires the accelerator `c` names on the current screen, if it names one.
+    ///
+    /// A miss is silent: `translate_key` forwards every character it does not recognise as
+    /// a motion, so most of what arrives here is nothing at all.
+    fn accelerate(&mut self, c: char) {
+        let target = accelerators(&self.screen)
+            .into_iter()
+            .find_map(|(key, target, _)| (key == c).then_some(target));
+
+        if let Some(target) = target {
+            self.activate(target);
+        }
     }
 
     /// Performs `target`'s action. Focus is left alone: an accelerator fires a widget
@@ -478,9 +498,27 @@ fn translate_key(key: keyboard::Key, modifiers: keyboard::Modifiers) -> Option<M
         keyboard::Key::Named(Named::ArrowDown) => Some(Message::FocusDown),
         keyboard::Key::Named(Named::ArrowLeft) => Some(Message::FocusLeft),
         keyboard::Key::Named(Named::ArrowRight) => Some(Message::FocusRight),
-        keyboard::Key::Character(c) if !modifiers.intersects(COMMAND_MODIFIERS) => vim_motion(c),
+        keyboard::Key::Character(c) if !modifiers.intersects(COMMAND_MODIFIERS) => character_key(c),
         _ => None,
     }
+}
+
+/// Maps an unmodified character key onto a message.
+///
+/// Motions win over accelerators, so `h` can never be claimed as one. Everything else that
+/// is a single character is forwarded for the active screen to resolve — this function
+/// cannot tell whether a character is bound, because binding is per-screen and it has no
+/// screen. Multi-character payloads (dead keys, IME output) are not accelerator material
+/// and stop here.
+fn character_key(c: &str) -> Option<Message> {
+    if let Some(motion) = vim_motion(c) {
+        return Some(motion);
+    }
+
+    let mut chars = c.chars();
+    let first = chars.next()?;
+
+    chars.next().is_none().then_some(Message::Accelerate(first))
 }
 
 /// Maps the vim motion keys onto the same focus moves the arrow keys make.
@@ -491,6 +529,21 @@ fn vim_motion(c: &str) -> Option<Message> {
         "k" => Some(Message::FocusUp),
         "l" => Some(Message::FocusRight),
         _ => None,
+    }
+}
+
+/// A key that fires a widget's action directly, skipping the walk to it.
+///
+/// The label is what the help overlay shows, so a new accelerator documents itself.
+type Accelerator = (char, FocusTarget, &'static str);
+
+/// The accelerators a screen claims. A key absent here is inert on that screen, which is
+/// what keeps `r` from rerolling an invisible scale from the Home menu.
+fn accelerators(screen: &Screen) -> Vec<Accelerator> {
+    match screen {
+        Screen::Home => Vec::new(),
+        Screen::ScaleTrainer => vec![('r', FocusTarget::RerollScale, "new scale")],
+        Screen::NoteTrainer | Screen::IntervalTrainer => Vec::new(),
     }
 }
 
@@ -1439,17 +1492,234 @@ mod tests {
         }
     }
 
+    /// Every screen, so a new one cannot quietly escape the checks that sweep them all.
+    fn every_screen() -> [Screen; 4] {
+        [
+            Screen::Home,
+            Screen::ScaleTrainer,
+            Screen::NoteTrainer,
+            Screen::IntervalTrainer,
+        ]
+    }
+
+    /// The state a keypress could disturb.
+    ///
+    /// `translate_key` no longer answers "is this key bound?" — it forwards every
+    /// unrecognised character for the screen to resolve — so the absence of a binding is
+    /// only observable here, as the absence of a change.
+    fn snapshot(app: &App) -> (Screen, FocusTarget, PitchClass, ScaleKind, Spelling, usize) {
+        (
+            app.screen.clone(),
+            app.focused,
+            app.scale.root,
+            app.scale.kind,
+            app.scale.spelling,
+            app.history.len(),
+        )
+    }
+
+    /// Presses a character key and lets the app act on whatever it translates to.
+    fn press_into(app: &mut App, c: &str, modifiers: keyboard::Modifiers) {
+        if let Some(message) = press(c, modifiers) {
+            let _ = app.update(message);
+        }
+    }
+
     /// Shift+h delivers the capital, not the lowercase letter with a flag set. An earlier
     /// version of this test pressed `"h"` with SHIFT — which no keyboard produces — and
     /// passed only because the guard rejected every modifier, Shift included.
     #[test]
-    fn capital_vim_letters_are_unbound() {
-        assert!(press("H", keyboard::Modifiers::SHIFT).is_none());
+    fn capital_letters_are_unbound() {
+        for screen in every_screen() {
+            let mut app = app_with_seed(0xca9);
+            app.navigate_to(screen);
+
+            let before = snapshot(&app);
+            press_into(&mut app, "H", keyboard::Modifiers::SHIFT);
+            press_into(&mut app, "R", keyboard::Modifiers::SHIFT);
+
+            assert_eq!(snapshot(&app), before, "{:?}", app.screen);
+        }
     }
 
     #[test]
-    fn unbound_letters_are_ignored() {
-        assert!(press("x", keyboard::Modifiers::empty()).is_none());
+    fn unbound_letters_change_nothing() {
+        for screen in every_screen() {
+            let mut app = app_with_seed(0x0b0);
+            app.navigate_to(screen);
+
+            let before = snapshot(&app);
+            press_into(&mut app, "x", keyboard::Modifiers::empty());
+
+            assert_eq!(snapshot(&app), before, "{:?}", app.screen);
+        }
+    }
+
+    #[test]
+    fn command_modifiers_suppress_character_keys() {
+        for modifiers in [
+            keyboard::Modifiers::LOGO,
+            keyboard::Modifiers::CTRL,
+            keyboard::Modifiers::ALT,
+        ] {
+            assert!(press("r", modifiers).is_none(), "{modifiers:?}+r");
+        }
+    }
+
+    #[test]
+    fn r_rerolls_the_scale_from_the_scale_trainer() {
+        let mut app = app_with_seed(0x5eed);
+        app.navigate_to(Screen::ScaleTrainer);
+
+        for _ in 0..50 {
+            let before = (app.scale.root, app.scale.kind);
+            press_into(&mut app, "r", keyboard::Modifiers::empty());
+            assert_ne!((app.scale.root, app.scale.kind), before);
+        }
+    }
+
+    #[test]
+    fn r_is_inert_on_screens_that_do_not_claim_it() {
+        for screen in every_screen() {
+            if screen == Screen::ScaleTrainer {
+                continue;
+            }
+
+            let mut app = app_with_seed(0xdead);
+            app.navigate_to(screen);
+
+            let before = snapshot(&app);
+            press_into(&mut app, "r", keyboard::Modifiers::empty());
+
+            assert_eq!(snapshot(&app), before, "{:?} claimed r", app.screen);
+        }
+    }
+
+    /// stays on the screen must leave focus exactly where the user left it.
+    #[test]
+    fn an_in_screen_accelerator_leaves_focus_alone() {
+        let mut app = app_with_seed(0xf0c05);
+        app.navigate_to(Screen::ScaleTrainer);
+        app.focused = FocusTarget::ScaleKind(2);
+
+        press_into(&mut app, "r", keyboard::Modifiers::empty());
+
+        assert_eq!(app.focused, FocusTarget::ScaleKind(2));
+    }
+
+    /// Guards the promise that scoping is structural: an accelerator can only name a widget
+    /// the screen actually has, so reshaping a focus grid cannot strand one.
+    #[test]
+    fn every_accelerator_targets_a_widget_on_its_screen() {
+        for screen in every_screen() {
+            let reachable = focusables(&screen);
+
+            for (key, target, label) in accelerators(&screen) {
+                assert!(
+                    reachable.contains(&target),
+                    "{screen:?} binds {key:?} ({label}) to {target:?}, which is not on it"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_screen_binds_the_same_accelerator_twice() {
+        for screen in every_screen() {
+            let mut keys: Vec<char> = accelerators(&screen).iter().map(|(k, _, _)| *k).collect();
+            let count = keys.len();
+            keys.sort_unstable();
+            keys.dedup();
+
+            assert_eq!(keys.len(), count, "{screen:?} binds a key twice");
+        }
+    }
+
+    /// Pressing a named key and letting the app act on it, for the keys `press` cannot
+    /// build because they produce no character.
+    fn press_named(app: &mut App, named: Named) {
+        if let Some(message) =
+            translate_key(keyboard::Key::Named(named), keyboard::Modifiers::empty())
+        {
+            let _ = app.update(message);
+        }
+    }
+
+    #[test]
+    fn escape_and_backspace_both_go_back() {
+        for named in [Named::Escape, Named::Backspace] {
+            let mut app = app_with_seed(0xbac1);
+            app.navigate_to(Screen::ScaleTrainer);
+
+            press_named(&mut app, named);
+
+            assert_eq!(app.screen, Screen::Home, "{named:?} did not go back");
+        }
+    }
+
+    #[test]
+    fn going_back_from_the_root_screen_does_nothing() {
+        for named in [Named::Escape, Named::Backspace] {
+            let mut app = app_with_seed(0x1007);
+            let before = snapshot(&app);
+
+            press_named(&mut app, named);
+
+            assert_eq!(
+                snapshot(&app),
+                before,
+                "{named:?} disturbed the root screen"
+            );
+        }
+    }
+
+    #[test]
+    fn enter_and_space_activate_the_focused_widget() {
+        for named in [Named::Enter, Named::Space] {
+            let mut app = app_with_seed(0xac71);
+            app.focused = FocusTarget::HomeMenuItem(1);
+
+            press_named(&mut app, named);
+
+            assert_eq!(
+                app.screen,
+                Screen::NoteTrainer,
+                "{named:?} did not activate the focused menu item"
+            );
+        }
+    }
+
+    /// Named keys that carry no character and claim no binding must translate to nothing,
+    /// rather than falling through to the accelerator path.
+    #[test]
+    fn unbound_named_keys_produce_no_message() {
+        for named in [Named::F1, Named::Home, Named::PageDown, Named::Insert] {
+            assert!(
+                translate_key(keyboard::Key::Named(named), keyboard::Modifiers::empty()).is_none(),
+                "{named:?} is bound"
+            );
+        }
+    }
+
+    /// Key translation reads no application state, so the same press must mean the same
+    /// thing everywhere — screen scoping happens after this point, not inside it.
+    #[test]
+    fn translation_does_not_vary_by_state() {
+        let pressed = press("r", keyboard::Modifiers::empty());
+
+        assert!(matches!(pressed, Some(Message::Accelerate('r'))));
+
+        for screen in every_screen() {
+            let mut app = app_with_seed(0x57a7e);
+            app.navigate_to(screen);
+
+            assert_eq!(
+                format!("{:?}", press("r", keyboard::Modifiers::empty())),
+                format!("{pressed:?}"),
+                "translation changed on {:?}",
+                app.screen
+            );
+        }
     }
 
     #[test]
