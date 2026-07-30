@@ -416,9 +416,9 @@ mod tests {
 
     #[test]
     fn all_lists_every_kind() {
-        // Adding a variant already fails to compile in name, intervalic, feel,
-        // common_usage and intervals, which all match exhaustively. ALL is the one
-        // place the compiler cannot help, so the count is pinned here instead.
+        // Adding a variant already fails to compile in name, feel, common_usage
+        // and intervals, which all match exhaustively. ALL is the one place the
+        // compiler cannot help, so the count is pinned here instead.
         assert_eq!(ScaleKind::ALL.len(), 16);
     }
 
@@ -463,10 +463,10 @@ mod tests {
     #[test]
     fn the_tritone_kinds_use_the_degree_they_are_written_with() {
         // ♯4 and ♭5 are the same distance, so putting one where the other belongs
-        // is invisible to every other test here: the formula check compares
-        // semitones, and the spelling only diverges once a scale is spelled from a
-        // root. Lydian's ♯4 really is a sharpened fourth; Locrian's ♭5 really is a
-        // flattened fifth. This is the assertion that keeps them apart.
+        // is invisible to every semitone-based test here. It shows up only once a
+        // scale is spelled from a root — which reference_scales_have_the_textbook_notes
+        // now catches for Blues and Diminished, but not for Lydian or WholeTone.
+        // This is the assertion that keeps all five apart.
         for kind in [ScaleKind::Lydian, ScaleKind::WholeTone] {
             let intervals = kind.intervals();
             assert!(
@@ -600,6 +600,8 @@ mod tests {
         // True by construction — degrees 1..7 are seven distinct letter steps —
         // but it is exactly the property F Ionian violated, so it gets pinned.
         // The eight-note kinds correctly reuse a letter and are excluded.
+        let mut checked = 0;
+
         for spelling in [Spelling::Sharps, Spelling::Flats] {
             for root in PitchClass::ALL {
                 for &kind in ScaleKind::ALL {
@@ -623,9 +625,17 @@ mod tests {
                             kind.name()
                         );
                     }
+
+                    checked += 1;
                 }
             }
         }
+
+        assert_eq!(
+            checked,
+            12 * 2 * 10,
+            "the seven-note kinds were not all swept"
+        );
     }
 
     #[test]
@@ -716,6 +726,19 @@ mod tests {
                     spelled(G, Natural),
                     spelled(A, Natural),
                     spelled(B, Flat),
+                ],
+            ),
+            (
+                // Five notes, so letters B and F go unused — the pentatonic gap.
+                9,
+                Spelling::Sharps,
+                ScaleKind::MinorPentatonic,
+                &[
+                    spelled(A, Natural),
+                    spelled(C, Natural),
+                    spelled(D, Natural),
+                    spelled(E, Natural),
+                    spelled(G, Natural),
                 ],
             ),
         ];

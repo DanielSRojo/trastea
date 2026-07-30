@@ -75,6 +75,7 @@ pub enum Message {
     GoBack,
     SelectRoot(PitchClass),
     SelectScaleKind(ScaleKind),
+    ToggleSpelling,
     RerollScale,
     FocusNext,
     FocusPrevious,
@@ -89,6 +90,7 @@ pub enum Message {
 pub enum FocusTarget {
     HomeMenuItem(usize),
     Back,
+    SpellingToggle,
     RerollScale,
     Root(usize),
     ScaleKind(usize),
@@ -144,6 +146,7 @@ impl App {
             Message::SelectScaleKind(kind) => {
                 self.scale.kind = kind;
             }
+            Message::ToggleSpelling => self.toggle_spelling(),
             Message::RerollScale => self.reroll_scale(),
             Message::FocusNext => self.cycle_focus(1),
             Message::FocusPrevious => self.cycle_focus(-1),
@@ -190,6 +193,16 @@ impl App {
         }
     }
 
+    /// The toggle affects only the root. Every other degree follows from
+    /// letter-walking, so F Ionian yields B♭ either way — but A♯ Ionian with its
+    /// three double sharps becomes the clean B♭ Ionian.
+    fn toggle_spelling(&mut self) {
+        self.scale.spelling = match self.scale.spelling {
+            Spelling::Sharps => Spelling::Flats,
+            Spelling::Flats => Spelling::Sharps,
+        };
+    }
+
     fn reset_focus(&mut self) {
         self.focused = focusables(&self.screen)
             .first()
@@ -219,6 +232,7 @@ impl App {
             FocusTarget::HomeMenuItem(2) => self.navigate_to(Screen::IntervalTrainer),
             FocusTarget::HomeMenuItem(_) => {}
             FocusTarget::Back => self.go_back(),
+            FocusTarget::SpellingToggle => self.toggle_spelling(),
             FocusTarget::RerollScale => self.reroll_scale(),
             FocusTarget::Root(index) => {
                 if let Some(&pitch_class) = PitchClass::ALL.get(index) {
@@ -302,8 +316,10 @@ fn focus_grid(screen: &Screen) -> Vec<FocusRow> {
         Screen::ScaleTrainer => {
             // The reroll button sits at the right edge of the summary card, which is
             // as wide as the root card below it, so it lines up with the last column.
+            // The toggle sits just left of it, in the middle column.
             let mut top = vec![None; ROOT_ROW_WIDTH];
             top[0] = Some(FocusTarget::Back);
+            top[1] = Some(FocusTarget::SpellingToggle);
             top[ROOT_ROW_WIDTH - 1] = Some(FocusTarget::RerollScale);
 
             let root_rows: Vec<_> = root_row_spans().collect();
@@ -583,13 +599,25 @@ fn ui_scale_trainer(scale: Scale, focused: FocusTarget) -> Element<'static, Mess
                 note_label(scale.root_note(), 56, INK),
                 Space::new().width(Length::Fill),
                 focus_ring(
+                    button(
+                        text(format!("{SMUFL_SHARP}{SMUFL_FLAT}"))
+                            .size(20)
+                            .font(MUSIC_FONT)
+                    )
+                    .padding([8, 12])
+                    .style(ghost_button)
+                    .on_press(Message::ToggleSpelling),
+                    focused == FocusTarget::SpellingToggle,
+                ),
+                focus_ring(
                     button(text("R").size(20))
                         .padding([8, 12])
                         .style(ghost_button)
                         .on_press(Message::RerollScale),
                     focused == FocusTarget::RerollScale,
                 ),
-            ],
+            ]
+            .spacing(8),
             text(scale.kind.name()).size(34).color(INK),
             intervalic_text(scale.kind.intervals()),
         ]
@@ -745,20 +773,16 @@ fn root_note_row(
 fn note_label(note: Note, size: u32, color: Color) -> iced::widget::Row<'static, Message> {
     use iced::widget::{row, text};
 
-    let label = note.to_string();
-    let mut chars = label.chars();
-    let letter = chars.next().unwrap_or_default().to_string();
-    let label = row![text(letter).size(size).color(color)].spacing(0);
+    let label = row![text(note.letter.to_string()).size(size).color(color)].spacing(0);
 
-    if chars.next().is_some() {
-        label.push(
-            text(SMUFL_SHARP.to_string())
+    match accidental_glyph(note.accidental) {
+        Some(glyph) => label.push(
+            text(glyph.to_string())
                 .size(size)
                 .font(MUSIC_FONT)
                 .color(color),
-        )
-    } else {
-        label
+        ),
+        None => label,
     }
 }
 
@@ -1048,7 +1072,7 @@ mod tests {
         let targets = focusables(&Screen::ScaleTrainer);
         assert_eq!(
             targets.len(),
-            2 + PitchClass::ALL.len() + ScaleKind::ALL.len()
+            3 + PitchClass::ALL.len() + ScaleKind::ALL.len()
         );
 
         for i in 0..PitchClass::ALL.len() {
@@ -1060,15 +1084,20 @@ mod tests {
                 "missing kind {i}"
             );
         }
+        assert!(targets.contains(&FocusTarget::SpellingToggle));
     }
 
     #[test]
     fn tab_walks_one_card_at_a_time() {
-        let mut expected = vec![FocusTarget::Back, FocusTarget::RerollScale];
+        // Reading order: Back, toggle, reroll, then every root before any kind.
+        let mut expected = vec![
+            FocusTarget::Back,
+            FocusTarget::SpellingToggle,
+            FocusTarget::RerollScale,
+        ];
         expected.extend((0..PitchClass::ALL.len()).map(FocusTarget::Root));
         expected.extend((0..ScaleKind::ALL.len()).map(FocusTarget::ScaleKind));
 
-        // Every root before any kind — not C, C#, D, Ionian, Dorian, ...
         assert_eq!(focusables(&Screen::ScaleTrainer), expected);
     }
 
@@ -1232,6 +1261,16 @@ mod tests {
             FocusTarget::Back
         );
 
+        // The toggle takes the middle cell, above the second root.
+        assert_eq!(
+            arrow(FocusTarget::SpellingToggle, Direction::Down),
+            FocusTarget::Root(1)
+        );
+        assert_eq!(
+            arrow(FocusTarget::Root(1), Direction::Up),
+            FocusTarget::SpellingToggle
+        );
+
         // Reroll sits at the right edge of the summary card, above the third root.
         assert_eq!(
             arrow(FocusTarget::RerollScale, Direction::Down),
@@ -1241,11 +1280,84 @@ mod tests {
             arrow(FocusTarget::Root(2), Direction::Up),
             FocusTarget::RerollScale
         );
+    }
 
-        // Right from Back skips the empty middle cell.
+    #[test]
+    fn the_top_row_walks_back_toggle_reroll() {
+        // The middle cell is no longer empty, so Right from Back lands on it.
         assert_eq!(
             arrow(FocusTarget::Back, Direction::Right),
+            FocusTarget::SpellingToggle
+        );
+        assert_eq!(
+            arrow(FocusTarget::SpellingToggle, Direction::Right),
             FocusTarget::RerollScale
+        );
+        assert_eq!(
+            arrow(FocusTarget::RerollScale, Direction::Left),
+            FocusTarget::SpellingToggle
+        );
+        assert_eq!(
+            arrow(FocusTarget::SpellingToggle, Direction::Left),
+            FocusTarget::Back
+        );
+    }
+
+    #[test]
+    fn toggling_spelling_renames_the_scale_without_moving_it() {
+        let mut app = app_with_seed(11);
+        app.scale.root = PitchClass::new(1);
+        app.scale.kind = ScaleKind::Ionian;
+
+        let before = app.scale.notes();
+        // Through update, so the message wiring is covered too. The returned
+        // Task is discarded — this screen issues none.
+        let _ = app.update(Message::ToggleSpelling);
+        let after = app.scale.notes();
+
+        assert_ne!(before, after, "C♯ and D♭ Ionian are spelled differently");
+
+        let pitch_classes = |notes: &[Note]| -> Vec<u8> {
+            notes
+                .iter()
+                .map(|note| note.pitch_class().semitone())
+                .collect()
+        };
+        assert_eq!(
+            pitch_classes(&before),
+            pitch_classes(&after),
+            "the toggle moved the scale"
+        );
+    }
+
+    #[test]
+    fn rerolling_leaves_the_spelling_alone() {
+        // Spelling is a user setting, not part of the draw.
+        let mut app = app_with_seed(3);
+        app.scale.spelling = Spelling::Flats;
+
+        for _ in 0..200 {
+            app.reroll_scale();
+            assert_eq!(app.scale.spelling, Spelling::Flats);
+        }
+    }
+
+    #[test]
+    fn a_natural_renders_no_glyph_and_the_rest_map_to_smufl() {
+        // A natural sign would be wrong in a note label and in a formula alike,
+        // which is why this returns Option rather than a char. The four glyph
+        // constants are hand-written, so a swapped pair would otherwise compile
+        // and pass every other test in this file.
+        assert_eq!(accidental_glyph(Accidental::Natural), None);
+        assert_eq!(accidental_glyph(Accidental::Flat), Some(SMUFL_FLAT));
+        assert_eq!(accidental_glyph(Accidental::Sharp), Some(SMUFL_SHARP));
+        assert_eq!(
+            accidental_glyph(Accidental::DoubleFlat),
+            Some(SMUFL_DOUBLE_FLAT)
+        );
+        assert_eq!(
+            accidental_glyph(Accidental::DoubleSharp),
+            Some(SMUFL_DOUBLE_SHARP)
         );
     }
 
