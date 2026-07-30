@@ -1,3 +1,5 @@
+use std::fmt;
+
 use super::notes::{Accidental, Letter, Note};
 
 #[derive(PartialEq, Debug, Clone, Copy, Eq, Hash)]
@@ -124,6 +126,21 @@ impl Interval {
     }
 }
 
+/// The degree-formula spelling: the degree number with its alteration in front —
+/// `1`, `b3`, `#4`, `b5`. The same convention the scale trainer's formula row
+/// prints with SMuFL glyphs, in the ASCII a canvas marker is limited to.
+///
+/// A degree, deliberately, and not a quality: `b3` rather than `m3`, `5` rather
+/// than `P5`. The two tritones are why the distinction earns a comment — they are
+/// one distance written two ways, and only the degree number tells `#4` from `b5`.
+/// Should quality names ever be wanted, they belong in a method named for them
+/// rather than in a second reading of `Display`.
+impl fmt::Display for Interval {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}{}", self.alteration().ascii(), self.number())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,6 +210,61 @@ mod tests {
         assert_eq!(Interval::DiminishedFifth.number(), 5);
         assert_eq!(Interval::AugmentedFourth.alteration(), Accidental::Sharp);
         assert_eq!(Interval::DiminishedFifth.alteration(), Accidental::Flat);
+    }
+
+    #[test]
+    fn display_spells_every_degree() {
+        // The independent statement of what Display comes to, the way
+        // semitones_matches_the_written_out_distances is for semitones().
+        let expected: &[(Interval, &str)] = &[
+            (Interval::Unison, "1"),
+            (Interval::MinorSecond, "b2"),
+            (Interval::MajorSecond, "2"),
+            (Interval::MinorThird, "b3"),
+            (Interval::MajorThird, "3"),
+            (Interval::PerfectFourth, "4"),
+            (Interval::AugmentedFourth, "#4"),
+            (Interval::DiminishedFifth, "b5"),
+            (Interval::PerfectFifth, "5"),
+            (Interval::MinorSixth, "b6"),
+            (Interval::MajorSixth, "6"),
+            (Interval::MinorSeventh, "b7"),
+            (Interval::MajorSeventh, "7"),
+        ];
+
+        assert_eq!(expected.len(), Interval::ALL.len(), "a variant is unlisted");
+
+        for &(interval, text) in expected {
+            assert_eq!(interval.to_string(), text, "{interval:?}");
+        }
+    }
+
+    #[test]
+    fn the_unaltered_degrees_carry_no_prefix() {
+        // Not just "the major scale's degrees read 1..7": that an unaltered degree
+        // renders bare is what keeps a marker from reading `n3`.
+        for &interval in Interval::ALL {
+            let bare = interval.to_string() == interval.number().to_string();
+            assert_eq!(
+                bare,
+                interval.alteration() == Accidental::Natural,
+                "{interval:?} renders as {interval}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_two_tritones_are_displayed_apart() {
+        // The pair that makes Display a degree rather than a distance: equal
+        // semitones, different text.
+        assert_eq!(
+            Interval::AugmentedFourth.semitones(),
+            Interval::DiminishedFifth.semitones()
+        );
+        assert_ne!(
+            Interval::AugmentedFourth.to_string(),
+            Interval::DiminishedFifth.to_string()
+        );
     }
 
     #[test]

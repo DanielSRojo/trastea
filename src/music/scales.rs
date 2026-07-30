@@ -78,6 +78,27 @@ impl Scale {
             .into_iter()
             .find(|note| note.pitch_class() == pitch_class)
     }
+
+    /// This scale's *degree* for a pitch class — the interval-shaped counterpart of
+    /// `spell`, and `None` on the same pitch classes, since both search the one
+    /// formula. Together they are the two things there are to say about a fretboard
+    /// marker: what it is called, and what job it does.
+    ///
+    /// Not `Interval::between(self.root_note(), note)`, which would reach the same
+    /// answer by spelling the pitch and reading the letters back off it — a
+    /// round trip through a fallibility of its own (a distance outside the
+    /// thirteen), leaving a caller with two failure modes that mean different
+    /// things. The formula states the degree directly, so this asks it directly.
+    ///
+    /// Independent of `spelling`, unlike `spell`: a degree is a position in the
+    /// formula, and no choice of sharps or flats moves it.
+    pub fn degree(self, pitch_class: PitchClass) -> Option<Interval> {
+        self.kind
+            .intervals()
+            .iter()
+            .copied()
+            .find(|interval| self.root.transpose(interval.semitones()) == pitch_class)
+    }
 }
 
 /// How far `target` sits from `letter`'s natural pitch, as the nearest signed
@@ -832,5 +853,136 @@ mod tests {
         assert_eq!(f_ionian.spell(pc(5)), Some(spelled(F, Natural)));
         // Pitch class 6 (F♯/G♭) is not in F major at all.
         assert_eq!(f_ionian.spell(pc(6)), None);
+    }
+
+    #[test]
+    fn degree_names_the_position_and_rejects_the_rest() {
+        let f_ionian = Scale {
+            root: pc(5),
+            spelling: Spelling::Sharps,
+            kind: ScaleKind::Ionian,
+        };
+
+        // The same three pitch classes spell_names… asks about, read as jobs
+        // rather than names: pitch class 10 is B♭ *because* it is the fourth.
+        assert_eq!(f_ionian.degree(pc(10)), Some(Interval::PerfectFourth));
+        assert_eq!(f_ionian.degree(pc(5)), Some(Interval::Unison));
+        assert_eq!(f_ionian.degree(pc(6)), None);
+    }
+
+    #[test]
+    fn degree_is_the_same_under_both_spellings() {
+        // The claim the fretboard leans on when the ♯♭ toggle is pressed in
+        // interval notation: nothing moves, and no label changes.
+        for root in PitchClass::ALL {
+            for &kind in ScaleKind::ALL {
+                let sharps = Scale {
+                    root,
+                    spelling: Spelling::Sharps,
+                    kind,
+                };
+                let flats = Scale {
+                    spelling: Spelling::Flats,
+                    ..sharps
+                };
+
+                for pitch_class in PitchClass::ALL {
+                    assert_eq!(
+                        sharps.degree(pitch_class),
+                        flats.degree(pitch_class),
+                        "{} {} disagreed about pitch class {}",
+                        sharps.root_note(),
+                        kind.name(),
+                        pitch_class.semitone()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn degree_and_spell_agree_on_membership() {
+        // 12 roots × 2 spellings × 16 kinds × 12 pitch classes. Both read the one
+        // formula, and this is what holds them to it — a marker that gets a name
+        // gets a degree, and one that gets neither is genuinely not in the scale.
+        for spelling in [Spelling::Sharps, Spelling::Flats] {
+            for root in PitchClass::ALL {
+                for &kind in ScaleKind::ALL {
+                    let scale = Scale {
+                        root,
+                        spelling,
+                        kind,
+                    };
+
+                    for pitch_class in PitchClass::ALL {
+                        assert_eq!(
+                            scale.degree(pitch_class).is_some(),
+                            scale.spell(pitch_class).is_some(),
+                            "{} {} disagreed about pitch class {}",
+                            scale.root_note(),
+                            kind.name(),
+                            pitch_class.semitone()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn degree_recovers_the_formula_in_order() {
+        // Asked of a scale's own notes, degree() must give the formula back exactly
+        // — the interval-side counterpart of every_scale_spells_without_failing,
+        // and what licenses the expect below being unreachable in the app.
+        for spelling in [Spelling::Sharps, Spelling::Flats] {
+            for root in PitchClass::ALL {
+                for &kind in ScaleKind::ALL {
+                    let scale = Scale {
+                        root,
+                        spelling,
+                        kind,
+                    };
+
+                    let recovered: Vec<Interval> = scale
+                        .notes()
+                        .iter()
+                        .map(|note| {
+                            scale
+                                .degree(note.pitch_class())
+                                .expect("a scale contains its own notes")
+                        })
+                        .collect();
+
+                    assert_eq!(
+                        recovered,
+                        kind.intervals(),
+                        "{} {}",
+                        scale.root_note(),
+                        kind.name()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_kind_uses_one_pitch_class_twice() {
+        // What makes degree()'s `find` well-defined rather than order-dependent: a
+        // kind holding both a ♯4 and a ♭5 would put two degrees on one pitch class,
+        // and the first listed would shadow the second. No kind does — and if one is
+        // ever added, this fails before the fretboard starts lying.
+        for &kind in ScaleKind::ALL {
+            let mut seen: Vec<u8> = Vec::new();
+
+            for interval in kind.intervals() {
+                let semitones = interval.semitones();
+                assert!(
+                    !seen.contains(&semitones),
+                    "{} uses {semitones} semitones twice",
+                    kind.name()
+                );
+                seen.push(semitones);
+            }
+        }
     }
 }

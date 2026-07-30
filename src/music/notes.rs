@@ -133,6 +133,25 @@ impl Accidental {
             _ => None,
         }
     }
+
+    /// The typewriter spelling, for text the fretboard canvas draws: that canvas
+    /// draws with one font, so the SMuFL glyphs the cards use cannot appear inside
+    /// a marker. The empty string for a natural is the point of the table as much
+    /// as the glyphs are — an explicit ♮ would be wrong in a note name and wrong
+    /// in a scale degree alike.
+    ///
+    /// Shared rather than written out at each use: `Note` and `Interval` both
+    /// render an accidental followed by something, and two copies of this table
+    /// would be two things to keep in step.
+    pub fn ascii(self) -> &'static str {
+        match self {
+            Accidental::DoubleFlat => "bb",
+            Accidental::Flat => "b",
+            Accidental::Natural => "",
+            Accidental::Sharp => "#",
+            Accidental::DoubleSharp => "##",
+        }
+    }
 }
 
 /// A note as written: a letter plus an accidental.
@@ -157,18 +176,11 @@ impl Note {
     }
 }
 
-/// ASCII, for the fretboard markers: the canvas draws with one font, so SMuFL
-/// glyphs cannot render inside a marker. The cards use the glyphs instead.
+/// ASCII, for the fretboard markers — see `Accidental::ascii`. The cards spell the
+/// same notes with SMuFL glyphs instead.
 impl fmt::Display for Note {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let accidental = match self.accidental {
-            Accidental::DoubleFlat => "bb",
-            Accidental::Flat => "b",
-            Accidental::Natural => "",
-            Accidental::Sharp => "#",
-            Accidental::DoubleSharp => "##",
-        };
-        write!(f, "{}{accidental}", self.letter)
+        write!(f, "{}{}", self.letter, self.accidental.ascii())
     }
 }
 

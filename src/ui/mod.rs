@@ -64,6 +64,27 @@ pub struct App {
     /// overlay lists *its* keys and reads them from `self.screen` directly, instead of
     /// recovering them from the top of the navigation history.
     help_open: bool,
+    /// What the fretboard's markers say. Lives here rather than on `Scale` — see
+    /// `Notation`.
+    notation: Notation,
+}
+
+/// What the fretboard's markers are labelled with: the notes' names, or the degrees
+/// they occupy in the scale.
+///
+/// A UI type, unlike `Spelling`, which sits on `Scale`. Spelling earns its place
+/// there because it changes what the notes *are called* — `Scale::notes` and
+/// `Scale::spell` both read it, and a name is music rather than chrome. This
+/// changes nothing about the scale; it picks which of two true things about an
+/// already-determined scale gets drawn, so `music/` has no business knowing about
+/// it.
+///
+/// Keeping it off `Scale` also keeps it from being replaced along with one: the mode
+/// has to survive a reroll, and it would not if it travelled with the scale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Notation {
+    Notes,
+    Intervals,
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -82,6 +103,7 @@ pub enum Message {
     SelectRoot(PitchClass),
     SelectScaleKind(ScaleKind),
     ToggleSpelling,
+    ToggleNotation,
     RerollScale,
     /// A character key that may be an accelerator on the current screen.
     ///
@@ -103,6 +125,7 @@ pub enum FocusTarget {
     HomeMenuItem(usize),
     Back,
     SpellingToggle,
+    NotationToggle,
     RerollScale,
     Root(usize),
     ScaleKind(usize),
@@ -170,6 +193,7 @@ impl App {
             focused: FocusTarget::HomeMenuItem(0),
             rng: Rng::from_clock(),
             help_open: false,
+            notation: Notation::Notes,
         };
 
         (app, Task::none())
@@ -195,6 +219,7 @@ impl App {
                 self.scale.kind = kind;
             }
             Message::ToggleSpelling => self.toggle_spelling(),
+            Message::ToggleNotation => self.toggle_notation(),
             Message::RerollScale => self.reroll_scale(),
             Message::Accelerate(c) => self.accelerate(c),
             Message::ToggleHelp => self.help_open = true,
@@ -261,6 +286,14 @@ impl App {
     /// The toggle affects only the root. Every other degree follows from
     /// letter-walking, so F Ionian yields B♭ either way — but A♯ Ionian with its
     /// three double sharps becomes the clean B♭ Ionian.
+    /// Flips what the markers say. Nothing about the scale moves — see `Notation`.
+    fn toggle_notation(&mut self) {
+        self.notation = match self.notation {
+            Notation::Notes => Notation::Intervals,
+            Notation::Intervals => Notation::Notes,
+        };
+    }
+
     fn toggle_spelling(&mut self) {
         self.scale.spelling = match self.scale.spelling {
             Spelling::Sharps => Spelling::Flats,
@@ -317,6 +350,7 @@ impl App {
             }
             FocusTarget::Back => self.go_back(),
             FocusTarget::SpellingToggle => self.toggle_spelling(),
+            FocusTarget::NotationToggle => self.toggle_notation(),
             FocusTarget::RerollScale => self.reroll_scale(),
             FocusTarget::Root(index) => {
                 if let Some(&pitch_class) = PitchClass::ALL.get(index) {
@@ -336,7 +370,7 @@ impl App {
             Screen::Home => ui_home(self.focused),
             Screen::ScaleTrainer => with_top_bar(
                 "Scale Trainer",
-                ui_scale_trainer(self.scale, self.focused),
+                ui_scale_trainer(self.scale, self.notation, self.focused),
                 true,
                 self.focused,
             ),
@@ -413,18 +447,36 @@ fn focus_grid(screen: &Screen) -> Vec<FocusRow> {
             .map(|i| vec![Some(FocusTarget::HomeMenuItem(i))])
             .collect(),
         Screen::ScaleTrainer => {
-            // The reroll button sits at the right edge of the summary card, which is
-            // as wide as the root card below it, so it lines up with the last column.
-            // The toggle sits just left of it, in the middle column.
-            let mut top = vec![None; ROOT_ROW_WIDTH];
-            top[0] = Some(FocusTarget::Back);
-            top[1] = Some(FocusTarget::SpellingToggle);
-            top[ROOT_ROW_WIDTH - 1] = Some(FocusTarget::RerollScale);
+            // Two header rows. The summary card's buttons — spelling, notation, reroll —
+            // sit along its right edge, and the card is as wide as the root card below
+            // it, so the three of them take the three columns above the first three
+            // roots. That leaves no cell for Back, and widening the row is not an
+            // option: `card_bands` splits at ROOT_ROW_WIDTH, so a fourth column would
+            // land in the kinds card and Tab would reach the reroll button only after
+            // all sixteen scale kinds.
+            //
+            // So Back takes a row of its own — which is where it really is, in the top
+            // bar above the card rather than inside it. The cost is that Right from
+            // Back no longer walks into the card; Tab still visits it first.
+            let mut back_row: FocusRow = vec![None; ROOT_ROW_WIDTH];
+            back_row[0] = Some(FocusTarget::Back);
+
+            // Zipped rather than indexed so the row cannot be built wider than the band
+            // it belongs to: a narrower ROOT_ROW_WIDTH drops buttons off the end instead
+            // of panicking, a wider one leaves the extra cells empty.
+            let mut card_buttons: FocusRow = vec![None; ROOT_ROW_WIDTH];
+            for (cell, target) in card_buttons.iter_mut().zip([
+                FocusTarget::SpellingToggle,
+                FocusTarget::NotationToggle,
+                FocusTarget::RerollScale,
+            ]) {
+                *cell = Some(target);
+            }
 
             let root_rows: Vec<_> = root_row_spans().collect();
             let kind_rows: Vec<_> = kind_row_spans().collect();
 
-            let mut grid = vec![top];
+            let mut grid = vec![back_row, card_buttons];
             for r in 0..root_rows.len().max(kind_rows.len()) {
                 let mut row: FocusRow = vec![None; ROOT_ROW_WIDTH];
                 if let Some(&(start, len)) = root_rows.get(r) {
@@ -630,7 +682,10 @@ fn accelerators(screen: &Screen) -> Vec<Accelerator> {
                 Some((key, FocusTarget::HomeMenuItem(index), item.label))
             })
             .collect(),
-        Screen::ScaleTrainer => vec![('r', FocusTarget::RerollScale, "new scale")],
+        Screen::ScaleTrainer => vec![
+            ('r', FocusTarget::RerollScale, "new scale"),
+            ('i', FocusTarget::NotationToggle, "interval notation"),
+        ],
         Screen::NoteTrainer | Screen::IntervalTrainer => Vec::new(),
     }
 }
@@ -729,13 +784,17 @@ fn ui_home(focused: FocusTarget) -> Element<'static, Message> {
     with_top_bar("Trastea", content.into(), false, focused)
 }
 
-fn ui_scale_trainer(scale: Scale, focused: FocusTarget) -> Element<'static, Message> {
+fn ui_scale_trainer(
+    scale: Scale,
+    notation: Notation,
+    focused: FocusTarget,
+) -> Element<'static, Message> {
     use iced::Length;
     use iced::widget::{Space, button, column, container, row, text};
 
     let fb = Fretboard {
         num_frets: 12,
-        highlighted: scale_markers(scale),
+        highlighted: scale_markers(scale, notation),
     };
 
     let current_scale_card = container(
@@ -753,6 +812,25 @@ fn ui_scale_trainer(scale: Scale, focused: FocusTarget) -> Element<'static, Mess
                     .style(ghost_button)
                     .on_press(Message::ToggleSpelling),
                     focused == FocusTarget::SpellingToggle,
+                ),
+                focus_ring(
+                    // One degree, not a formula fragment: `1♭3` was tried first, on the
+                    // grounds that it reads less like an instruction to flatten the
+                    // third, and it crowded the header row — three buttons and the root
+                    // label share this line. Built like the formula row it points at —
+                    // the glyph in MUSIC_FONT, the digit in the body font — because one
+                    // `text` cannot carry both.
+                    button(
+                        row![
+                            text(SMUFL_FLAT.to_string()).size(20).font(MUSIC_FONT),
+                            text("3").size(20),
+                        ]
+                        .spacing(0)
+                    )
+                    .padding([8, 12])
+                    .style(ghost_button)
+                    .on_press(Message::ToggleNotation),
+                    focused == FocusTarget::NotationToggle,
                 ),
                 focus_ring(
                     button(text("R").size(20))
@@ -1010,18 +1088,39 @@ fn scale_kind_row(
         })
 }
 
-fn scale_markers(scale: Scale) -> Vec<NoteMarker> {
+/// The text inside one marker — a note's name, or the job it does in the scale.
+///
+/// A pure decision split out of `scale_markers` for the reason `interval_token` is
+/// split out of `intervalic_text`: it is the part worth testing, and testing it
+/// here needs no widget tree and no canvas.
+fn marker_label(notation: Notation, note: Note, degree: Interval) -> String {
+    match notation {
+        Notation::Notes => note.to_string(),
+        Notation::Intervals => degree.to_string(),
+    }
+}
+
+fn scale_markers(scale: Scale, notation: Notation) -> Vec<NoteMarker> {
     let mut markers = Vec::new();
 
     for (string, open) in STANDARD_TUNING.iter().enumerate() {
         for fret in 0_u8..=12 {
             let pitch_class = open.transpose(fret);
 
+            // `spell` stays the membership test, so the set of markers is the same
+            // in both modes and the mode cannot make a dot disappear. The degree is
+            // then an `expect` rather than a second gate:
+            // `degree_and_spell_agree_on_membership` in scales.rs proves a spelled
+            // pitch class always has one.
             if let Some(note) = scale.spell(pitch_class) {
+                let degree = scale
+                    .degree(pitch_class)
+                    .expect("degree_and_spell_agree_on_membership: a spelled pitch has a degree");
+
                 markers.push(NoteMarker {
                     string,
                     fret: fret as usize,
-                    note,
+                    label: marker_label(notation, note, degree),
                     color: if pitch_class == scale.root {
                         Color::from_rgb8(0xff, 0x4d, 0x4d)
                     } else {
@@ -1272,7 +1371,6 @@ fn selected_root_button(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::music::notes::Letter;
     use std::collections::HashSet;
 
     /// An app whose scale rolls are reproducible.
@@ -1349,9 +1447,10 @@ mod tests {
     #[test]
     fn scale_trainer_reaches_every_widget_exactly_once() {
         let targets = focusables(&Screen::ScaleTrainer);
+        // Four pieces of chrome: Back, and the summary card's three buttons.
         assert_eq!(
             targets.len(),
-            3 + PitchClass::ALL.len() + ScaleKind::ALL.len()
+            4 + PitchClass::ALL.len() + ScaleKind::ALL.len()
         );
 
         for i in 0..PitchClass::ALL.len() {
@@ -1364,14 +1463,19 @@ mod tests {
             );
         }
         assert!(targets.contains(&FocusTarget::SpellingToggle));
+        assert!(targets.contains(&FocusTarget::NotationToggle));
     }
 
     #[test]
     fn tab_walks_one_card_at_a_time() {
-        // Reading order: Back, toggle, reroll, then every root before any kind.
+        // Reading order: Back, the card's three buttons left to right, then every root
+        // before any kind. Back and the buttons are on separate grid rows now, and the
+        // point of this test is that the split changes nothing about the Tab order —
+        // both rows are in the root card's band, so they still lead it.
         let mut expected = vec![
             FocusTarget::Back,
             FocusTarget::SpellingToggle,
+            FocusTarget::NotationToggle,
             FocusTarget::RerollScale,
         ];
         expected.extend((0..PitchClass::ALL.len()).map(FocusTarget::Root));
@@ -1530,56 +1634,56 @@ mod tests {
     }
 
     #[test]
-    fn top_row_lines_up_with_the_columns_below_it() {
+    fn the_card_buttons_line_up_with_the_columns_below_them() {
+        // The header is two rows: Back alone, then the card's three buttons, which take
+        // one column each above the first three roots.
         assert_eq!(
             arrow(FocusTarget::Back, Direction::Down),
-            FocusTarget::Root(0)
+            FocusTarget::SpellingToggle
         );
         assert_eq!(
-            arrow(FocusTarget::Root(0), Direction::Up),
+            arrow(FocusTarget::SpellingToggle, Direction::Up),
             FocusTarget::Back
         );
 
-        // The toggle takes the middle cell, above the second root.
-        assert_eq!(
-            arrow(FocusTarget::SpellingToggle, Direction::Down),
-            FocusTarget::Root(1)
-        );
-        assert_eq!(
-            arrow(FocusTarget::Root(1), Direction::Up),
-            FocusTarget::SpellingToggle
-        );
-
-        // Reroll sits at the right edge of the summary card, above the third root.
-        assert_eq!(
-            arrow(FocusTarget::RerollScale, Direction::Down),
-            FocusTarget::Root(2)
-        );
-        assert_eq!(
-            arrow(FocusTarget::Root(2), Direction::Up),
-            FocusTarget::RerollScale
-        );
+        for (button, root) in [
+            (FocusTarget::SpellingToggle, FocusTarget::Root(0)),
+            (FocusTarget::NotationToggle, FocusTarget::Root(1)),
+            (FocusTarget::RerollScale, FocusTarget::Root(2)),
+        ] {
+            assert_eq!(arrow(button, Direction::Down), root, "down from {button:?}");
+            assert_eq!(arrow(root, Direction::Up), button, "up from {root:?}");
+        }
     }
 
     #[test]
-    fn the_top_row_walks_back_toggle_reroll() {
-        // The middle cell is no longer empty, so Right from Back lands on it.
-        assert_eq!(
-            arrow(FocusTarget::Back, Direction::Right),
-            FocusTarget::SpellingToggle
-        );
+    fn the_card_button_row_walks_spelling_notation_reroll() {
         assert_eq!(
             arrow(FocusTarget::SpellingToggle, Direction::Right),
+            FocusTarget::NotationToggle
+        );
+        assert_eq!(
+            arrow(FocusTarget::NotationToggle, Direction::Right),
             FocusTarget::RerollScale
         );
         assert_eq!(
             arrow(FocusTarget::RerollScale, Direction::Left),
-            FocusTarget::SpellingToggle
+            FocusTarget::NotationToggle
         );
         assert_eq!(
-            arrow(FocusTarget::SpellingToggle, Direction::Left),
+            arrow(FocusTarget::NotationToggle, Direction::Left),
+            FocusTarget::SpellingToggle
+        );
+
+        // Back is alone on its row, so the horizontal keys have nowhere to take it.
+        // It used to step sideways into the card; reaching the card is Tab's job now,
+        // or Down's. Asserted rather than left implicit because it is the one thing
+        // the two-row header gave up.
+        assert_eq!(
+            arrow(FocusTarget::Back, Direction::Right),
             FocusTarget::Back
         );
+        assert_eq!(arrow(FocusTarget::Back, Direction::Left), FocusTarget::Back);
     }
 
     #[test]
@@ -1701,13 +1805,26 @@ mod tests {
     /// `translate_key` no longer answers "is this key bound?" — it forwards every
     /// unrecognised character for the screen to resolve — so the absence of a binding is
     /// only observable here, as the absence of a change.
-    fn snapshot(app: &App) -> (Screen, FocusTarget, PitchClass, ScaleKind, Spelling, usize) {
+    fn snapshot(
+        app: &App,
+    ) -> (
+        Screen,
+        FocusTarget,
+        PitchClass,
+        ScaleKind,
+        Spelling,
+        Notation,
+        usize,
+    ) {
         (
             app.screen.clone(),
             app.focused,
             app.scale.root,
             app.scale.kind,
             app.scale.spelling,
+            // Without this field the tests below would watch `i` do nothing and call
+            // that a pass.
+            app.notation,
             app.history.len(),
         )
     }
@@ -1731,6 +1848,7 @@ mod tests {
             let before = snapshot(&app);
             press_into(&mut app, "H", keyboard::Modifiers::SHIFT);
             press_into(&mut app, "R", keyboard::Modifiers::SHIFT);
+            press_into(&mut app, "I", keyboard::Modifiers::SHIFT);
 
             assert_eq!(snapshot(&app), before, "{:?}", app.screen);
         }
@@ -1787,6 +1905,67 @@ mod tests {
 
             assert_eq!(snapshot(&app), before, "{:?} claimed r", app.screen);
         }
+    }
+
+    #[test]
+    fn i_toggles_the_notation_and_leaves_the_ring_alone() {
+        let mut app = app_with_seed(0x1a7e);
+        app.navigate_to(Screen::ScaleTrainer);
+        app.focused = FocusTarget::ScaleKind(2);
+
+        press_into(&mut app, "i", keyboard::Modifiers::empty());
+        assert_eq!(app.notation, Notation::Intervals);
+        assert_eq!(
+            app.focused,
+            FocusTarget::ScaleKind(2),
+            "the accelerator walked the ring onto the button"
+        );
+
+        press_into(&mut app, "i", keyboard::Modifiers::empty());
+        assert_eq!(app.notation, Notation::Notes, "not a one-way switch");
+    }
+
+    #[test]
+    fn i_is_inert_on_screens_that_do_not_claim_it() {
+        for screen in every_screen() {
+            if screen == Screen::ScaleTrainer {
+                continue;
+            }
+
+            let mut app = app_with_seed(0xfeed);
+            app.navigate_to(screen);
+
+            let before = snapshot(&app);
+            press_into(&mut app, "i", keyboard::Modifiers::empty());
+
+            assert_eq!(snapshot(&app), before, "{:?} claimed i", app.screen);
+        }
+    }
+
+    /// The mode is a preference, not a property of what is on screen — so nothing that
+    /// replaces the scale may quietly put the neck back into note names.
+    #[test]
+    fn the_notation_survives_everything_that_replaces_the_scale() {
+        let mut app = app_with_seed(0x5a1e);
+        app.open(Screen::ScaleTrainer);
+
+        let _ = app.update(Message::ToggleNotation);
+        assert_eq!(app.notation, Notation::Intervals);
+
+        let _ = app.update(Message::RerollScale);
+        assert_eq!(app.notation, Notation::Intervals, "a reroll reset it");
+
+        let _ = app.update(Message::SelectRoot(PitchClass::new(3)));
+        let _ = app.update(Message::SelectScaleKind(ScaleKind::Aeolian));
+        assert_eq!(app.notation, Notation::Intervals, "a selection reset it");
+
+        let _ = app.update(Message::GoBack);
+        let _ = app.update(Message::Navigate(Screen::ScaleTrainer));
+        assert_eq!(
+            app.notation,
+            Notation::Intervals,
+            "leaving and coming back reset it"
+        );
     }
 
     /// Sharper than comparing snapshots: if `r` on Home reached the reroll at all it would
@@ -2086,6 +2265,83 @@ mod tests {
         STANDARD_TUNING[marker.string].transpose(marker.fret as u8)
     }
 
+    /// Every marker's position, for comparing two labellings of one neck.
+    fn marker_positions(markers: &[NoteMarker]) -> Vec<(usize, usize)> {
+        markers.iter().map(|m| (m.string, m.fret)).collect()
+    }
+
+    #[test]
+    fn interval_notation_labels_the_markers_with_the_formula() {
+        let a_aeolian = Scale {
+            root: PitchClass::new(9),
+            spelling: Spelling::Sharps,
+            kind: ScaleKind::Aeolian,
+        };
+
+        let names = scale_markers(a_aeolian, Notation::Notes);
+        let degrees = scale_markers(a_aeolian, Notation::Intervals);
+
+        // The same dots, both ways round: the mode may change the text and nothing
+        // else. Membership comes from `spell`, which never sees the mode.
+        assert_eq!(
+            marker_positions(&names),
+            marker_positions(&degrees),
+            "switching notation moved or dropped a marker"
+        );
+        let colors = |markers: &[NoteMarker]| -> Vec<(f32, f32, f32, f32)> {
+            markers
+                .iter()
+                .map(|m| (m.color.r, m.color.g, m.color.b, m.color.a))
+                .collect()
+        };
+        assert_eq!(
+            colors(&names),
+            colors(&degrees),
+            "switching notation recoloured a marker"
+        );
+
+        // A minor's formula, and nothing outside it. Set equality both ways: no label
+        // may appear that is not a degree of this scale, and every degree must show up
+        // somewhere on twelve frets of six strings.
+        let labels: HashSet<&str> = degrees.iter().map(|m| m.label.as_str()).collect();
+        let expected: HashSet<&str> = ["1", "2", "b3", "4", "5", "b6", "b7"].into_iter().collect();
+        assert_eq!(labels, expected);
+
+        for marker in &degrees {
+            if marker_pitch_class(marker) == a_aeolian.root {
+                assert_eq!(marker.label, "1", "the root is degree 1");
+            }
+        }
+    }
+
+    #[test]
+    fn the_spelling_toggle_does_not_reach_interval_labels() {
+        // The ♯♭ button keeps working in interval notation — it still names the root on
+        // the card — but a degree is a position in the formula, and no choice of sharps
+        // or flats moves one.
+        let sharps = Scale {
+            root: PitchClass::new(1),
+            spelling: Spelling::Sharps,
+            kind: ScaleKind::Ionian,
+        };
+        let flats = Scale {
+            spelling: Spelling::Flats,
+            ..sharps
+        };
+
+        let labels = |scale: Scale| -> Vec<String> {
+            scale_markers(scale, Notation::Intervals)
+                .iter()
+                .map(|m| m.label.clone())
+                .collect()
+        };
+
+        // C♯ and D♭ Ionian are spelled differently note for note — the case
+        // toggling_spelling_moves_no_marker_but_relabels_at_least_one uses — so if
+        // spelling leaked into a degree, it would leak here.
+        assert_eq!(labels(sharps), labels(flats));
+    }
+
     #[test]
     fn f_ionian_names_pitch_class_ten_b_flat_not_a_sharp() {
         // The branch's headline claim, asserted where it reaches the screen:
@@ -2098,17 +2354,19 @@ mod tests {
             kind: ScaleKind::Ionian,
         };
 
-        let markers = scale_markers(scale);
+        let markers = scale_markers(scale, Notation::Notes);
         let mut checked = 0;
 
         for marker in &markers {
             if marker_pitch_class(marker).semitone() == 10 {
-                assert_eq!(marker.note.letter, Letter::B, "{:?}", marker.note);
+                // Read off the label, now that a marker carries text rather than a
+                // `Note`. That is nearer the claim in any case — `Bb` is what the
+                // neck actually shows — and the structure behind it is pinned in
+                // scales.rs, where the spelling is decided.
                 assert_eq!(
-                    marker.note.accidental,
-                    Accidental::Flat,
-                    "{:?}",
-                    marker.note
+                    marker.label, "Bb",
+                    "string {} fret {}",
+                    marker.string, marker.fret
                 );
                 checked += 1;
             }
@@ -2143,15 +2401,14 @@ mod tests {
             ..sharps
         };
 
-        let sharp_markers = scale_markers(sharps);
-        let flat_markers = scale_markers(flats);
+        let sharp_markers = scale_markers(sharps, Notation::Notes);
+        let flat_markers = scale_markers(flats, Notation::Notes);
 
-        let positions = |markers: &[NoteMarker]| -> HashSet<(usize, usize)> {
-            markers.iter().map(|m| (m.string, m.fret)).collect()
-        };
+        // `marker_positions` compares them as sequences, not as sets — which is what
+        // the paragraph above claims and what the positional zip below relies on.
         assert_eq!(
-            positions(&sharp_markers),
-            positions(&flat_markers),
+            marker_positions(&sharp_markers),
+            marker_positions(&flat_markers),
             "toggling spelling moved a marker"
         );
 
@@ -2159,7 +2416,7 @@ mod tests {
         let relabelled = sharp_markers
             .iter()
             .zip(&flat_markers)
-            .any(|(sharp, flat)| sharp.note != flat.note);
+            .any(|(sharp, flat)| sharp.label != flat.label);
         assert!(relabelled, "no marker's label changed under the toggle");
     }
 
@@ -2181,7 +2438,7 @@ mod tests {
             kind: ScaleKind::Ionian,
         };
 
-        let markers = scale_markers(scale);
+        let markers = scale_markers(scale, Notation::Notes);
         let root_color = Color::from_rgb8(0xff, 0x4d, 0x4d);
         let (mut root_markers, mut other_markers) = (0, 0);
 
@@ -2209,19 +2466,13 @@ mod tests {
             kind: ScaleKind::Ionian,
         };
 
-        let markers = scale_markers(e_ionian);
+        let markers = scale_markers(e_ionian, Notation::Notes);
         let open_low_e = markers
             .iter()
             .find(|m| m.string == 0 && m.fret == 0)
             .expect("the open low E is in E Ionian");
 
-        assert_eq!(
-            open_low_e.note,
-            Note {
-                letter: Letter::E,
-                accidental: Accidental::Natural
-            }
-        );
+        assert_eq!(open_low_e.label, "E");
     }
 
     #[test]

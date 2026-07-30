@@ -2,12 +2,16 @@ use iced::alignment;
 use iced::widget::canvas::{self, Canvas, Fill, Frame, Path, Stroke, Text};
 use iced::{Color, Element, Length, Pixels, Point, Rectangle, Renderer, Theme};
 
-use crate::music::notes::Note;
-
+/// One dot on the neck: where it sits, what it says, and what colour it is.
+///
+/// `label` is text already decided rather than a `Note`, so this module draws
+/// circles and glyphs and knows nothing about music. What the text means — a note
+/// name, a scale degree — is the caller's business, and adding a third way to
+/// label a marker needs no change here.
 pub struct NoteMarker {
     pub string: usize, // 0 = low E, 5 = high e
     pub fret: usize,
-    pub note: Note,
+    pub label: String,
     pub color: Color,
 }
 
@@ -139,7 +143,10 @@ impl<Message> canvas::Program<Message> for Fretboard {
             );
 
             frame.fill_text(Text {
-                content: marker.note.to_string(),
+                // Cloned because `Text` owns its content and `draw` only borrows the
+                // marker — the same allocation per marker per frame that
+                // `note.to_string()` made here before.
+                content: marker.label.clone(),
                 position: Point::new(x, y),
                 color: Color::WHITE,
                 size: Pixels(note_radius * 1.1),
