@@ -58,6 +58,12 @@ pub struct App {
     /// a `Default` seed would have to be a constant, and an app that replays the
     /// same scales every launch is worse than no `Default` at all.
     rng: Rng,
+    /// Whether the help overlay is up.
+    ///
+    /// A flag rather than a `Screen`, so the screen underneath stays the active one. The
+    /// overlay lists *its* keys and reads them from `self.screen` directly, instead of
+    /// recovering them from the top of the navigation history.
+    help_open: bool,
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -82,6 +88,7 @@ pub enum Message {
     /// Carries the character rather than an action because `translate_key` has no screen
     /// to look it up against; `update` resolves it, and ignores the ones nothing claims.
     Accelerate(char),
+    ToggleHelp,
     FocusNext,
     FocusPrevious,
     FocusUp,
@@ -162,12 +169,22 @@ impl App {
             },
             focused: FocusTarget::HomeMenuItem(0),
             rng: Rng::from_clock(),
+            help_open: false,
         };
 
         (app, Task::none())
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        // The overlay is modal: while it is up, anything at all dismisses it and nothing
+        // else happens. Handling it here rather than per-message is what spares `GoBack`
+        // from having to mean two things, and stops an accelerator from firing blind
+        // behind a panel the user is still reading.
+        if self.help_open {
+            self.help_open = false;
+            return Task::none();
+        }
+
         match message {
             Message::Navigate(screen) => self.open(screen),
             Message::GoBack => self.go_back(),
@@ -180,6 +197,7 @@ impl App {
             Message::ToggleSpelling => self.toggle_spelling(),
             Message::RerollScale => self.reroll_scale(),
             Message::Accelerate(c) => self.accelerate(c),
+            Message::ToggleHelp => self.help_open = true,
             Message::FocusNext => self.cycle_focus(1),
             Message::FocusPrevious => self.cycle_focus(-1),
             Message::FocusUp => self.move_focus(Direction::Up),
@@ -314,7 +332,7 @@ impl App {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        match self.screen {
+        let screen = match self.screen {
             Screen::Home => ui_home(self.focused),
             Screen::ScaleTrainer => with_top_bar(
                 "Scale Trainer",
@@ -334,6 +352,12 @@ impl App {
                 true,
                 self.focused,
             ),
+        };
+
+        if self.help_open {
+            iced::widget::stack![screen, ui_help_overlay(&self.screen)].into()
+        } else {
+            screen
         }
     }
 
@@ -537,6 +561,13 @@ fn translate_key(key: keyboard::Key, modifiers: keyboard::Modifiers) -> Option<M
         keyboard::Key::Named(Named::ArrowDown) => Some(Message::FocusDown),
         keyboard::Key::Named(Named::ArrowLeft) => Some(Message::FocusLeft),
         keyboard::Key::Named(Named::ArrowRight) => Some(Message::FocusRight),
+        // Ahead of the general character arm below, which would otherwise bind `?` first
+        // and swallow it — the guard means the compiler cannot warn about the shadowing.
+        // `?` is listed here rather than in a screen's accelerators because it has to work
+        // everywhere, including on screens that declare none of their own.
+        keyboard::Key::Character("?") if !modifiers.intersects(COMMAND_MODIFIERS) => {
+            Some(Message::ToggleHelp)
+        }
         keyboard::Key::Character(c) if !modifiers.intersects(COMMAND_MODIFIERS) => character_key(c),
         _ => None,
     }
@@ -994,6 +1025,118 @@ fn scale_markers(scale: Scale) -> Vec<NoteMarker> {
     markers
 }
 
+/// The keys that mean the same thing on every screen.
+///
+/// Written out rather than derived from `translate_key`. These are structural and will not
+/// move, so the cost of them drifting is near zero — unlike the per-screen accelerators
+/// beneath them in the overlay, which grow with every feature and so are read from the same
+/// declaration that dispatches them.
+const NAVIGATION_KEYS: [(&str, &str); 5] = [
+    ("Tab   ⇧Tab", "next / previous"),
+    ("↑ ↓ ← →   k j h l", "move the focus ring"),
+    ("Enter   Space", "activate"),
+    ("Esc   ⌫", "back"),
+    ("?", "this list"),
+];
+
+/// The `?` overlay: a scrim over the live screen and a card of the keys that work on it.
+///
+/// Takes the screen rather than reading the history, so what it lists is always what is
+/// actually behind it. Nothing in here is focusable — it contributes no entry to
+/// `focus_grid`, which is why the focus system needs no notion of a modal layer.
+fn ui_help_overlay(screen: &Screen) -> Element<'static, Message> {
+    use iced::Length;
+    use iced::widget::{column, container, text};
+
+    let navigation = NAVIGATION_KEYS
+        .into_iter()
+        .map(|(keys, description)| (keys.to_string(), description));
+
+    let claimed = accelerators(screen);
+    let has_accelerators = !claimed.is_empty();
+    let screen_keys = claimed
+        .into_iter()
+        .map(|(key, _, label)| (key.to_string(), label));
+
+    let mut card = column![
+        text("Keys").size(26).color(INK),
+        help_section("Anywhere", navigation),
+    ]
+    .spacing(22);
+
+    card = card.push(if has_accelerators {
+        help_section("On this screen", screen_keys)
+    } else {
+        text("No shortcuts on this screen.")
+            .size(15)
+            .color(MUTE)
+            .into()
+    });
+
+    let panel = container(card)
+        .padding([28, 32])
+        .width(440)
+        .style(help_panel_container);
+
+    container(panel)
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .style(scrim_container)
+        .into()
+}
+
+/// One labelled group of key rows in the help overlay.
+fn help_section(
+    title: &'static str,
+    rows: impl Iterator<Item = (String, &'static str)>,
+) -> Element<'static, Message> {
+    use iced::widget::{column, container, row, text};
+
+    let entries = column(rows.map(|(keys, description)| {
+        row![
+            container(text(keys).size(15).color(INK)).width(150),
+            text(description).size(15).color(BODY),
+        ]
+        .spacing(14)
+        .into()
+    }))
+    .spacing(9);
+
+    column![text(title).size(13).color(MUTE), entries]
+        .spacing(11)
+        .into()
+}
+
+/// The help card itself: `card_container`'s shape and chrome on the next surface up.
+///
+/// Cards on the screen behind already sit on `CANVAS_SOFT`, so reusing that here would put
+/// the panel at the same tone as what it floats over and leave the scrim doing all the
+/// separating. `CANVAS_SOFT_2` is the tone `DESIGN.md` assigns to menus and other surfaces
+/// that float above cards, which is what this is.
+///
+/// The shadow stays a single drop because `container::Style` holds one `Shadow`; the
+/// document's Level 5 modal treatment stacks three, which iced cannot express — a limit
+/// every card in the app already lives with.
+fn help_panel_container(theme: &iced::Theme) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        background: Some(Background::Color(CANVAS_SOFT_2)),
+        ..card_container(theme)
+    }
+}
+
+/// The dimming layer behind the help card. Opaque enough to push the screen back without
+/// hiding it, so the overlay reads as covering the page rather than replacing it.
+fn scrim_container(_theme: &iced::Theme) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        text_color: Some(INK),
+        background: Some(Background::Color(Color { a: 0.86, ..CANVAS })),
+        border: Border::default(),
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
 fn ui_placeholder(label: &str) -> Element<'_, Message> {
     use iced::Length;
     use iced::widget::{column, container, text};
@@ -1721,6 +1864,83 @@ mod tests {
                 "{key} did not reset focus"
             );
         }
+    }
+
+    /// Shift is how `?` is typed. Were it filtered out the way Cmd, Ctrl, and Alt are, the
+    /// overlay would be unreachable on most keyboards.
+    #[test]
+    fn the_help_key_survives_its_own_shift() {
+        assert!(matches!(
+            press("?", keyboard::Modifiers::SHIFT),
+            Some(Message::ToggleHelp)
+        ));
+    }
+
+    #[test]
+    fn help_opens_on_every_screen() {
+        for screen in every_screen() {
+            let mut app = app_with_seed(0x8e19);
+            app.navigate_to(screen);
+
+            press_into(&mut app, "?", keyboard::Modifiers::SHIFT);
+
+            assert!(app.help_open, "{:?} would not open help", app.screen);
+        }
+    }
+
+    #[test]
+    fn any_key_dismisses_help_and_does_nothing_else() {
+        for key in ["?", "x", "j", "r", "1"] {
+            let mut app = app_with_seed(0xd1551);
+            app.navigate_to(Screen::ScaleTrainer);
+            app.focused = FocusTarget::ScaleKind(1);
+            app.help_open = true;
+
+            let before = snapshot(&app);
+            press_into(&mut app, key, keyboard::Modifiers::SHIFT);
+
+            assert!(!app.help_open, "{key} left help open");
+            assert_eq!(snapshot(&app), before, "{key} did more than dismiss");
+        }
+    }
+
+    #[test]
+    fn back_navigation_is_consumed_by_an_open_overlay() {
+        for named in [Named::Escape, Named::Backspace] {
+            let mut app = app_with_seed(0xbac4);
+            app.navigate_to(Screen::ScaleTrainer);
+            app.help_open = true;
+
+            let message = translate_key(keyboard::Key::Named(named), keyboard::Modifiers::empty())
+                .expect("named key is bound");
+            let _ = app.update(message);
+
+            assert!(!app.help_open, "{named:?} left help open");
+            assert_eq!(app.screen, Screen::ScaleTrainer, "{named:?} navigated away");
+        }
+    }
+
+    /// The overlay is a layer, not a screen: it contributes nothing focusable, so opening
+    /// and dismissing it must leave the focus ring exactly where it was.
+    #[test]
+    fn help_preserves_focus_and_adds_no_targets() {
+        let mut app = app_with_seed(0x0fc5);
+        app.navigate_to(Screen::ScaleTrainer);
+        app.focused = FocusTarget::Root(4);
+
+        let reachable = focusables(&Screen::ScaleTrainer);
+
+        press_into(&mut app, "?", keyboard::Modifiers::SHIFT);
+        assert_eq!(
+            focusables(&app.screen),
+            reachable,
+            "help added focus targets"
+        );
+
+        press_into(&mut app, "?", keyboard::Modifiers::SHIFT);
+
+        assert!(!app.help_open);
+        assert_eq!(app.focused, FocusTarget::Root(4));
     }
 
     #[test]
