@@ -113,7 +113,37 @@ enum Direction {
 /// keeps the columns of neighbouring cards aligned.
 type FocusRow = Vec<Option<FocusTarget>>;
 
-const HOME_MENU_ITEMS: usize = 3;
+/// One entry of the Home screen's menu.
+struct MenuItem {
+    label: &'static str,
+    caption: &'static str,
+    screen: Screen,
+}
+
+/// The Home menu, in the order it is drawn.
+///
+/// The buttons, the focus grid's item count, and the digit accelerators are all built from
+/// this, so a trainer added here gains all three at once and cannot end up with a button
+/// but no key, or a key labelled with the wrong name.
+const HOME_MENU: [MenuItem; 3] = [
+    MenuItem {
+        label: "Scale Trainer",
+        caption: "Explore and learn guitar scales",
+        screen: Screen::ScaleTrainer,
+    },
+    MenuItem {
+        label: "Note Trainer",
+        caption: "Build fretboard recall one pitch at a time",
+        screen: Screen::NoteTrainer,
+    },
+    MenuItem {
+        label: "Interval Trainer",
+        caption: "Recognize distances from a tonal center",
+        screen: Screen::IntervalTrainer,
+    },
+];
+
+const HOME_MENU_ITEMS: usize = HOME_MENU.len();
 
 /// Row shapes of the two selector grids on the scale trainer. Both the views and
 /// the focus grid are built from these, so the two cannot drift out of sync.
@@ -139,11 +169,7 @@ impl App {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Navigate(Screen::ScaleTrainer) => {
-                self.navigate_to(Screen::ScaleTrainer);
-                self.reroll_scale();
-            }
-            Message::Navigate(screen) => self.navigate_to(screen),
+            Message::Navigate(screen) => self.open(screen),
             Message::GoBack => self.go_back(),
             Message::SelectRoot(root) => {
                 self.scale.root = root;
@@ -163,6 +189,21 @@ impl App {
             Message::ActivateFocused => self.activate_focused(),
         }
         Task::none()
+    }
+
+    /// Opens a screen from anywhere — a click, a Tab-and-Enter, or a digit accelerator.
+    ///
+    /// Entering the scale trainer draws a fresh scale, so it never reopens on the one it
+    /// last showed. That rule lives here rather than at each entry point, which is what
+    /// keeps the menu button and the accelerator from drifting apart.
+    fn open(&mut self, screen: Screen) {
+        let wants_fresh_scale = screen == Screen::ScaleTrainer;
+
+        self.navigate_to(screen);
+
+        if wants_fresh_scale {
+            self.reroll_scale();
+        }
     }
 
     fn navigate_to(&mut self, screen: Screen) {
@@ -251,13 +292,11 @@ impl App {
     /// the action itself causes — navigating resets focus exactly as a click would.
     fn activate(&mut self, target: FocusTarget) {
         match target {
-            FocusTarget::HomeMenuItem(0) => {
-                self.navigate_to(Screen::ScaleTrainer);
-                self.reroll_scale();
+            FocusTarget::HomeMenuItem(index) => {
+                if let Some(item) = HOME_MENU.get(index) {
+                    self.open(item.screen.clone());
+                }
             }
-            FocusTarget::HomeMenuItem(1) => self.navigate_to(Screen::NoteTrainer),
-            FocusTarget::HomeMenuItem(2) => self.navigate_to(Screen::IntervalTrainer),
-            FocusTarget::HomeMenuItem(_) => {}
             FocusTarget::Back => self.go_back(),
             FocusTarget::SpellingToggle => self.toggle_spelling(),
             FocusTarget::RerollScale => self.reroll_scale(),
@@ -541,7 +580,16 @@ type Accelerator = (char, FocusTarget, &'static str);
 /// what keeps `r` from rerolling an invisible scale from the Home menu.
 fn accelerators(screen: &Screen) -> Vec<Accelerator> {
     match screen {
-        Screen::Home => Vec::new(),
+        // Numbered by position, so the menu order is the key order. `from_digit` runs out
+        // after nine, which is the point at which a menu needs more than digits anyway.
+        Screen::Home => HOME_MENU
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| {
+                let key = char::from_digit(index as u32 + 1, 10)?;
+                Some((key, FocusTarget::HomeMenuItem(index), item.label))
+            })
+            .collect(),
         Screen::ScaleTrainer => vec![('r', FocusTarget::RerollScale, "new scale")],
         Screen::NoteTrainer | Screen::IntervalTrainer => Vec::new(),
     }
@@ -609,26 +657,13 @@ fn ui_home(focused: FocusTarget) -> Element<'static, Message> {
     use iced::Length;
     use iced::widget::{column, container, row, text};
 
-    let menu = column![
+    let menu = column(HOME_MENU.iter().enumerate().map(|(index, item)| {
         focus_ring(
-            trainer_button("Scale Trainer", "Explore and learn guitar scales")
-                .on_press(Message::Navigate(Screen::ScaleTrainer)),
-            focused == FocusTarget::HomeMenuItem(0),
-        ),
-        focus_ring(
-            trainer_button("Note Trainer", "Build fretboard recall one pitch at a time")
-                .on_press(Message::Navigate(Screen::NoteTrainer)),
-            focused == FocusTarget::HomeMenuItem(1),
-        ),
-        focus_ring(
-            trainer_button(
-                "Interval Trainer",
-                "Recognize distances from a tonal center"
-            )
-            .on_press(Message::Navigate(Screen::IntervalTrainer)),
-            focused == FocusTarget::HomeMenuItem(2),
-        ),
-    ]
+            trainer_button(item.label, item.caption)
+                .on_press(Message::Navigate(item.screen.clone())),
+            focused == FocusTarget::HomeMenuItem(index),
+        )
+    }))
     .spacing(12);
 
     let hero = column![
@@ -1595,6 +1630,29 @@ mod tests {
         }
     }
 
+    /// Sharper than comparing snapshots: if `r` on Home reached the reroll at all it would
+    /// consume draws, so an identically seeded app that never pressed it would diverge.
+    /// Equal scales here mean the key did not touch the generator, let alone the scale.
+    #[test]
+    fn r_outside_the_scale_trainer_does_not_even_advance_the_rng() {
+        let mut pressed = app_with_seed(0x1de17);
+        let mut untouched = app_with_seed(0x1de17);
+
+        for _ in 0..10 {
+            press_into(&mut pressed, "r", keyboard::Modifiers::empty());
+        }
+
+        pressed.open(Screen::ScaleTrainer);
+        untouched.open(Screen::ScaleTrainer);
+
+        assert_eq!(
+            (pressed.scale.root, pressed.scale.kind),
+            (untouched.scale.root, untouched.scale.kind),
+            "r on Home disturbed the scale stream"
+        );
+    }
+
+    /// An accelerator fires its target without walking the ring onto it, so an action that
     /// stays on the screen must leave focus exactly where the user left it.
     #[test]
     fn an_in_screen_accelerator_leaves_focus_alone() {
@@ -1620,6 +1678,48 @@ mod tests {
                     "{screen:?} binds {key:?} ({label}) to {target:?}, which is not on it"
                 );
             }
+        }
+    }
+
+    /// A trainer added to `HOME_MENU` must arrive with its digit already attached. Without
+    /// this, a fourth entry would silently be the only one you cannot reach by number.
+    #[test]
+    fn every_home_menu_item_has_a_digit_accelerator() {
+        let bound = accelerators(&Screen::Home);
+
+        assert_eq!(bound.len(), HOME_MENU.len());
+
+        for (index, item) in HOME_MENU.iter().enumerate() {
+            let expected = char::from_digit(index as u32 + 1, 10).expect("menu fits in digits");
+
+            assert_eq!(
+                bound[index],
+                (expected, FocusTarget::HomeMenuItem(index), item.label),
+                "menu item {index} ({}) is misnumbered or mislabelled",
+                item.label
+            );
+        }
+    }
+
+    /// The counterpart to `an_in_screen_accelerator_leaves_focus_alone`: when the action
+    /// navigates, focus does move — because navigating moves it, not because the
+    /// accelerator did. This distinction only became visible once Home had keys.
+    #[test]
+    fn a_navigating_accelerator_resets_focus_on_the_new_screen() {
+        for (index, item) in HOME_MENU.iter().enumerate() {
+            let key = char::from_digit(index as u32 + 1, 10).expect("menu fits in digits");
+
+            let mut app = app_with_seed(0x6070);
+            app.focused = FocusTarget::HomeMenuItem(HOME_MENU.len() - 1);
+
+            press_into(&mut app, &key.to_string(), keyboard::Modifiers::empty());
+
+            assert_eq!(app.screen, item.screen, "{key} opened the wrong screen");
+            assert_eq!(
+                app.focused,
+                focusables(&item.screen)[0],
+                "{key} did not reset focus"
+            );
         }
     }
 
