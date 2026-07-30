@@ -10,7 +10,8 @@
 //! TODO: the diatonic chords of a `ScaleKind` — the seven chords of Ionian, the
 //!       major V chord of Harmonic Minor that makes it useful, and so on.
 //!
-//! Naming a chord correctly runs into the same limitation as the `spell` TODO in
-//! `scales`: `Interval` is a pitch-class distance, so it cannot tell an
-//! augmented fourth from a diminished fifth — and a chord's quality depends on
-//! exactly that distinction.
+//! Naming a chord correctly needs exactly what `Interval` now carries: a degree
+//! number, not just a pitch-class distance. `AugmentedFourth` and
+//! `DiminishedFifth` are the same six semitones but different degrees — 4 versus
+//! 5 — and a chord's quality reads straight off degree numbers like that one, the
+//! same way scale degrees already do in `scales`.

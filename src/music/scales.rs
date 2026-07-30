@@ -38,10 +38,22 @@ impl Scale {
     /// accidental is whatever the arithmetic then demands. No lookup tables, no
     /// sharp-or-flat heuristic, no key signatures.
     ///
-    /// Total rather than fallible. Storing a `PitchClass` and a `Spelling` means
-    /// only 24 root combinations exist and every one carries at most one
-    /// accidental, which bounds every degree within ±2 — see
-    /// `every_scale_spells_without_failing`.
+    /// Total rather than fallible, which takes more than "only 24 roots exist" to
+    /// justify — the root's accidental is only one of three ±1 terms that sum
+    /// into a degree's offset. The other two: the degree's own alteration (±1),
+    /// and how far that letter's natural distance sits from the major scale's
+    /// distance for that degree (±1 again) — naively ±3 in total, except the
+    /// extremes cannot align. That third term is +1 exactly where a natural
+    /// root's major scale sharpens the degree and −1 exactly where it flattens
+    /// one, and the only flat any natural root's major scale needs is F major's
+    /// B♭ on degree 4 — which is also the only degree these formulas ever
+    /// sharpen (`AugmentedFourth`) and one they never flatten. So a +1 alteration
+    /// can only ever meet a third term of 0 or −1, and a −1 alteration can only
+    /// meet 0 or +1 — either way the sum stays within ±2. See
+    /// `every_scale_spells_without_failing`, which pins this by exhaustion across
+    /// all 384 reachable scales rather than leaving the argument in prose alone,
+    /// and `docs/superpowers/specs/2026-07-30-note-spelling-design.md`'s "Why
+    /// double accidentals are enough" for the full derivation.
     pub fn notes(self) -> Vec<Note> {
         let root = self.root_note();
 
@@ -352,6 +364,16 @@ impl ScaleKind {
                 Interval::MinorSixth,
                 Interval::MinorSeventh,
             ],
+            // Looks like an oversight — the textbook formula is 1 2 3 ♯4 ♯5 ♯6,
+            // which this is not — but it is deliberate. `AugmentedFifth` and
+            // `AugmentedSixth` do not exist among `Interval`'s thirteen variants,
+            // and per `Interval::ALL`'s doc comment, `AugmentedSixth` would push
+            // an `A♯` root past the ±2 bound `notes()`'s `expect` relies on. So
+            // `MinorSixth`/`MinorSeventh` is also the choice that keeps spelling
+            // total. It also matches this branch's deleted `intervalic()` string
+            // for Whole Tone, `"1 2 3 ♯4 ♭6 ♭7"` — before this branch the card
+            // read ♭6 while the fretboard rendered G♯, so this is a consistency
+            // fix as well as a load-bearing one.
             ScaleKind::WholeTone => &[
                 Interval::Unison,
                 Interval::MajorSecond,

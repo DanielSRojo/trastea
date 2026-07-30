@@ -726,6 +726,13 @@ fn ui_scale_trainer(scale: Scale, focused: FocusTarget) -> Element<'static, Mess
         .into()
 }
 
+/// Each button names a *candidate* root via `scale.spelling.spell`, not a member
+/// of the current scale via `Scale::spell` — so under `Spelling::Sharps` with
+/// `F Ionian` on screen, this row's button for pitch class 10 reads `A♯` while
+/// the fretboard (which goes through `Scale::spell`) shows `Bb` for the very
+/// same pitch. That mismatch is intentional, not a bug: before a root is
+/// clicked there is no scale to spell it in, only the bare toggle, and there is
+/// no better answer without threading per-button context through every cell.
 fn root_note_row(
     pitch_classes: &[PitchClass],
     scale: Scale,

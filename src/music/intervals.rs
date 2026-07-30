@@ -21,7 +21,15 @@ impl Interval {
     /// A slice with a tripwire test, unlike `PitchClass::ALL`: this set does
     /// grow. Thirteen is what the sixteen scale kinds need — no augmented second,
     /// no diminished seventh. Add one when a scale wants it, and the compiler
-    /// will point at every `match` that needs a new arm.
+    /// will point at every `match` that needs a new arm — for `number()` and
+    /// `alteration()`, both exhaustive. It will *not* point at `Scale::notes`'s
+    /// `expect`, and the ±2 bound that `expect` relies on is not closed under
+    /// arbitrary additions: degree 4 is the only degree these formulas sharpen,
+    /// so a sharpened sixth (`AugmentedSixth`, the whole-tone scale's textbook
+    /// ♯6) or a doubly-flattened fourth (a diminished fourth, as in
+    /// double-harmonic spellings) would push some reachable root past ±2 and
+    /// trip that `expect`. `AugmentedSecond` and `DiminishedSeventh` — the two
+    /// additions most likely to be wanted next — are both safe.
     pub const ALL: &'static [Interval] = &[
         Interval::Unison,
         Interval::MinorSecond,
@@ -90,8 +98,10 @@ impl Interval {
     /// Nothing in the app calls this yet — the interval trainer is still a
     /// placeholder. It is kept because it is the one function whose meaning gets
     /// sharper under spelling, and `expect` rather than `allow` so that the day a
-    /// caller appears, the stale attribute is a compile error rather than a
-    /// silent leftover.
+    /// caller appears, the stale attribute is a warning rather than a silent
+    /// leftover — this project has no `[lints]` table and nothing promotes
+    /// `unfulfilled_lint_expectations` above warn, but the zero-warning build is
+    /// enforced all the same, so a real caller landing here still gets caught.
     ///
     /// `cfg_attr(not(test), ...)`, not a bare `#[expect]`, because this module's
     /// own tests call `between` directly: under a test build the function is no
