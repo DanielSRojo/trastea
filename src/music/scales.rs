@@ -593,6 +593,17 @@ mod tests {
                         kind.name()
                     );
 
+                    // The two spelling paths — the 12-arm Spelling::spell table
+                    // for a bare pitch class, and this letter-walking algorithm
+                    // for a scale degree — must name the same note for the root.
+                    assert_eq!(
+                        notes[0],
+                        scale.root_note(),
+                        "{} {} disagrees with root_note() on its own root",
+                        scale.root_note(),
+                        kind.name()
+                    );
+
                     let mut pitch_classes: Vec<u8> = notes
                         .iter()
                         .map(|note| note.pitch_class().semitone())

@@ -1014,6 +1014,7 @@ fn selected_root_button(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::music::notes::Letter;
     use std::collections::HashSet;
 
     /// An app whose scale rolls are reproducible.
@@ -1448,6 +1449,174 @@ mod tests {
         assert_eq!(
             step_focus_2d(&grid, FocusTarget::Back, Direction::Down),
             FocusTarget::HomeMenuItem(0)
+        );
+    }
+
+    /// Every marker's pitch class, derived independently of `scale.spell` by
+    /// transposing the open string — the same computation `scale_markers` itself
+    /// does, kept separate here so a test failure means the marker disagrees
+    /// with the tuning, not with itself.
+    fn marker_pitch_class(marker: &NoteMarker) -> PitchClass {
+        STANDARD_TUNING[marker.string].transpose(marker.fret as u8)
+    }
+
+    #[test]
+    fn f_ionian_names_pitch_class_ten_b_flat_not_a_sharp() {
+        // The branch's headline claim, asserted where it reaches the screen:
+        // F Ionian's fourth degree is B♭, not the semitone-only A♯ the old code
+        // produced. `Spelling::Sharps` is exactly the setting that used to expose
+        // the bug, since a naive sharps-only spelling would pick A♯ here.
+        let scale = Scale {
+            root: PitchClass::new(5),
+            spelling: Spelling::Sharps,
+            kind: ScaleKind::Ionian,
+        };
+
+        let markers = scale_markers(scale);
+        let mut checked = 0;
+
+        for marker in &markers {
+            if marker_pitch_class(marker).semitone() == 10 {
+                assert_eq!(marker.note.letter, Letter::B, "{:?}", marker.note);
+                assert_eq!(
+                    marker.note.accidental,
+                    Accidental::Flat,
+                    "{:?}",
+                    marker.note
+                );
+                checked += 1;
+            }
+        }
+
+        assert!(
+            checked > 0,
+            "F Ionian on standard tuning never reaches pitch class 10"
+        );
+    }
+
+    #[test]
+    fn toggling_spelling_moves_no_marker_but_relabels_at_least_one() {
+        // Automates the manual checklist item: the ♯/♭ toggle renames notes, it
+        // does not redraw the fretboard. Membership is a pitch-class fact and
+        // does not depend on Spelling, so both marker lists cover the same
+        // string/fret cells in the same order — which is what lets them be
+        // zipped positionally below instead of just compared as sets.
+        //
+        // The root must be a non-natural pitch class: F Ionian's B♭ is spelled
+        // the same either way (letter-walked from a root whose own letter, F,
+        // does not change), so it would not exercise the toggle at all. A root
+        // like C♯/D♭ relabels every degree, since the root's own letter differs
+        // between spellings.
+        let sharps = Scale {
+            root: PitchClass::new(1),
+            spelling: Spelling::Sharps,
+            kind: ScaleKind::Ionian,
+        };
+        let flats = Scale {
+            spelling: Spelling::Flats,
+            ..sharps
+        };
+
+        let sharp_markers = scale_markers(sharps);
+        let flat_markers = scale_markers(flats);
+
+        let positions = |markers: &[NoteMarker]| -> HashSet<(usize, usize)> {
+            markers.iter().map(|m| (m.string, m.fret)).collect()
+        };
+        assert_eq!(
+            positions(&sharp_markers),
+            positions(&flat_markers),
+            "toggling spelling moved a marker"
+        );
+
+        assert_eq!(sharp_markers.len(), flat_markers.len());
+        let relabelled = sharp_markers
+            .iter()
+            .zip(&flat_markers)
+            .any(|(sharp, flat)| sharp.note != flat.note);
+        assert!(relabelled, "no marker's label changed under the toggle");
+    }
+
+    #[test]
+    fn root_highlighting_keys_on_pitch_class_not_on_note() {
+        // Pins the exact predicate `scale_markers` highlights on: pitch-class
+        // equality against `scale.root`, independently recomputed here rather
+        // than trusted from `marker.note`. Swapping the source line to
+        // `marker.note == scale.root_note()` happens to color identically today
+        // — every note in one scale's `notes()` has a distinct pitch class, and
+        // `every_scale_spells_without_failing` now pins `notes()[0] ==
+        // root_note()` (Fix 5 in scales.rs) — but that equivalence depends on
+        // both of those holding elsewhere. Keying on `PitchClass` directly, as
+        // this test requires, stays correct even if either invariant is ever
+        // broken by an unrelated change; keying on `Note` would not.
+        let scale = Scale {
+            root: PitchClass::new(5),
+            spelling: Spelling::Sharps,
+            kind: ScaleKind::Ionian,
+        };
+
+        let markers = scale_markers(scale);
+        let root_color = Color::from_rgb8(0xff, 0x4d, 0x4d);
+        let (mut root_markers, mut other_markers) = (0, 0);
+
+        for marker in &markers {
+            if marker_pitch_class(marker) == scale.root {
+                assert_eq!(marker.color, root_color, "root marker not highlighted");
+                root_markers += 1;
+            } else {
+                assert_eq!(marker.color, LINK, "non-root marker not LINK");
+                other_markers += 1;
+            }
+        }
+
+        assert!(root_markers > 0, "the root never appears on this tuning");
+        assert!(other_markers > 0, "every marker was treated as the root");
+    }
+
+    #[test]
+    fn standard_tuning_low_open_string_is_e_natural() {
+        // Pins STANDARD_TUNING itself: E A D G B E low to high, pitch classes
+        // 4 9 2 7 11 4. Nothing else asserts this constant directly.
+        let e_ionian = Scale {
+            root: PitchClass::new(4),
+            spelling: Spelling::Sharps,
+            kind: ScaleKind::Ionian,
+        };
+
+        let markers = scale_markers(e_ionian);
+        let open_low_e = markers
+            .iter()
+            .find(|m| m.string == 0 && m.fret == 0)
+            .expect("the open low E is in E Ionian");
+
+        assert_eq!(
+            open_low_e.note,
+            Note {
+                letter: Letter::E,
+                accidental: Accidental::Natural
+            }
+        );
+    }
+
+    #[test]
+    fn interval_token_renders_blues_with_the_smufl_flat_and_naturals_bare() {
+        let tokens: Vec<(Option<char>, u8)> = ScaleKind::Blues
+            .intervals()
+            .iter()
+            .map(|&interval| interval_token(interval))
+            .collect();
+
+        // 1 ♭3 4 ♭5 5 ♭7
+        assert_eq!(
+            tokens,
+            vec![
+                (None, 1),
+                (Some(SMUFL_FLAT), 3),
+                (None, 4),
+                (Some(SMUFL_FLAT), 5),
+                (None, 5),
+                (Some(SMUFL_FLAT), 7),
+            ]
         );
     }
 }
