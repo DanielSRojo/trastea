@@ -28,6 +28,22 @@ impl PitchClass {
         PitchClass::new(11),
     ];
 
+    /// The seven pitch classes a letter names without an accidental — the white keys.
+    ///
+    /// Pitch classes rather than [`Letter`]s, because the callers that want this want to
+    /// draw one at random and compare it to what is under a fret, and a letter would have
+    /// to be converted at every such use. `Letter::ALL` stays private for the reason its
+    /// own comment gives.
+    pub const NATURALS: [PitchClass; 7] = [
+        PitchClass::new(0),  // C
+        PitchClass::new(2),  // D
+        PitchClass::new(4),  // E
+        PitchClass::new(5),  // F
+        PitchClass::new(7),  // G
+        PitchClass::new(9),  // A
+        PitchClass::new(11), // B
+    ];
+
     pub const fn new(semitone: u8) -> PitchClass {
         PitchClass(semitone % 12)
     }
@@ -230,6 +246,30 @@ mod tests {
             assert_eq!(pitch_class, PitchClass::new(pitch_class.semitone()));
         }
     }
+
+    /// Built from the letters rather than trusting the literal semitones, so a typo in
+    /// `NATURALS` fails here instead of quietly drilling the wrong notes.
+    #[test]
+    fn the_naturals_are_exactly_what_the_letters_spell() {
+        let from_letters: Vec<PitchClass> = [
+            Letter::C,
+            Letter::D,
+            Letter::E,
+            Letter::F,
+            Letter::G,
+            Letter::A,
+            Letter::B,
+        ]
+        .into_iter()
+        .map(|letter| PitchClass::new(letter.natural_semitone()))
+        .collect();
+
+        assert_eq!(PitchClass::NATURALS.to_vec(), from_letters);
+    }
+
+    // No test that the naturals spell without an accidental under both spellings, nor
+    // that five accidentals are left over: both follow from the assertion above pinning
+    // `NATURALS` to the letters, combined with `the_naturals_agree_under_both_spellings`.
 
     #[test]
     fn transpose_test() {
