@@ -792,9 +792,12 @@ fn ui_scale_trainer(
     use iced::Length;
     use iced::widget::{Space, button, column, container, row, text};
 
+    // Display only: no press handler and no cursor, so the neck stays the picture it has
+    // always been here. `Message` is inferred from the `Element` this becomes.
     let fb = Fretboard {
         num_frets: 12,
         highlighted: scale_markers(scale, notation),
+        ..Fretboard::default()
     };
 
     let current_scale_card = container(
