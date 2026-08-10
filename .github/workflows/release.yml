@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Required for creating a release
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Fails the release before anything is built, so a bad tag never produces
+  # half a release that has to be deleted by hand.
+  guard:
+    name: Verify tag and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Tag must match the Cargo.toml version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate="$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[0].version')"
+          if [ "$tag" != "$crate" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} implies version ${tag}, but Cargo.toml says ${crate}"
+            exit 1
+          fi
+          echo "tag and Cargo.toml agree on ${crate}"
+
+      - name: Test
+        run: cargo test
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Build every target to show all problems on a single run
+      fail-fast: false
+      matrix:
+        include:
+          - name: x86_64-linux
+            os: ubuntu-latest
+          - name: aarch64-macos
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release
+
+      # Fonts are included in the binary. No other asset required
+      - name: Package tarball
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          mkdir -p dist
+          tar -czf "dist/trastea-${GITHUB_REF_NAME}-${{ matrix.name }}.tar.gz" \
+            -C target/release trastea
+
+      - name: Package .app bundle
+        if: matrix.os == 'macos-latest'
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          app="Trastea.app"
+          mkdir -p "${app}/Contents/MacOS"
+          cp target/release/trastea "${app}/Contents/MacOS/trastea"
+
+          # NSHighResolutionCapable is not optional in practice: without it
+          # macOS runs the app scaled and it renders blurry on Retina.
+          cat > "${app}/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>Trastea</string>
+            <key>CFBundleDisplayName</key><string>Trastea</string>
+            <key>CFBundleIdentifier</key><string>io.github.danielsrojo.trastea</string>
+            <key>CFBundleExecutable</key><string>trastea</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleVersion</key><string>${version}</string>
+            <key>CFBundleShortVersionString</key><string>${version}</string>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+
+          plutil -lint "${app}/Contents/Info.plist"
+
+          # ditto, not zip: it preserves the executable bit and bundle
+          # metadata that macOS needs to launch the app.
+          mkdir -p dist
+          ditto -c -k --keepParent "${app}" \
+            "dist/trastea-${GITHUB_REF_NAME}-${{ matrix.name }}.zip"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  # Collecting every archive before publishing to avoid racing on the same tag
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum trastea-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
