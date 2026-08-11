@@ -1,5 +1,6 @@
 mod fretboard;
 use std::ops::Range;
+use std::time::Duration;
 
 use fretboard::{Fretboard, NoteMarker, fretboard};
 
@@ -29,6 +30,11 @@ const LINK: Color = Color::from_rgb8(0x50, 0xa7, 0xff);
 /// are the same literals `scale_markers` and `selected_root_button` already used inline.
 const DANGER: Color = Color::from_rgb8(0xff, 0x4d, 0x4d);
 const SUCCESS: Color = Color::from_rgb8(0x50, 0xe3, 0xc2);
+/// How long a correct answer stays lit before the next prompt replaces it.
+///
+/// Long enough to register as an answer being *marked* rather than as the screen
+/// flickering, and short enough that a learner on a run never waits on it.
+const ANSWER_FLASH: Duration = Duration::from_secs(1);
 const SUMMARY_CARD_HEIGHT: f32 = 212.0;
 const ROOT_SELECTOR_CARD_WIDTH: f32 = 320.0;
 const SELECTOR_CARD_HEIGHT: f32 = 324.0;
@@ -217,6 +223,13 @@ struct NoteTrainer {
     /// last wrong answer would un-mark the earlier ones, which reads as a bug rather than
     /// as feedback.
     wrong: Vec<Answer>,
+    /// The correct answer just given, held while it is lit on screen.
+    ///
+    /// `Some` is the paused state: the prompt stays put with its answer marked, and further
+    /// answers are ignored until `advance` retires it a second later. One `Option` rather
+    /// than a flag beside the answer, because "paused" and "which answer to mark" are the
+    /// same fact — a flag could be set with nothing to mark, and this cannot be.
+    correct: Option<Answer>,
     cursor: (usize, usize),
 }
 
@@ -239,6 +252,7 @@ impl NoteTrainer {
             streak: 0,
             best_streak: 0,
             wrong: Vec::new(),
+            correct: None,
             cursor: CURSOR_HOME,
         };
 
@@ -302,7 +316,11 @@ impl NoteTrainer {
             }
         }
 
+        // Both kinds of feedback belong to the prompt they were given against, so a new
+        // prompt arrives with a clean surface — and a skip or a toggle during the flash
+        // ends it, since every one of them comes through here.
         self.wrong.clear();
+        self.correct = None;
     }
 
     /// Judges by pitch class, so the two names of a black key are one answer.
@@ -323,19 +341,45 @@ impl NoteTrainer {
         }
     }
 
-    fn answer(&mut self, answer: Answer, rng: &mut Rng) {
+    /// Takes an answer, unless one is already being marked.
+    ///
+    /// The generator is still taken during the pause even though nothing is drawn then: it
+    /// is the same call either way, and a signature that changed with the state would push
+    /// the pause out to every caller.
+    fn answer(&mut self, answer: Answer, _rng: &mut Rng) {
+        // A correct answer is on screen, so the drill is not asking anything. Answers
+        // arriving now are the tail of the press that scored — a held key, a double
+        // click — and counting them would either inflate the streak or, worse, mark the
+        // learner wrong for a question they have already got right.
+        if self.correct.is_some() {
+            return;
+        }
+
         if self.judge(answer) {
             self.streak += 1;
             self.best_streak = self.best_streak.max(self.streak);
 
-            let drill = self.prompt.drill();
-            self.draw_prompt(drill, rng);
+            // The prompt is *not* replaced here. It stands, with this answer lit, until
+            // `advance` retires it — see `correct`.
+            self.correct = Some(answer);
         } else {
             // Deduplicated so hammering one wrong button cannot grow this without bound.
             if !self.wrong.contains(&answer) {
                 self.wrong.push(answer);
             }
             self.streak = 0;
+        }
+    }
+
+    /// Ends the flash a correct answer left on screen and draws the next prompt.
+    ///
+    /// A no-op when nothing is being marked, so a tick that outlived its flash — one that
+    /// crossed a skip, or landed after the screen was left — cannot retire a prompt the
+    /// learner is still reading.
+    fn advance(&mut self, rng: &mut Rng) {
+        if self.correct.is_some() {
+            let drill = self.prompt.drill();
+            self.draw_prompt(drill, rng);
         }
     }
 
@@ -424,6 +468,9 @@ pub enum Message {
     /// a tuple or an `Answer`.
     ChooseNotePosition(usize, usize),
     SkipPrompt,
+    /// The end of the flash a correct answer leaves on screen: retires the answered prompt
+    /// and draws the next one. Sent by the timer in `App::subscription`, never by a widget.
+    AdvancePrompt,
     ToggleDrillDirection,
     TogglePool,
     /// The Note Trainer's spelling, not the scale's — see `NoteTrainer::spelling`.
@@ -545,6 +592,14 @@ impl App {
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        // The flash timer is the clock talking, not the user, so it is handled ahead of the
+        // overlay: a tick that arrived while the help panel was up would otherwise be
+        // spent dismissing a panel the learner is still reading.
+        if matches!(message, Message::AdvancePrompt) {
+            self.note_trainer.advance(&mut self.rng);
+            return Task::none();
+        }
+
         // The overlay is modal: while it is up, anything at all dismisses it and nothing
         // else happens. Handling it here rather than per-message is what spares `GoBack`
         // from having to mean two things, and stops an accelerator from firing blind
@@ -580,6 +635,8 @@ impl App {
                     .answer(Answer::Position { string, fret }, &mut self.rng);
             }
             Message::SkipPrompt => self.note_trainer.skip(&mut self.rng),
+            // Handled above, before the help overlay gets a say.
+            Message::AdvancePrompt => {}
             Message::ToggleDrillDirection => self.note_trainer.toggle_direction(&mut self.rng),
             Message::TogglePool => self.note_trainer.toggle_pool(&mut self.rng),
             Message::ToggleNoteSpelling => self.note_trainer.toggle_spelling(),
@@ -794,7 +851,7 @@ impl App {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        keyboard::listen().filter_map(|event| {
+        let keys = keyboard::listen().filter_map(|event| {
             // `modified_key`, not `key`: iced reports `key` *without* modifiers applied, so
             // Shift+/ arrives there as `/` and `?` could never match. `modified_key` is the
             // character the user actually typed, which is also what makes Shift+R read as
@@ -808,7 +865,21 @@ impl App {
                 return None;
             };
             translate_key(modified_key, modifiers)
-        })
+        });
+
+        // The flash's timer, alive only while one is on screen. Starting the stream with
+        // the flash is what puts its first tick a second later; an always-on timer would
+        // land anywhere between nothing and a full second after the answer, which is the
+        // one thing a fixed pause must not do. It also keeps the app idle the rest of the
+        // time, since nothing else here ticks.
+        if self.note_trainer.correct.is_some() {
+            Subscription::batch([
+                keys,
+                iced::time::every(ANSWER_FLASH).map(|_| Message::AdvancePrompt),
+            ])
+        } else {
+            keys
+        }
     }
 }
 
@@ -1731,10 +1802,10 @@ fn ui_note_trainer(trainer: &NoteTrainer, focused: FocusTarget) -> Element<'stat
             ..Fretboard::default()
         },
         // Here the neck is the answer surface, so it takes a press handler and shows the
-        // cursor. Wrong guesses stay marked on it until the prompt advances.
+        // cursor. Guesses stay marked on it until the prompt advances.
         Prompt::FindIt(_) => Fretboard {
             num_frets: NECK_FRETS,
-            highlighted: wrong_position_markers(trainer),
+            highlighted: position_markers(trainer),
             cursor: Some(trainer.cursor),
             on_press: Some(Message::ChooseNotePosition),
         },
@@ -1797,33 +1868,43 @@ fn ui_note_trainer(trainer: &NoteTrainer, focused: FocusTarget) -> Element<'stat
         .into()
 }
 
-/// The wrong positions guessed against the current prompt, as markers on the neck.
+/// The positions guessed against the current prompt, as markers on the neck: the wrong ones
+/// in the danger colour, and the one that scored in the success colour.
+///
+/// The right answer comes last so it is drawn over the wrong ones, which matters only if a
+/// learner presses the same fret twice — and there the green is the newer news.
 ///
 /// Only `Answer::Position` guesses can appear on a neck; a `Name` guess belongs to the other
-/// direction and is filtered out rather than being an error, since `wrong` is cleared
+/// direction and is filtered out rather than being an error, since both lists are cleared
 /// whenever the prompt advances and the two can never mix in practice.
-fn wrong_position_markers(trainer: &NoteTrainer) -> Vec<NoteMarker> {
+fn position_markers(trainer: &NoteTrainer) -> Vec<NoteMarker> {
+    let marker = |answer: &Answer, color: Color| match *answer {
+        Answer::Position { string, fret } => Some(NoteMarker {
+            string,
+            fret,
+            label: String::new(),
+            color,
+        }),
+        Answer::Name(_) => None,
+    };
+
     trainer
         .wrong
         .iter()
-        .filter_map(|answer| match *answer {
-            Answer::Position { string, fret } => Some(NoteMarker {
-                string,
-                fret,
-                label: String::new(),
-                color: DANGER,
-            }),
-            Answer::Name(_) => None,
-        })
+        .filter_map(|answer| marker(answer, DANGER))
+        .chain(
+            trainer
+                .correct
+                .iter()
+                .filter_map(|answer| marker(answer, SUCCESS)),
+        )
         .collect()
 }
 
 /// The current run and the best of the session.
 ///
-/// The live streak is drawn in the theme's success colour, which is as close to
-/// acknowledging a correct answer as this screen can get: a correct answer replaces the
-/// prompt at once, so any per-answer flash would need the timer the design deferred. A
-/// standing streak says the same thing and keeps saying it.
+/// The live streak is drawn in the theme's success colour: the per-answer flash says a
+/// single answer was right and then goes, and a standing streak keeps saying it.
 fn streak_readout(trainer: &NoteTrainer) -> Element<'static, Message> {
     use iced::widget::{column, row, text};
 
@@ -1958,8 +2039,11 @@ fn note_answer_row(
         .iter()
         .enumerate()
         .fold(row![].spacing(20), |acc, (i, &pitch_class)| {
-            let was_wrong = trainer.wrong.contains(&Answer::Name(pitch_class));
-            let color = if was_wrong { CANVAS } else { INK };
+            let answer = Answer::Name(pitch_class);
+            let was_wrong = trainer.wrong.contains(&answer);
+            let was_right = trainer.correct == Some(answer);
+            // Both marked states fill the button, so both need ink that reads on a fill.
+            let color = if was_wrong || was_right { CANVAS } else { INK };
 
             let answer_button = button(
                 container(note_label(trainer.spelling.spell(pitch_class), 24, color))
@@ -1971,7 +2055,11 @@ fn note_answer_row(
             .width(Length::Fixed(ROOT_BUTTON_SIZE))
             .height(Length::Fixed(ROOT_BUTTON_SIZE))
             .padding(0)
-            .style(if was_wrong {
+            // Right beats wrong: they cannot both be this button under one prompt, but if
+            // that ever changes, the answer that scored is the one worth showing.
+            .style(if was_right {
+                correct_answer_button
+            } else if was_wrong {
                 wrong_answer_button
             } else {
                 ghost_button
@@ -2117,6 +2205,25 @@ fn wrong_answer_button(
         background: Some(Background::Color(DANGER)),
         text_color: CANVAS,
         border: Border::default().rounded(64).width(1).color(DANGER),
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
+
+/// The answer that scored, while it is lit.
+///
+/// The same filled shape as `wrong_answer_button` in the opposite colour, because the two
+/// say the same kind of thing about the same button and only differ in the verdict. Note it
+/// is `selected_root_button` to the pixel — kept separate anyway, since a scale trainer
+/// selection and a drill's verdict have no reason to move together.
+fn correct_answer_button(
+    _theme: &iced::Theme,
+    _status: iced::widget::button::Status,
+) -> iced::widget::button::Style {
+    iced::widget::button::Style {
+        background: Some(Background::Color(SUCCESS)),
+        text_color: CANVAS,
+        border: Border::default().rounded(64).width(1).color(SUCCESS),
         shadow: Shadow::default(),
         snap: true,
     }
@@ -3339,23 +3446,92 @@ mod tests {
         }
     }
 
+    /// Answers correctly and lets the flash run its course, which is what the timer does a
+    /// second later. Tests about the streak want the drill moving; the ones about the pause
+    /// itself call `answer` and stop there.
+    fn answer_and_advance(trainer: &mut NoteTrainer, rng: &mut Rng) {
+        let answer = correct_answer(trainer);
+        trainer.answer(answer, rng);
+        trainer.advance(rng);
+    }
+
     #[test]
     fn consecutive_correct_answers_raise_the_streak() {
         let (mut trainer, mut rng) = trainer_with_seed(3);
 
         for expected in 1..=3 {
-            let answer = correct_answer(&trainer);
-            trainer.answer(answer, &mut rng);
+            answer_and_advance(&mut trainer, &mut rng);
             assert_eq!(trainer.streak, expected);
         }
+    }
+
+    /// The pause: a correct answer marks itself and holds the prompt, and the drill takes
+    /// nothing else until the flash ends.
+    #[test]
+    fn a_correct_answer_is_marked_and_holds_the_prompt() {
+        let (mut trainer, mut rng) = trainer_with_seed(0xf1a5);
+
+        let standing = trainer.prompt;
+        let answer = correct_answer(&trainer);
+        trainer.answer(answer, &mut rng);
+
+        assert_eq!(trainer.correct, Some(answer), "the answer went unmarked");
+        assert_eq!(trainer.prompt, standing, "the prompt left before its flash");
+        assert_eq!(trainer.streak, 1);
+
+        // Nothing lands while it is up — not another correct press, and not a wrong one.
+        let wrong = wrong_answer(&trainer);
+        trainer.answer(wrong, &mut rng);
+        trainer.answer(answer, &mut rng);
+
+        assert_eq!((trainer.streak, trainer.prompt), (1, standing));
+        assert!(trainer.wrong.is_empty(), "a press during the flash counted");
+
+        trainer.advance(&mut rng);
+
+        assert_eq!(trainer.correct, None, "the flash outlived its prompt");
+        assert_ne!(trainer.prompt, standing, "the flash never ended");
+    }
+
+    /// The flash belongs to the prompt it was given against, so anything that retires that
+    /// prompt ends it — including the learner moving on before the second is up.
+    #[test]
+    fn moving_on_ends_the_flash_early() {
+        let (mut trainer, mut rng) = trainer_with_seed(0xea51);
+
+        for interrupt in [
+            NoteTrainer::skip as fn(&mut NoteTrainer, &mut Rng),
+            NoteTrainer::toggle_pool,
+            NoteTrainer::toggle_direction,
+            NoteTrainer::enter,
+        ] {
+            let answer = correct_answer(&trainer);
+            trainer.answer(answer, &mut rng);
+            assert!(trainer.correct.is_some());
+
+            interrupt(&mut trainer, &mut rng);
+            assert_eq!(trainer.correct, None, "a flash survived being interrupted");
+        }
+    }
+
+    /// A tick can outlive its flash — one that crossed a skip, or arrived after the screen
+    /// was left. It must not retire the prompt now on screen.
+    #[test]
+    fn advancing_without_a_flash_does_nothing() {
+        let (mut trainer, mut rng) = trainer_with_seed(0x71c4);
+
+        let standing = trainer.prompt;
+        trainer.advance(&mut rng);
+
+        assert_eq!(trainer.prompt, standing);
+        assert_eq!(trainer.streak, 0);
     }
 
     #[test]
     fn a_wrong_answer_zeroes_the_streak_and_keeps_the_prompt() {
         let (mut trainer, mut rng) = trainer_with_seed(11);
 
-        let answer = correct_answer(&trainer);
-        trainer.answer(answer, &mut rng);
+        answer_and_advance(&mut trainer, &mut rng);
         assert_eq!(trainer.streak, 1);
 
         let standing = trainer.prompt;
@@ -3401,7 +3577,12 @@ mod tests {
         trainer.answer(wrongs[0], &mut rng);
         assert_eq!(trainer.wrong.len(), before);
 
+        // The right answer joins them rather than clearing them: for as long as the flash
+        // is up, the learner can see what they tried and what it turned out to be.
         trainer.answer(Answer::Name(actual), &mut rng);
+        assert_eq!(trainer.wrong.len(), before);
+
+        trainer.advance(&mut rng);
         assert!(trainer.wrong.is_empty(), "feedback outlived its prompt");
     }
 
@@ -3410,8 +3591,7 @@ mod tests {
         let (mut trainer, mut rng) = trainer_with_seed(21);
 
         for _ in 0..5 {
-            let answer = correct_answer(&trainer);
-            trainer.answer(answer, &mut rng);
+            answer_and_advance(&mut trainer, &mut rng);
         }
         assert_eq!(trainer.best_streak, 5);
 
@@ -3549,8 +3729,7 @@ mod tests {
     fn toggling_the_spelling_changes_nothing_but_the_names() {
         let (mut trainer, mut rng) = trainer_with_seed(8);
 
-        let answer = correct_answer(&trainer);
-        trainer.answer(answer, &mut rng);
+        answer_and_advance(&mut trainer, &mut rng);
 
         let before = (trainer.prompt, trainer.streak, trainer.best_streak);
         trainer.toggle_spelling();
@@ -3638,6 +3817,9 @@ mod tests {
     /// Answers the current prompt correctly, through whichever message the view would send
     /// for the direction in play. Which surface answers is the prompt's business, not the
     /// caller's — the same reason `Prompt` carries the direction.
+    ///
+    /// The flash's timer message follows, standing in for the second the subscription
+    /// spends waiting, so the drill ends up where a learner would find it.
     fn answer_correctly(app: &mut App) {
         let message = match correct_answer(&app.note_trainer) {
             Answer::Name(pitch_class) => Message::AnswerNote(pitch_class),
@@ -3645,6 +3827,7 @@ mod tests {
         };
 
         let _ = app.update(message);
+        let _ = app.update(Message::AdvancePrompt);
     }
 
     #[test]
@@ -3851,7 +4034,68 @@ mod tests {
                 .wrong
                 .contains(&Answer::Position { string, fret })
         );
-        assert_eq!(wrong_position_markers(&app.note_trainer).len(), 1);
+        assert_eq!(position_markers(&app.note_trainer).len(), 1);
+    }
+
+    /// The other half of the neck's feedback: the position that scored is marked too, in
+    /// the success colour, for as long as the flash lasts.
+    #[test]
+    fn a_right_cursor_position_marks_the_neck_green() {
+        let mut app = find_it_app(0x9e);
+        app.focused = FocusTarget::Fretboard;
+
+        let Answer::Position { string, fret } = correct_answer(&app.note_trainer) else {
+            unreachable!("find_it_app guarantees the direction")
+        };
+        app.note_trainer.cursor = (string, fret);
+
+        press_named(&mut app, Named::Space);
+
+        let markers = position_markers(&app.note_trainer);
+        assert_eq!(markers.len(), 1);
+        assert_eq!((markers[0].string, markers[0].fret), (string, fret));
+        assert_eq!(markers[0].color, SUCCESS, "the right note is not green");
+
+        // ...and the neck is clean again once the flash ends.
+        let _ = app.update(Message::AdvancePrompt);
+        assert!(position_markers(&app.note_trainer).is_empty());
+    }
+
+    /// The *Name it* half of the same thing: the button that scored is filled in the success
+    /// colour, which is the state `note_answer_row` styles.
+    #[test]
+    fn a_right_answer_marks_its_button() {
+        let mut app = note_trainer_app(0xb17);
+
+        let Answer::Name(pitch_class) = correct_answer(&app.note_trainer) else {
+            unreachable!("the Note Trainer opens in Name it")
+        };
+
+        let _ = app.update(Message::AnswerNote(pitch_class));
+        assert_eq!(app.note_trainer.correct, Some(Answer::Name(pitch_class)));
+        let _ = app.view();
+
+        let _ = app.update(Message::AdvancePrompt);
+        assert_eq!(app.note_trainer.correct, None);
+    }
+
+    /// The flash's tick is the clock talking, not the user, so it must not be spent
+    /// dismissing the help overlay the way a keypress would be.
+    #[test]
+    fn the_flash_ends_behind_the_help_overlay() {
+        let mut app = note_trainer_app(0x4e19);
+
+        let standing = app.note_trainer.prompt;
+        let Answer::Name(pitch_class) = correct_answer(&app.note_trainer) else {
+            unreachable!()
+        };
+        let _ = app.update(Message::AnswerNote(pitch_class));
+
+        app.help_open = true;
+        let _ = app.update(Message::AdvancePrompt);
+
+        assert!(app.help_open, "the tick dismissed the overlay");
+        assert_ne!(app.note_trainer.prompt, standing, "the drill stalled");
     }
 
     /// A click reports through the fretboard's press handler, which is the same message the
@@ -3989,6 +4233,15 @@ mod tests {
             };
             let _ = app.update(message);
             assert!(!app.note_trainer.wrong.is_empty());
+            let _ = app.view();
+
+            // ...and then the right one, so the flash is drawn on both surfaces too.
+            let message = match correct_answer(&app.note_trainer) {
+                Answer::Name(pitch_class) => Message::AnswerNote(pitch_class),
+                Answer::Position { string, fret } => Message::ChooseNotePosition(string, fret),
+            };
+            let _ = app.update(message);
+            assert!(app.note_trainer.correct.is_some());
             let _ = app.view();
 
             let _ = app.update(Message::ToggleDrillDirection);

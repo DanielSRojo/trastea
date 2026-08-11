@@ -18,17 +18,19 @@ names and scale degrees; `r` rerolls a random scale.
 
 **Note Trainer** — a two-directional drill with a streak counter. *Name it* lights a
 position and asks which note it is; *Find it* names a note and asks you to click or walk
-the cursor to a position carrying it. `d` swaps the direction, `a` widens the pool from the
-seven naturals to all twelve pitch classes, `r` skips the current prompt.
+the cursor to a position carrying it. A right answer lights green and a wrong one red;
+the next prompt follows a second later. `d` swaps the direction, `a` widens the pool from
+the seven naturals to all twelve pitch classes, `r` skips the current prompt.
 
 ## Running
 
 ```sh
 cargo run          # launch the app
-cargo test         # 147 unit tests, no UI harness needed
+cargo test         # 153 unit tests, no UI harness needed
 ```
 
-Rust edition 2024. The only dependency is `iced` (with the `canvas` feature); the fonts
+Rust edition 2024. The only dependency is `iced` (with the `canvas` and `smol` features,
+the latter for the timer behind the Note Trainer's answer flash); the fonts
 under `assets/` are embedded into the binary at compile time.
 
 ## Keyboard model
