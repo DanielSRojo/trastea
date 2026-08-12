@@ -139,17 +139,36 @@ impl Layout {
     }
 }
 
-/// One dot on the neck: where it sits, what it says, and what colour it is.
+/// How a marker's circle is drawn — filled in, or an outline.
+///
+/// About drawing, not about meaning: it sits on the same line `color` and `label`
+/// already do. A caller decides that a question should look lighter than an answer;
+/// this only says which of the two shapes to put on the neck.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkerStyle {
+    Filled,
+    Outlined,
+}
+
+/// One dot on the neck: where it sits, what it says, what colour it is, and whether
+/// it is filled.
 ///
 /// `label` is text already decided rather than a `Note`, so this module draws
 /// circles and glyphs and knows nothing about music. What the text means — a note
 /// name, a scale degree — is the caller's business, and adding a third way to
 /// label a marker needs no change here.
+///
+/// There is deliberately no `Default`: `style` is required at every construction
+/// site, so a new marker has to say which shape it is rather than inheriting one.
+/// A marker that silently defaulted to filled is the exact bug the field exists to
+/// prevent — the Note Trainer's prompt spent a while being a filled dot that read
+/// as an answer already placed.
 pub struct NoteMarker {
     pub string: usize, // 0 = low E, 5 = high e
     pub fret: usize,
     pub label: String,
     pub color: Color,
+    pub style: MarkerStyle,
 }
 
 /// The neck, and optionally a way to press it.
@@ -275,8 +294,27 @@ impl<Message> canvas::Program<Message> for Fretboard<Message> {
 
         for marker in &self.highlighted {
             let center = layout.marker_center(marker.string, marker.fret);
+            let circle = Path::circle(center, note_radius);
 
-            frame.fill(&Path::circle(center, note_radius), Fill::from(marker.color));
+            match marker.style {
+                MarkerStyle::Filled => frame.fill(&circle, Fill::from(marker.color)),
+                // Stroked *on* the circle of `note_radius` rather than inside it. A
+                // stroke straddles its path, so the ring's outer edge lands half a
+                // width past that radius — a pixel and a bit, which no one can see, and
+                // which costs nothing because `position_at` slacks by `note_radius`
+                // either way. Insetting instead would mean the ring and the dot it
+                // replaces were different sizes.
+                //
+                // Wider than the cursor ring's 2.0: a prompt is the loudest thing on
+                // this screen and must not read as thinner than a focus ring. The two
+                // never share a neck — the *Name it* board passes no cursor, and
+                // nothing rings a marker in *Find it* — but a prompt that looked like a
+                // cursor would be a bad habit to start.
+                MarkerStyle::Outlined => frame.stroke(
+                    &circle,
+                    Stroke::default().with_color(marker.color).with_width(2.5),
+                ),
+            }
 
             frame.fill_text(Text {
                 // Cloned because `Text` owns its content and `draw` only borrows the

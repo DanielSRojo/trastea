@@ -11,7 +11,7 @@
 
 use iced::{Color, Element, Padding};
 
-use super::fretboard::{Fretboard, NoteMarker, fretboard};
+use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::{
     ANSWER_ROW_WIDTH, BODY, CANVAS, CURSOR_HOME, DANGER, Direction, FocusTarget, INK, LINK,
     MUSIC_FONT, MUTE, Message, NECK_FRETS, NECK_STRINGS, ROOT_BUTTON_SIZE, SELECTOR_CARD_HEIGHT,
@@ -399,16 +399,10 @@ pub(super) fn ui_note_trainer(
     use iced::widget::{Space, column, container, row, text};
 
     let neck = match trainer.prompt {
-        // The prompt itself: one dot, and deliberately unlabelled — a label would print the
-        // answer inside the question.
-        Prompt::NameIt { string, fret } => Fretboard {
+        // The prompt itself: one ring — see `prompt_marker`.
+        Prompt::NameIt { .. } => Fretboard {
             num_frets: NECK_FRETS,
-            highlighted: vec![NoteMarker {
-                string,
-                fret,
-                label: String::new(),
-                color: LINK,
-            }],
+            highlighted: prompt_marker(trainer),
             ..Fretboard::default()
         },
         // Here the neck is the answer surface, so it takes a press handler and shows the
@@ -478,8 +472,37 @@ pub(super) fn ui_note_trainer(
         .into()
 }
 
+/// The position the *Name it* prompt is asking about, as a marker on the neck — or nothing
+/// at all in *Find it*, where the prompt is a note name in the card and the neck is the
+/// answer surface.
+///
+/// An unfilled ring, and deliberately so. A fill is what this screen uses to say "you put
+/// this here": the guesses in `position_markers` are filled, and so are the scale trainer's
+/// dots. The prompt is the opposite — a question about a spot with nothing on it yet — and a
+/// solid dot read as an answer already placed.
+///
+/// Unlabelled for a separate reason: a label would print the answer inside the question.
+///
+/// A `Vec` rather than an `Option<NoteMarker>` so it drops straight into `highlighted`, and
+/// so a prompt that ever wants two marks needs no new signature.
+fn prompt_marker(trainer: &NoteTrainer) -> Vec<NoteMarker> {
+    match trainer.prompt {
+        Prompt::NameIt { string, fret } => vec![NoteMarker {
+            string,
+            fret,
+            label: String::new(),
+            color: LINK,
+            style: MarkerStyle::Outlined,
+        }],
+        Prompt::FindIt(_) => Vec::new(),
+    }
+}
+
 /// The positions guessed against the current prompt, as markers on the neck: the wrong ones
 /// in the danger colour, and the one that scored in the success colour.
+///
+/// Filled, both of them — that is what keeps them readable as answers rather than as the
+/// question. The ring belongs to the prompt alone; see `prompt_marker`.
 ///
 /// The right answer comes last so it is drawn over the wrong ones, which matters only if a
 /// learner presses the same fret twice — and there the green is the newer news.
@@ -494,6 +517,7 @@ fn position_markers(trainer: &NoteTrainer) -> Vec<NoteMarker> {
             fret,
             label: String::new(),
             color,
+            style: MarkerStyle::Filled,
         }),
         Answer::Name(_) => None,
     };
@@ -1358,7 +1382,45 @@ mod tests {
                 .wrong
                 .contains(&Answer::Position { string, fret })
         );
-        assert_eq!(position_markers(&app.note_trainer).len(), 1);
+
+        let markers = position_markers(&app.note_trainer);
+        assert_eq!(markers.len(), 1);
+        // Filled, so a guess can never be mistaken for the prompt's ring.
+        assert_eq!(markers[0].style, MarkerStyle::Filled);
+    }
+
+    /// The prompt is a ring, not a dot. On a screen where a fill means "you put this here",
+    /// the question has to look unlike the answers — so this checks the shape as closely as
+    /// it checks the position.
+    #[test]
+    fn the_name_it_prompt_is_an_unfilled_ring() {
+        let (mut trainer, mut rng) = trainer_with_seed(0x21e6);
+
+        let Prompt::NameIt { string, fret } = trainer.prompt else {
+            unreachable!("the Note Trainer opens in Name it")
+        };
+
+        let markers = prompt_marker(&trainer);
+        assert_eq!(markers.len(), 1, "the prompt marked more than its position");
+        assert_eq!((markers[0].string, markers[0].fret), (string, fret));
+        assert_eq!(
+            markers[0].style,
+            MarkerStyle::Outlined,
+            "the prompt is a filled dot again"
+        );
+        assert_eq!(markers[0].color, LINK);
+        assert!(
+            markers[0].label.is_empty(),
+            "the prompt printed its own answer"
+        );
+
+        // ...and the other direction puts nothing of the prompt on the neck: there the note
+        // is named in the card and the neck is the answer surface.
+        trainer.toggle_direction(&mut rng);
+        assert!(
+            prompt_marker(&trainer).is_empty(),
+            "Find it marked the neck with its prompt"
+        );
     }
 
     /// The other half of the neck's feedback: the position that scored is marked too, in
@@ -1379,6 +1441,11 @@ mod tests {
         assert_eq!(markers.len(), 1);
         assert_eq!((markers[0].string, markers[0].fret), (string, fret));
         assert_eq!(markers[0].color, SUCCESS, "the right note is not green");
+        assert_eq!(
+            markers[0].style,
+            MarkerStyle::Filled,
+            "an answer went hollow"
+        );
 
         // ...and the neck is clean again once the flash ends.
         let _ = app.update(Message::AdvancePrompt);

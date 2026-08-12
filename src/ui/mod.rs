@@ -3,7 +3,7 @@ mod note_trainer;
 use std::ops::Range;
 use std::time::Duration;
 
-use fretboard::{Fretboard, NoteMarker, fretboard};
+use fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use note_trainer::{Drill, NoteTrainer, ui_note_trainer};
 
 use iced::{
@@ -1330,6 +1330,9 @@ fn scale_markers(scale: Scale, notation: Notation) -> Vec<NoteMarker> {
                     } else {
                         LINK
                     },
+                    // Filled: these carry a note name or a degree, and the label needs
+                    // something to read against.
+                    style: MarkerStyle::Filled,
                 });
             }
         }
