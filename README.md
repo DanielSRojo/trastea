@@ -63,7 +63,9 @@ src/
     scales.rs        ScaleKind and Scale::spell — degrees derived, not looked up
     chords.rs        stub; see the module comment for the sketch
   ui/
-    mod.rs           App, Screen, Message, the focus grid, every view
+    mod.rs           App, Screen, Message, the focus grid, the neck's geometry, the
+                     Home and Scale Trainer views
+    note_trainer.rs  the drill's state machine and the screen that draws it
     fretboard.rs     the neck as an iced canvas widget: one Layout drives both drawing
                      and hit-testing, held together by a round-trip test
 ```
@@ -72,6 +74,12 @@ The split is load-bearing: `music/` never imports iced, and the UI holds no musi
 its own. Scale spelling is arithmetic over degree numbers rather than a table of key
 signatures, which is what lets a G♯ Locrian come out spelled correctly without a special
 case.
+
+`note_trainer.rs` keeps its state machine and its views together so the state can keep its
+fields private — they are read all over those views and nowhere else. `App` drives the drill
+through a dozen methods and never reaches past them; what the neck *is* stays in `mod.rs`,
+since that is the instrument rather than the drill and the next trainer will want it on the
+same terms.
 
 ## Testing
 
