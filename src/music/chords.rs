@@ -1,6 +1,6 @@
 //! Chord construction from scale degrees.
 //!
-//! Nothing here yet — this module is a placeholder for the chord layer that sits
+//! Nothing here yet. This module is a placeholder for the chord layer that sits
 //! on top of [`super::scales`]. Sketch of what belongs in it:
 //!
 //! TODO: `ChordQuality` — major, minor, diminished, augmented, dominant 7th,

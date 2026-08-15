@@ -20,18 +20,6 @@ pub enum Interval {
 }
 
 impl Interval {
-    /// A slice with a tripwire test, unlike `PitchClass::ALL`: this set does
-    /// grow. Thirteen is what the sixteen scale kinds need — no augmented second,
-    /// no diminished seventh. Add one when a scale wants it, and the compiler
-    /// will point at every `match` that needs a new arm — for `number()` and
-    /// `alteration()`, both exhaustive. It will *not* point at `Scale::notes`'s
-    /// `expect`, and the ±2 bound that `expect` relies on is not closed under
-    /// arbitrary additions: degree 4 is the only degree these formulas sharpen,
-    /// so a sharpened sixth (`AugmentedSixth`, the whole-tone scale's textbook
-    /// ♯6) or a doubly-flattened fourth (a diminished fourth, as in
-    /// double-harmonic spellings) would push some reachable root past ±2 and
-    /// trip that `expect`. `AugmentedSecond` and `DiminishedSeventh` — the two
-    /// additions most likely to be wanted next — are both safe.
     pub const ALL: &'static [Interval] = &[
         Interval::Unison,
         Interval::MinorSecond,
