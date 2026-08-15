@@ -234,6 +234,25 @@ impl Spelling {
 
         Note { letter, accidental }
     }
+
+    /// What a black key is usually called — `C♯`, `E♭`, `F♯`, `A♭`, `B♭`.
+    ///
+    /// This never spells anything. `Scale::new` derives a scale's spelling by
+    /// arithmetic and consults this only for the eleven scales where the two
+    /// candidates come out equally economical — at which point which name is used
+    /// is a fact about what musicians call things, and no formula derives it. That
+    /// is what keeps it from being the table of key signatures the spelling
+    /// arithmetic exists to avoid: it picks between two finished answers rather
+    /// than producing one.
+    ///
+    /// The seven naturals share the flats arm because they spell identically under
+    /// both, so any answer is right for them.
+    pub fn conventional_for(pitch_class: PitchClass) -> Spelling {
+        match pitch_class.semitone() {
+            1 | 6 => Spelling::Sharps,
+            _ => Spelling::Flats,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -362,6 +381,41 @@ mod tests {
             if sharp.accidental == Accidental::Natural {
                 assert_eq!(sharp, flat, "{pitch_class:?} disagrees");
             }
+        }
+    }
+
+    #[test]
+    fn the_black_keys_have_a_conventional_name() {
+        // The five that have two names, and the one each is usually called. Written
+        // out rather than derived: the point of the function is that this is data.
+        let cases = [
+            (1, Letter::C, Accidental::Sharp),
+            (3, Letter::E, Accidental::Flat),
+            (6, Letter::F, Accidental::Sharp),
+            (8, Letter::A, Accidental::Flat),
+            (10, Letter::B, Accidental::Flat),
+        ];
+
+        for (semitone, letter, accidental) in cases {
+            let pitch_class = PitchClass::new(semitone);
+            let spelling = Spelling::conventional_for(pitch_class);
+
+            assert_eq!(
+                spelling.spell(pitch_class),
+                Note { letter, accidental },
+                "pitch class {semitone}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_naturals_convention_names_the_same_note_either_way() {
+        // Why the naturals can share an arm rather than needing seven of their own.
+        for pitch_class in PitchClass::NATURALS {
+            let conventional = Spelling::conventional_for(pitch_class).spell(pitch_class);
+
+            assert_eq!(conventional, Spelling::Sharps.spell(pitch_class));
+            assert_eq!(conventional, Spelling::Flats.spell(pitch_class));
         }
     }
 

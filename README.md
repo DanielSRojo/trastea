@@ -13,8 +13,11 @@ the keyboard — the mouse is optional.
 
 **Scale Trainer** — pick a root and one of sixteen scale kinds (the seven diatonic modes,
 harmonic and melodic minor, the two pentatonics, blues, voodoo, Spanish gypsy, whole tone,
-diminished) and see every degree lit on the neck. `i` toggles the markers between note
-names and scale degrees; `r` rerolls a random scale.
+diminished) and see every degree lit on the neck. The scale names itself the way it would
+be taught — pitch class 10 under Ionian is B♭ major, not the A♯ major that would put three
+double sharps on the fretboard — so there is nothing to choose and no ♯/♭ setting to get
+wrong. `i` toggles the markers between note names and scale degrees; `r` rerolls a random
+scale.
 
 **Note Trainer** — a two-directional drill with a streak counter. *Name it* lights a
 position and asks which note it is; *Find it* names a note and asks you to click or walk
@@ -26,7 +29,7 @@ the seven naturals to all twelve pitch classes, `r` skips the current prompt.
 
 ```sh
 cargo run          # launch the app
-cargo test         # 153 unit tests, no UI harness needed
+cargo test         # 160 unit tests, no UI harness needed
 ```
 
 Rust edition 2024. The only dependency is `iced` (with the `canvas` and `smol` features,
@@ -39,7 +42,7 @@ The focus ring is a 2-D grid rather than a flat tab order, so `↑ ↓ ← →` 
 `k j h l` move the way the layout looks. Rows of unequal width clamp instead of wrapping.
 
 | Key | Action |
-|---|---|
+| --- | --- |
 | `Tab` / `⇧Tab` | next / previous |
 | `↑ ↓ ← →`, `k j h l` | move the focus ring |
 | `Enter`, `Space` | activate |
@@ -73,7 +76,9 @@ src/
 The split is load-bearing: `music/` never imports iced, and the UI holds no music theory of
 its own. Scale spelling is arithmetic over degree numbers rather than a table of key
 signatures, which is what lets a G♯ Locrian come out spelled correctly without a special
-case.
+case. Which of two enharmonic root names a scale gets is arithmetic too — fewest double
+accidentals, then fewest accidentals — and only the eleven scales where that comes out
+exactly level fall back to what the note is conventionally called.
 
 `note_trainer.rs` keeps its state machine and its views together so the state can keep its
 fields private — they are read all over those views and nowhere else. `App` drives the drill

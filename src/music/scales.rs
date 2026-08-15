@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use super::intervals::Interval;
 use super::notes::{Accidental, Letter, Note, PitchClass, Spelling};
 
@@ -22,14 +24,81 @@ pub enum ScaleKind {
     Diminished, // Symmetric diminished
 }
 
+/// All three fields are private, and the third is why the first two are.
+///
+/// `spelling` is derived from `root` and `kind` rather than chosen — see `new`. It
+/// is stored rather than recomputed on read because deriving it means spelling the
+/// whole scale, and spelling the scale starts from the root note; resolving once in
+/// `new` is what breaks that cycle. But a private `spelling` beside a public `root`
+/// would be theatre: `scale.root = other` would compile and leave the spelling
+/// derived from a root the scale no longer has. Sealing all three is what actually
+/// makes a misspelled `Scale` unrepresentable outside this module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Scale {
-    pub root: PitchClass,
-    pub spelling: Spelling,
-    pub kind: ScaleKind,
+    root: PitchClass,
+    kind: ScaleKind,
+    spelling: Spelling,
 }
 
 impl Scale {
+    pub fn root(self) -> PitchClass {
+        self.root
+    }
+
+    pub fn kind(self) -> ScaleKind {
+        self.kind
+    }
+
+    /// Names a scale the way it would be taught. Nobody teaches `A♯ Ionian` — it
+    /// spells `A♯ B♯ C𝄪 D♯ E♯ F𝄪 G𝄪`, and a learner reading `G𝄪` off a fret has to
+    /// translate it back to A before they can play it. `B♭ Ionian` is the same
+    /// shapes with names that can be read at a glance.
+    ///
+    /// Fewer double accidentals wins; then fewer accidentals overall. That is one
+    /// tuple comparison rather than two hand-written ones, because `Ord` on tuples
+    /// is already lexicographic.
+    ///
+    /// The rule has no thumb on the scale for either spelling — it reaches `G♯
+    /// Aeolian` and `D♭ Ionian` by the same arithmetic. Where it reaches neither,
+    /// `Spelling::conventional_for` decides; see its comment for why a table is the
+    /// honest answer there and nowhere else.
+    pub fn new(root: PitchClass, kind: ScaleKind) -> Self {
+        let candidate = |spelling| Scale {
+            root,
+            kind,
+            spelling,
+        };
+        let (sharps, flats) = (candidate(Spelling::Sharps), candidate(Spelling::Flats));
+
+        match sharps.spelling_cost().cmp(&flats.spelling_cost()) {
+            Ordering::Less => sharps,
+            Ordering::Greater => flats,
+            Ordering::Equal => candidate(Spelling::conventional_for(root)),
+        }
+    }
+
+    /// How much ink this spelling costs: `(double accidentals, total accidental
+    /// distance)`.
+    ///
+    /// The doubles come first deliberately, and the pair that makes it load-bearing
+    /// is harmonic minor on pitch class 8: `G♯ A♯ B C♯ D♯ E F𝄪` and `A♭ B♭ C♭ D♭ E♭
+    /// F♭ G` both spend six accidentals, but only the first needs a double sharp.
+    /// Summed into one number they tie and fall through to convention, which would
+    /// pick `A♭` for pitch class 8 by luck. Compared in this order, `A♭` wins for a
+    /// reason.
+    ///
+    /// Measured by spelling the scale and looking, rather than from a table of which
+    /// roots are troublesome — so it stays correct if a kind's intervals ever change,
+    /// as Whole Tone's already have.
+    fn spelling_cost(self) -> (usize, u32) {
+        self.notes()
+            .iter()
+            .map(|note| u32::from(note.accidental.offset().unsigned_abs()))
+            .fold((0, 0), |(doubles, total), offset| {
+                (doubles + usize::from(offset == 2), total + offset)
+            })
+    }
+
     pub fn root_note(self) -> Note {
         self.spelling.spell(self.root)
     }
@@ -594,6 +663,14 @@ mod tests {
         // 12 pitch classes × 2 spellings × 16 kinds = 384. The domain is closed
         // and tiny, so this is a real proof that ±2 accidentals are enough — and
         // it is what licenses the expect inside notes().
+        //
+        // Deliberately builds literals rather than going through `Scale::new`, which
+        // looks like an oversight and is the opposite. `new` steers away from the
+        // spellings that cost the most accidentals, so iterating it would stop
+        // covering exactly the combinations most likely to strain the ±2 bound. Those
+        // combinations stay representable in this module — `spelling_cost` builds them
+        // on every call — so the licence the expect needs is over what can be
+        // represented, not over what `new` returns.
         let mut checked = 0;
 
         for spelling in [Spelling::Sharps, Spelling::Flats] {
@@ -982,6 +1059,160 @@ mod tests {
                     kind.name()
                 );
                 seen.push(semitones);
+            }
+        }
+    }
+
+    /// A scale's notes as text, for the naming tables below.
+    fn spelled_scale(semitone: u8, kind: ScaleKind) -> String {
+        Scale::new(pc(semitone), kind)
+            .notes()
+            .iter()
+            .map(Note::to_string)
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn a_scale_is_named_the_way_it_is_taught() {
+        // The rule's whole job, stated as the names rather than as the rule — so a
+        // change to `spelling_cost` that still satisfies its own arithmetic but starts
+        // naming scales wrongly fails here.
+        //
+        // The four cases are chosen to pin it from four directions:
+        //   - pitch class 1 Ionian: D♭ (5 flats) over the theoretical C♯ (7 sharps).
+        //   - pitch class 10 Ionian: B♭, avoiding A♯ Ionian's three double sharps.
+        //   - pitch class 1 Harmonic Minor: C♯, avoiding D♭'s B𝄫 — the same rule
+        //     running the other way, which is what shows it is not "prefer flats".
+        //   - pitch class 8 Aeolian and Mixolydian: G♯ for one and A♭ for the other,
+        //     the same pitch class landing on different spellings because the kind
+        //     changed. No fixed table of root names could do that.
+        let cases: &[(u8, ScaleKind, &str)] = &[
+            (1, ScaleKind::Ionian, "Db Eb F Gb Ab Bb C"),
+            (10, ScaleKind::Ionian, "Bb C D Eb F G A"),
+            (1, ScaleKind::HarmonicMinor, "C# D# E F# G# A B#"),
+            (8, ScaleKind::Aeolian, "G# A# B C# D# E F#"),
+            (8, ScaleKind::Mixolydian, "Ab Bb C Db Eb F Gb"),
+        ];
+
+        for &(semitone, kind, expected) in cases {
+            assert_eq!(
+                spelled_scale(semitone, kind),
+                expected,
+                "pitch class {semitone} {}",
+                kind.name()
+            );
+        }
+    }
+
+    #[test]
+    fn doubles_are_weighed_before_the_total() {
+        // Why `spelling_cost` returns a pair rather than one number. Harmonic minor on
+        // pitch class 8 spends six accidentals either way, so a single total ties and
+        // falls through to convention — which for pitch class 8 is flats, and would
+        // reach A♭ by luck. Comparing doubles first reaches it for a reason: only the
+        // G♯ candidate needs a double sharp.
+        let sharps = Scale {
+            root: pc(8),
+            kind: ScaleKind::HarmonicMinor,
+            spelling: Spelling::Sharps,
+        };
+        let flats = Scale {
+            root: pc(8),
+            kind: ScaleKind::HarmonicMinor,
+            spelling: Spelling::Flats,
+        };
+
+        assert_eq!(
+            sharps.spelling_cost().1,
+            flats.spelling_cost().1,
+            "the case only bites when the totals tie"
+        );
+        assert!(sharps.spelling_cost().0 > flats.spelling_cost().0);
+
+        assert_eq!(
+            spelled_scale(8, ScaleKind::HarmonicMinor),
+            "Ab Bb Cb Db Eb Fb G"
+        );
+    }
+
+    #[test]
+    fn an_exact_tie_takes_the_conventional_name() {
+        // The eleven scales where the arithmetic has nothing left to say. Both of
+        // these spend six accidentals with no doubles either way, so the only thing
+        // that separates F♯ from G♭ and D♯ from E♭ is what the note is called.
+        assert_eq!(
+            spelled_scale(6, ScaleKind::Ionian),
+            "F# G# A# B C# D# E#",
+            "F♯ major, not G♭"
+        );
+        assert_eq!(
+            spelled_scale(3, ScaleKind::Aeolian),
+            "Eb F Gb Ab Bb Cb Db",
+            "E♭ minor, not D♯"
+        );
+    }
+
+    #[test]
+    fn only_the_symmetric_two_keep_a_double_accidental() {
+        // Written as an allowlist rather than a loose skip, so that a kind added later
+        // that cannot be spelled cleanly has to be admitted here deliberately instead
+        // of slipping past. Six notes and eight notes cannot be spread over seven
+        // letters without a double; every other scale can be, and is.
+        let irreducible = [(1, ScaleKind::WholeTone), (3, ScaleKind::Diminished)];
+
+        for root in PitchClass::ALL {
+            for &kind in ScaleKind::ALL {
+                let scale = Scale::new(root, kind);
+                let has_double = scale
+                    .notes()
+                    .iter()
+                    .any(|note| note.accidental.offset().abs() == 2);
+
+                let expected_double = irreducible
+                    .iter()
+                    .any(|&(semitone, k)| root == pc(semitone) && k == kind);
+
+                assert_eq!(
+                    has_double,
+                    expected_double,
+                    "{} {}",
+                    scale.root_note(),
+                    kind.name()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn naming_never_moves_the_scale() {
+        // The names are the only thing the rule chooses. Whatever it picks, the scale
+        // is still the same pitch classes in the same order — which is what the neck
+        // draws and what `degree` reads. Replaces the UI's
+        // `toggling_spelling_moves_no_marker_but_relabels_at_least_one`, over all 192
+        // combinations rather than one root spelled two ways.
+        for root in PitchClass::ALL {
+            for &kind in ScaleKind::ALL {
+                let scale = Scale::new(root, kind);
+
+                let spelled: Vec<PitchClass> = scale
+                    .notes()
+                    .iter()
+                    .map(|note| note.pitch_class())
+                    .collect();
+                let from_formula: Vec<PitchClass> = kind
+                    .intervals()
+                    .iter()
+                    .map(|interval| root.transpose(interval.semitones()))
+                    .collect();
+
+                assert_eq!(
+                    spelled,
+                    from_formula,
+                    "{} {} was moved by its naming",
+                    scale.root_note(),
+                    kind.name()
+                );
             }
         }
     }

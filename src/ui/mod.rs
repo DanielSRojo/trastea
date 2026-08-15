@@ -13,7 +13,7 @@ use keyboard::key::Named;
 
 use crate::music::{
     intervals::Interval,
-    notes::{Accidental, Note, PitchClass, Spelling},
+    notes::{Accidental, Note, PitchClass},
     scales::Scale,
     scales::ScaleKind,
 };
@@ -134,7 +134,6 @@ pub enum Message {
     GoBack,
     SelectRoot(PitchClass),
     SelectScaleKind(ScaleKind),
-    ToggleSpelling,
     ToggleNotation,
     RerollScale,
     /// Answers a *Name it* prompt with a note name.
@@ -172,7 +171,6 @@ pub enum Message {
 pub enum FocusTarget {
     HomeMenuItem(usize),
     Back,
-    SpellingToggle,
     NotationToggle,
     RerollScale,
     Root(usize),
@@ -186,7 +184,8 @@ pub enum FocusTarget {
     NoteAnswer(usize),
     DrillDirectionToggle,
     PoolToggle,
-    /// Distinct from `SpellingToggle`, which spells the scale. These two never share state.
+    /// The Note Trainer's own, and now the only spelling control in the app: the scale
+    /// trainer derives its spelling rather than offering a choice. See `Scale::new`.
     NoteSpellingToggle,
     SkipPrompt,
 }
@@ -254,11 +253,7 @@ impl App {
         let app = Self {
             screen: Screen::default(),
             history: Vec::new(),
-            scale: Scale {
-                root: PitchClass::new(0),
-                spelling: Spelling::Sharps,
-                kind: ScaleKind::Ionian,
-            },
+            scale: Scale::new(PitchClass::new(0), ScaleKind::Ionian),
             focused: FocusTarget::HomeMenuItem(0),
             rng,
             help_open: false,
@@ -290,13 +285,8 @@ impl App {
         match message {
             Message::Navigate(screen) => self.open(screen),
             Message::GoBack => self.go_back(),
-            Message::SelectRoot(root) => {
-                self.scale.root = root;
-            }
-            Message::SelectScaleKind(kind) => {
-                self.scale.kind = kind;
-            }
-            Message::ToggleSpelling => self.toggle_spelling(),
+            Message::SelectRoot(root) => self.set_scale(root, self.scale.kind()),
+            Message::SelectScaleKind(kind) => self.set_scale(self.scale.root(), kind),
             Message::ToggleNotation => self.toggle_notation(),
             Message::RerollScale => self.reroll_scale(),
             // Every arm below borrows `self.note_trainer` and `self.rng` at once. That is
@@ -370,35 +360,32 @@ impl App {
     /// make the button look broken, so that one outcome is rejected and redrawn —
     /// which is also why the very first scale of a session is never C Ionian.
     fn reroll_scale(&mut self) {
-        let current = (self.scale.root, self.scale.kind);
+        let current = (self.scale.root(), self.scale.kind());
 
         loop {
             let root = PitchClass::ALL[self.rng.below(PitchClass::ALL.len())];
             let kind = ScaleKind::ALL[self.rng.below(ScaleKind::ALL.len())];
 
             if (root, kind) != current {
-                self.scale.root = root;
-                self.scale.kind = kind;
+                self.set_scale(root, kind);
                 return;
             }
         }
     }
 
-    /// The toggle affects only the root. Every other degree follows from
-    /// letter-walking, so F Ionian yields B♭ either way — but A♯ Ionian with its
-    /// three double sharps becomes the clean B♭ Ionian.
+    /// The one place a `Scale` is built, because its spelling is derived from the
+    /// root and the kind together: changing either has to re-derive it, and five
+    /// call sites each calling `Scale::new` would be five chances to pass a stale
+    /// field. See `Scale::new` for what is being derived.
+    fn set_scale(&mut self, root: PitchClass, kind: ScaleKind) {
+        self.scale = Scale::new(root, kind);
+    }
+
     /// Flips what the markers say. Nothing about the scale moves — see `Notation`.
     fn toggle_notation(&mut self) {
         self.notation = match self.notation {
             Notation::Notes => Notation::Intervals,
             Notation::Intervals => Notation::Notes,
-        };
-    }
-
-    fn toggle_spelling(&mut self) {
-        self.scale.spelling = match self.scale.spelling {
-            Spelling::Sharps => Spelling::Flats,
-            Spelling::Flats => Spelling::Sharps,
         };
     }
 
@@ -462,17 +449,16 @@ impl App {
                 }
             }
             FocusTarget::Back => self.go_back(),
-            FocusTarget::SpellingToggle => self.toggle_spelling(),
             FocusTarget::NotationToggle => self.toggle_notation(),
             FocusTarget::RerollScale => self.reroll_scale(),
             FocusTarget::Root(index) => {
                 if let Some(&pitch_class) = PitchClass::ALL.get(index) {
-                    self.scale.root = pitch_class;
+                    self.set_scale(pitch_class, self.scale.kind());
                 }
             }
             FocusTarget::ScaleKind(index) => {
                 if let Some(&kind) = ScaleKind::ALL.get(index) {
-                    self.scale.kind = kind;
+                    self.set_scale(self.scale.root(), kind);
                 }
             }
             // Enter on the neck answers with wherever the cursor is sitting, which is the
@@ -593,9 +579,9 @@ impl App {
                 .map(|i| vec![Some(FocusTarget::HomeMenuItem(i))])
                 .collect(),
             Screen::ScaleTrainer => {
-                // Two header rows. The summary card's buttons — spelling, notation, reroll —
-                // sit along its right edge, and the card is as wide as the root card below
-                // it, so the three of them take the three columns above the first three
+                // Two header rows. The summary card's buttons — notation, reroll — sit
+                // along its right edge, and the card is as wide as the root card below
+                // it, so they take the leftmost columns above the first three
                 // roots. That leaves no cell for Back, and widening the row is not an
                 // option: `card_bands` splits at ROOT_ROW_WIDTH, so a fourth column would
                 // land in the kinds card and Tab would reach the reroll button only after
@@ -611,11 +597,10 @@ impl App {
                 // it belongs to: a narrower ROOT_ROW_WIDTH drops buttons off the end instead
                 // of panicking, a wider one leaves the extra cells empty.
                 let mut card_buttons: FocusRow = vec![None; ROOT_ROW_WIDTH];
-                for (cell, target) in card_buttons.iter_mut().zip([
-                    FocusTarget::SpellingToggle,
-                    FocusTarget::NotationToggle,
-                    FocusTarget::RerollScale,
-                ]) {
+                for (cell, target) in card_buttons
+                    .iter_mut()
+                    .zip([FocusTarget::NotationToggle, FocusTarget::RerollScale])
+                {
                     *cell = Some(target);
                 }
 
@@ -1007,17 +992,6 @@ fn ui_scale_trainer(
                 note_label(scale.root_note(), 56, INK),
                 Space::new().width(Length::Fill),
                 focus_ring(
-                    button(
-                        text(format!("{SMUFL_SHARP}{SMUFL_FLAT}"))
-                            .size(20)
-                            .font(MUSIC_FONT)
-                    )
-                    .padding([8, 12])
-                    .style(ghost_button)
-                    .on_press(Message::ToggleSpelling),
-                    focused == FocusTarget::SpellingToggle,
-                ),
-                focus_ring(
                     // One degree, not a formula fragment: `1♭3` was tried first, on the
                     // grounds that it reads less like an instruction to flatten the
                     // third, and it crowded the header row — three buttons and the root
@@ -1045,8 +1019,8 @@ fn ui_scale_trainer(
                 ),
             ]
             .spacing(8),
-            text(scale.kind.name()).size(34).color(INK),
-            intervalic_text(scale.kind.intervals()),
+            text(scale.kind().name()).size(34).color(INK),
+            intervalic_text(scale.kind().intervals()),
         ]
         .spacing(10),
     )
@@ -1086,7 +1060,7 @@ fn ui_scale_trainer(
         |rows, (start, len)| {
             rows.push(scale_kind_row(
                 &ScaleKind::ALL[start..start + len],
-                scale.kind,
+                scale.kind(),
                 start,
                 focused,
             ))
@@ -1110,12 +1084,12 @@ fn ui_scale_trainer(
 
     let explanation_card = container(
         column![
-            text(scale.kind.feel())
+            text(scale.kind().feel())
                 .size(22)
                 .font(FEEL_FONT)
                 .color(BODY)
                 .width(Length::Fill),
-            text(scale.kind.common_usage())
+            text(scale.kind().common_usage())
                 .size(18)
                 .font(explanation_font)
                 .color(MUTE)
@@ -1153,13 +1127,11 @@ fn ui_scale_trainer(
         .into()
 }
 
-/// Each button names a *candidate* root via `scale.spelling.spell`, not a member
-/// of the current scale via `Scale::spell` — so under `Spelling::Sharps` with
-/// `F Ionian` on screen, this row's button for pitch class 10 reads `A♯` while
-/// the fretboard (which goes through `Scale::spell`) shows `Bb` for the very
-/// same pitch. That mismatch is intentional, not a bug: before a root is
-/// clicked there is no scale to spell it in, only the bare toggle, and there is
-/// no better answer without threading per-button context through every cell.
+/// Each button is named by the scale pressing it would build, so the label is a
+/// promise the press keeps. That means a label moves when the *kind* selection
+/// moves — pitch class 10 reads `A♯` under Minor Pentatonic and `B♭` under Ionian —
+/// which is the fact the whole naming rule is about: the same fret is called
+/// different things depending on what you are playing over it.
 fn root_note_row(
     pitch_classes: &[PitchClass],
     scale: Scale,
@@ -1173,15 +1145,19 @@ fn root_note_row(
         .iter()
         .enumerate()
         .fold(row![].spacing(28), |row, (i, pitch_class)| {
-            let is_selected = *pitch_class == scale.root;
+            let is_selected = *pitch_class == scale.root();
             let color = if is_selected { CANVAS } else { INK };
 
             let root_button = button(
-                container(note_label(scale.spelling.spell(*pitch_class), 24, color))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .center_x(Length::Fill)
-                    .center_y(Length::Fill),
+                container(note_label(
+                    Scale::new(*pitch_class, scale.kind()).root_note(),
+                    24,
+                    color,
+                ))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .center_x(Length::Fill)
+                .center_y(Length::Fill),
             )
             .width(Length::Fixed(ROOT_BUTTON_SIZE))
             .height(Length::Fixed(ROOT_BUTTON_SIZE))
@@ -1325,7 +1301,7 @@ fn scale_markers(scale: Scale, notation: Notation) -> Vec<NoteMarker> {
                     string,
                     fret: fret as usize,
                     label: marker_label(notation, note, degree),
-                    color: if pitch_class == scale.root {
+                    color: if pitch_class == scale.root() {
                         Color::from_rgb8(0xff, 0x4d, 0x4d)
                     } else {
                         LINK
@@ -1637,11 +1613,11 @@ mod tests {
     fn scale_indices(app: &App) -> (usize, usize) {
         let root = PitchClass::ALL
             .iter()
-            .position(|pitch_class| *pitch_class == app.scale.root)
+            .position(|pitch_class| *pitch_class == app.scale.root())
             .expect("root is one of PitchClass::ALL");
         let kind = ScaleKind::ALL
             .iter()
-            .position(|k| *k == app.scale.kind)
+            .position(|k| *k == app.scale.kind())
             .expect("kind is one of ScaleKind::ALL");
 
         (root, kind)
@@ -1674,9 +1650,9 @@ mod tests {
         let mut app = app_with_seed(7);
 
         for _ in 0..2_000 {
-            let before = (app.scale.root, app.scale.kind);
+            let before = (app.scale.root(), app.scale.kind());
             app.reroll_scale();
-            assert_ne!((app.scale.root, app.scale.kind), before);
+            assert_ne!((app.scale.root(), app.scale.kind()), before);
         }
     }
 
@@ -1699,10 +1675,10 @@ mod tests {
     #[test]
     fn scale_trainer_reaches_every_widget_exactly_once() {
         let targets = app_on(Screen::ScaleTrainer).focusables();
-        // Four pieces of chrome: Back, and the summary card's three buttons.
+        // Three pieces of chrome: Back, and the summary card's two buttons.
         assert_eq!(
             targets.len(),
-            4 + PitchClass::ALL.len() + ScaleKind::ALL.len()
+            3 + PitchClass::ALL.len() + ScaleKind::ALL.len()
         );
 
         for i in 0..PitchClass::ALL.len() {
@@ -1714,19 +1690,17 @@ mod tests {
                 "missing kind {i}"
             );
         }
-        assert!(targets.contains(&FocusTarget::SpellingToggle));
         assert!(targets.contains(&FocusTarget::NotationToggle));
     }
 
     #[test]
     fn tab_walks_one_card_at_a_time() {
-        // Reading order: Back, the card's three buttons left to right, then every root
+        // Reading order: Back, the card's two buttons left to right, then every root
         // before any kind. Back and the buttons are on separate grid rows now, and the
         // point of this test is that the split changes nothing about the Tab order —
         // both rows are in the root card's band, so they still lead it.
         let mut expected = vec![
             FocusTarget::Back,
-            FocusTarget::SpellingToggle,
             FocusTarget::NotationToggle,
             FocusTarget::RerollScale,
         ];
@@ -1889,21 +1863,22 @@ mod tests {
 
     #[test]
     fn the_card_buttons_line_up_with_the_columns_below_them() {
-        // The header is two rows: Back alone, then the card's three buttons, which take
-        // one column each above the first three roots.
+        // The header is two rows: Back alone, then the card's two buttons, which take
+        // one column each above the first two roots. The third column of that row is
+        // empty since the spelling toggle went — which is why `Root(2)` has no button
+        // above it and is not in the loop below.
         assert_eq!(
             arrow(FocusTarget::Back, Direction::Down),
-            FocusTarget::SpellingToggle
+            FocusTarget::NotationToggle
         );
         assert_eq!(
-            arrow(FocusTarget::SpellingToggle, Direction::Up),
+            arrow(FocusTarget::NotationToggle, Direction::Up),
             FocusTarget::Back
         );
 
         for (button, root) in [
-            (FocusTarget::SpellingToggle, FocusTarget::Root(0)),
-            (FocusTarget::NotationToggle, FocusTarget::Root(1)),
-            (FocusTarget::RerollScale, FocusTarget::Root(2)),
+            (FocusTarget::NotationToggle, FocusTarget::Root(0)),
+            (FocusTarget::RerollScale, FocusTarget::Root(1)),
         ] {
             assert_eq!(arrow(button, Direction::Down), root, "down from {button:?}");
             assert_eq!(arrow(root, Direction::Up), button, "up from {root:?}");
@@ -1911,11 +1886,7 @@ mod tests {
     }
 
     #[test]
-    fn the_card_button_row_walks_spelling_notation_reroll() {
-        assert_eq!(
-            arrow(FocusTarget::SpellingToggle, Direction::Right),
-            FocusTarget::NotationToggle
-        );
+    fn the_card_button_row_walks_notation_reroll() {
         assert_eq!(
             arrow(FocusTarget::NotationToggle, Direction::Right),
             FocusTarget::RerollScale
@@ -1924,9 +1895,12 @@ mod tests {
             arrow(FocusTarget::RerollScale, Direction::Left),
             FocusTarget::NotationToggle
         );
+        // The row's third cell is empty, so Right from the reroll button stays put
+        // rather than stepping into a hole. Asserted because an empty trailing cell is
+        // exactly the kind of thing a grid walk can fall into.
         assert_eq!(
-            arrow(FocusTarget::NotationToggle, Direction::Left),
-            FocusTarget::SpellingToggle
+            arrow(FocusTarget::RerollScale, Direction::Right),
+            FocusTarget::RerollScale
         );
 
         // Back is alone on its row, so the horizontal keys have nowhere to take it.
@@ -1940,42 +1914,57 @@ mod tests {
         assert_eq!(arrow(FocusTarget::Back, Direction::Left), FocusTarget::Back);
     }
 
+    // `toggling_spelling_renames_the_scale_without_moving_it` and
+    // `rerolling_leaves_the_spelling_alone` stood here. Both tested a control that no
+    // longer exists, and neither survives as a repair: spelling is not a user setting
+    // to be preserved across a reroll, it is derived from the root and kind. What the
+    // first of them really protected — that naming a scale never moves it — is now
+    // `naming_never_moves_the_scale` in `music/scales.rs`, asserted across all 192
+    // combinations rather than one. The rest is carried by `Scale`'s private fields,
+    // which is the better place for it: a test could only check the paths it thought
+    // to walk, where the type rules the bad state out everywhere at once.
+
     #[test]
-    fn toggling_spelling_renames_the_scale_without_moving_it() {
-        let mut app = app_with_seed(11);
-        app.scale.root = PitchClass::new(1);
-        app.scale.kind = ScaleKind::Ionian;
+    fn selecting_a_root_names_it_the_way_it_is_taught() {
+        // The headline case, asserted where it reaches the screen: pitch class 10 under
+        // Ionian is B♭ major, not the A♯ major that would put three double sharps on
+        // the neck.
+        let mut app = app_with_seed(7);
+        let _ = app.update(Message::SelectScaleKind(ScaleKind::Ionian));
+        let _ = app.update(Message::SelectRoot(PitchClass::new(10)));
 
-        let before = app.scale.notes();
-        // Through update, so the message wiring is covered too. The returned
-        // Task is discarded — this screen issues none.
-        let _ = app.update(Message::ToggleSpelling);
-        let after = app.scale.notes();
-
-        assert_ne!(before, after, "C♯ and D♭ Ionian are spelled differently");
-
-        let pitch_classes = |notes: &[Note]| -> Vec<u8> {
-            notes
+        assert_eq!(app.scale.root_note().to_string(), "Bb");
+        assert!(
+            app.scale
+                .notes()
                 .iter()
-                .map(|note| note.pitch_class().semitone())
-                .collect()
-        };
-        assert_eq!(
-            pitch_classes(&before),
-            pitch_classes(&after),
-            "the toggle moved the scale"
+                .all(|note| note.accidental.offset().abs() < 2),
+            "B♭ Ionian should need no double accidental: {:?}",
+            app.scale.notes()
         );
     }
 
     #[test]
-    fn rerolling_leaves_the_spelling_alone() {
-        // Spelling is a user setting, not part of the draw.
-        let mut app = app_with_seed(3);
-        app.scale.spelling = Spelling::Flats;
+    fn a_root_button_is_named_by_the_scale_pressing_it_builds() {
+        // The label is a promise; this is the promise being kept. Both kinds are
+        // checked because the label moves with the kind — pitch class 10 reads A♯
+        // under Minor Pentatonic and B♭ under Ionian — and a rule that only held for
+        // one of them would be worse than no rule.
+        for kind in [ScaleKind::Ionian, ScaleKind::MinorPentatonic] {
+            let mut app = app_with_seed(5);
+            let _ = app.update(Message::SelectScaleKind(kind));
 
-        for _ in 0..200 {
-            app.reroll_scale();
-            assert_eq!(app.scale.spelling, Spelling::Flats);
+            for &pitch_class in &PitchClass::ALL {
+                let label = Scale::new(pitch_class, kind).root_note();
+
+                let _ = app.update(Message::SelectRoot(pitch_class));
+
+                assert_eq!(
+                    app.scale.root_note(),
+                    label,
+                    "{kind:?} button for {pitch_class:?} promised {label}"
+                );
+            }
         }
     }
 
@@ -2059,24 +2048,17 @@ mod tests {
     /// `translate_key` no longer answers "is this key bound?" — it forwards every
     /// unrecognised character for the screen to resolve — so the absence of a binding is
     /// only observable here, as the absence of a change.
-    fn snapshot(
-        app: &App,
-    ) -> (
-        Screen,
-        FocusTarget,
-        PitchClass,
-        ScaleKind,
-        Spelling,
-        Notation,
-        usize,
-    ) {
+    fn snapshot(app: &App) -> (Screen, FocusTarget, PitchClass, ScaleKind, Notation, usize) {
         (
             app.screen.clone(),
             app.focused,
-            app.scale.root,
-            app.scale.kind,
-            app.scale.spelling,
-            // Without this field the tests below would watch `i` do nothing and call
+            app.scale.root(),
+            app.scale.kind(),
+            // The scale's spelling was watched here too. It is derived from the two
+            // fields above now, so it cannot move on its own and watching it would only
+            // restate them.
+            //
+            // Without `notation` the tests below would watch `i` do nothing and call
             // that a pass.
             app.notation,
             app.history.len(),
@@ -2138,9 +2120,9 @@ mod tests {
         app.navigate_to(Screen::ScaleTrainer);
 
         for _ in 0..50 {
-            let before = (app.scale.root, app.scale.kind);
+            let before = (app.scale.root(), app.scale.kind());
             press_into(&mut app, "r", keyboard::Modifiers::empty());
-            assert_ne!((app.scale.root, app.scale.kind), before);
+            assert_ne!((app.scale.root(), app.scale.kind()), before);
         }
     }
 
@@ -2238,8 +2220,8 @@ mod tests {
         untouched.open(Screen::ScaleTrainer);
 
         assert_eq!(
-            (pressed.scale.root, pressed.scale.kind),
-            (untouched.scale.root, untouched.scale.kind),
+            (pressed.scale.root(), pressed.scale.kind()),
+            (untouched.scale.root(), untouched.scale.kind()),
             "r on Home disturbed the scale stream"
         );
     }
@@ -2522,11 +2504,7 @@ mod tests {
 
     #[test]
     fn interval_notation_labels_the_markers_with_the_formula() {
-        let a_aeolian = Scale {
-            root: PitchClass::new(9),
-            spelling: Spelling::Sharps,
-            kind: ScaleKind::Aeolian,
-        };
+        let a_aeolian = Scale::new(PitchClass::new(9), ScaleKind::Aeolian);
 
         let names = scale_markers(a_aeolian, Notation::Notes);
         let degrees = scale_markers(a_aeolian, Notation::Intervals);
@@ -2558,38 +2536,36 @@ mod tests {
         assert_eq!(labels, expected);
 
         for marker in &degrees {
-            if marker_pitch_class(marker) == a_aeolian.root {
+            if marker_pitch_class(marker) == a_aeolian.root() {
                 assert_eq!(marker.label, "1", "the root is degree 1");
             }
         }
     }
 
     #[test]
-    fn the_spelling_toggle_does_not_reach_interval_labels() {
-        // The ♯♭ button keeps working in interval notation — it still names the root on
-        // the card — but a degree is a position in the formula, and no choice of sharps
-        // or flats moves one.
-        let sharps = Scale {
-            root: PitchClass::new(1),
-            spelling: Spelling::Sharps,
-            kind: ScaleKind::Ionian,
-        };
-        let flats = Scale {
-            spelling: Spelling::Flats,
-            ..sharps
-        };
+    fn spelling_does_not_reach_interval_labels() {
+        // A degree is a position in the formula, and no choice of sharps or flats
+        // moves one. This used to be asserted by toggling one root two ways; with the
+        // spelling derived there is no toggle, so it is asserted across every root
+        // instead — which sweeps roots that resolve to sharps (F♯ Ionian) and roots
+        // that resolve to flats (D♭ Ionian) alike. If spelling leaked into a degree,
+        // those two would disagree.
+        let kind = ScaleKind::Ionian;
+        let mut expected: Vec<String> = kind.intervals().iter().map(|i| i.to_string()).collect();
+        expected.sort();
 
-        let labels = |scale: Scale| -> Vec<String> {
-            scale_markers(scale, Notation::Intervals)
+        for &pitch_class in &PitchClass::ALL {
+            let scale = Scale::new(pitch_class, kind);
+
+            let mut labels: Vec<String> = scale_markers(scale, Notation::Intervals)
                 .iter()
-                .map(|m| m.label.clone())
-                .collect()
-        };
+                .map(|marker| marker.label.clone())
+                .collect();
+            labels.sort();
+            labels.dedup();
 
-        // C♯ and D♭ Ionian are spelled differently note for note — the case
-        // toggling_spelling_moves_no_marker_but_relabels_at_least_one uses — so if
-        // spelling leaked into a degree, it would leak here.
-        assert_eq!(labels(sharps), labels(flats));
+            assert_eq!(labels, expected, "{:?} Ionian", scale.root_note());
+        }
     }
 
     #[test]
@@ -2598,11 +2574,7 @@ mod tests {
         // F Ionian's fourth degree is B♭, not the semitone-only A♯ the old code
         // produced. `Spelling::Sharps` is exactly the setting that used to expose
         // the bug, since a naive sharps-only spelling would pick A♯ here.
-        let scale = Scale {
-            root: PitchClass::new(5),
-            spelling: Spelling::Sharps,
-            kind: ScaleKind::Ionian,
-        };
+        let scale = Scale::new(PitchClass::new(5), ScaleKind::Ionian);
 
         let markers = scale_markers(scale, Notation::Notes);
         let mut checked = 0;
@@ -2628,52 +2600,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn toggling_spelling_moves_no_marker_but_relabels_at_least_one() {
-        // Automates the manual checklist item: the ♯/♭ toggle renames notes, it
-        // does not redraw the fretboard. Membership is a pitch-class fact and
-        // does not depend on Spelling, so both marker lists cover the same
-        // string/fret cells in the same order — which is what lets them be
-        // zipped positionally below instead of just compared as sets.
-        //
-        // The root must be a non-natural pitch class: F Ionian's B♭ is spelled
-        // the same either way (letter-walked from a root whose own letter, F,
-        // does not change), so it would not exercise the toggle at all. A root
-        // like C♯/D♭ relabels every degree, since the root's own letter differs
-        // between spellings.
-        let sharps = Scale {
-            root: PitchClass::new(1),
-            spelling: Spelling::Sharps,
-            kind: ScaleKind::Ionian,
-        };
-        let flats = Scale {
-            spelling: Spelling::Flats,
-            ..sharps
-        };
-
-        let sharp_markers = scale_markers(sharps, Notation::Notes);
-        let flat_markers = scale_markers(flats, Notation::Notes);
-
-        // `marker_positions` compares them as sequences, not as sets — which is what
-        // the paragraph above claims and what the positional zip below relies on.
-        assert_eq!(
-            marker_positions(&sharp_markers),
-            marker_positions(&flat_markers),
-            "toggling spelling moved a marker"
-        );
-
-        assert_eq!(sharp_markers.len(), flat_markers.len());
-        let relabelled = sharp_markers
-            .iter()
-            .zip(&flat_markers)
-            .any(|(sharp, flat)| sharp.label != flat.label);
-        assert!(relabelled, "no marker's label changed under the toggle");
-    }
+    // `toggling_spelling_moves_no_marker_but_relabels_at_least_one` stood here,
+    // automating a manual checklist item about the ♯/♭ toggle. There is no toggle to
+    // check now. Its surviving half — that a naming choice never moves a marker — is
+    // `naming_never_moves_the_scale` in `music/scales.rs`, over all 192 combinations
+    // rather than one root two ways.
 
     #[test]
     fn root_highlighting_keys_on_pitch_class_not_on_note() {
         // Pins the exact predicate `scale_markers` highlights on: pitch-class
-        // equality against `scale.root`, independently recomputed here rather
+        // equality against `scale.root()`, independently recomputed here rather
         // than trusted from `marker.note`. Swapping the source line to
         // `marker.note == scale.root_note()` happens to color identically today
         // — every note in one scale's `notes()` has a distinct pitch class, and
@@ -2682,18 +2618,14 @@ mod tests {
         // both of those holding elsewhere. Keying on `PitchClass` directly, as
         // this test requires, stays correct even if either invariant is ever
         // broken by an unrelated change; keying on `Note` would not.
-        let scale = Scale {
-            root: PitchClass::new(5),
-            spelling: Spelling::Sharps,
-            kind: ScaleKind::Ionian,
-        };
+        let scale = Scale::new(PitchClass::new(5), ScaleKind::Ionian);
 
         let markers = scale_markers(scale, Notation::Notes);
         let root_color = Color::from_rgb8(0xff, 0x4d, 0x4d);
         let (mut root_markers, mut other_markers) = (0, 0);
 
         for marker in &markers {
-            if marker_pitch_class(marker) == scale.root {
+            if marker_pitch_class(marker) == scale.root() {
                 assert_eq!(marker.color, root_color, "root marker not highlighted");
                 root_markers += 1;
             } else {
@@ -2710,11 +2642,7 @@ mod tests {
     fn standard_tuning_low_open_string_is_e_natural() {
         // Pins STANDARD_TUNING itself: E A D G B E low to high, pitch classes
         // 4 9 2 7 11 4. Nothing else asserts this constant directly.
-        let e_ionian = Scale {
-            root: PitchClass::new(4),
-            spelling: Spelling::Sharps,
-            kind: ScaleKind::Ionian,
-        };
+        let e_ionian = Scale::new(PitchClass::new(4), ScaleKind::Ionian);
 
         let markers = scale_markers(e_ionian, Notation::Notes);
         let open_low_e = markers
