@@ -36,6 +36,9 @@ Rust edition 2024. The only dependency is `iced` (with the `canvas` and `smol` f
 the latter for the timer behind the Note Trainer's answer flash); the fonts
 under `assets/` are embedded into the binary at compile time.
 
+Contributors can install [`just`](https://just.systems) and run `just` to see the repo's
+recipes; `just ci` runs the same gate CI runs, and nothing else here needs it.
+
 ## Keyboard model
 
 The focus ring is a 2-D grid rather than a flat tab order, so `↑ ↓ ← →` and the vim motions

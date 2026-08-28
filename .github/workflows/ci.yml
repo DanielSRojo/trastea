@@ -24,18 +24,13 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Install just
+        uses: extractions/setup-just@v4
+
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Check formatting
-        run: cargo fmt --all --check
-
-      # --all-targets so the #[cfg(test)] modules are linted too
-      - name: Lint
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Test
-        run: cargo test
-
-      - name: Build
-        run: cargo build
+      # the stages and their flags live in ./justfile, so a local `just ci` runs
+      # exactly what CI runs
+      - name: just ci
+        run: just ci
