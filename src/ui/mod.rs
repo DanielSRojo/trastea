@@ -12,7 +12,8 @@ use interval_trainer::{Drill as IntervalDrill, IntervalTrainer, ui_interval_trai
 use note_trainer::{Drill, NoteTrainer, ui_note_trainer};
 
 use iced::{
-    Background, Border, Color, Element, Padding, Shadow, Subscription, Task, Vector, font, keyboard,
+    Background, Border, Color, Element, Padding, Pixels, Shadow, Subscription, Task, Vector, font,
+    keyboard,
 };
 use keyboard::key::Named;
 
@@ -46,7 +47,19 @@ const ROOT_MARKER: Color = Color::from_rgb8(0xff, 0xb3, 0x4d);
 /// Long enough to register as an answer being *marked* rather than as the screen
 /// flickering, and short enough that a learner on a run never waits on it.
 const ANSWER_FLASH: Duration = Duration::from_secs(1);
-const SUMMARY_CARD_HEIGHT: f32 = 212.0;
+/// Tall enough for a scale kind whose name wraps to two lines — `Minor Pentatonic` and
+/// friends — *plus* the interval formula under it. iced lays a `Shrink` child out against
+/// the space that is left, so a column that runs out gives its last child a height of zero
+/// and the formula silently stops drawing rather than overflowing. The fit test below
+/// derives the budget this has to clear.
+const SUMMARY_CARD_HEIGHT: f32 = 280.0;
+/// The three text sizes the summary card has to stack inside `SUMMARY_CARD_HEIGHT`. Named
+/// rather than inlined so `summary_card_fits_a_two_line_name` budgets against the same
+/// numbers the card draws with — a copy of them would drift silently, which is the whole
+/// failure that test exists to catch.
+const SUMMARY_ROOT_SIZE: f32 = 56.0;
+const SUMMARY_NAME_SIZE: f32 = 34.0;
+const SUMMARY_FORMULA_SIZE: f32 = 24.0;
 const ROOT_SELECTOR_CARD_WIDTH: f32 = 320.0;
 const SELECTOR_CARD_HEIGHT: f32 = 324.0;
 const ROOT_BUTTON_SIZE: f32 = 50.0;
@@ -1135,7 +1148,7 @@ fn ui_scale_trainer(
     let current_scale_card = container(
         column![
             row![
-                note_label(scale.root_note(), 56, INK),
+                note_label(scale.root_note(), SUMMARY_ROOT_SIZE, INK),
                 Space::new().width(Length::Fill),
                 focus_ring(
                     // One degree, not a formula fragment: `1♭3` was tried first, on the
@@ -1165,7 +1178,7 @@ fn ui_scale_trainer(
                 ),
             ]
             .spacing(8),
-            text(scale.kind().name()).size(34).color(INK),
+            text(scale.kind().name()).size(SUMMARY_NAME_SIZE).color(INK),
             intervalic_text(scale.kind().intervals()),
         ]
         .spacing(10),
@@ -1326,9 +1339,16 @@ fn root_note_row(
         })
 }
 
-fn note_label(note: Note, size: u32, color: Color) -> iced::widget::Row<'static, Message> {
+fn note_label(
+    note: Note,
+    size: impl Into<Pixels>,
+    color: Color,
+) -> iced::widget::Row<'static, Message> {
     use iced::widget::{row, text};
 
+    // `Pixels` is `Copy`, so resolving the conversion once lets both the letter and the
+    // accidental share it — `impl Into<Pixels>` itself would be moved by the first `size`.
+    let size = size.into();
     let label = row![text(note.letter.to_string()).size(size).color(color)].spacing(0);
 
     match accidental_glyph(note.accidental) {
@@ -1378,13 +1398,19 @@ fn intervalic_text(intervals: &'static [Interval]) -> iced::widget::Row<'static,
             if let Some(glyph) = glyph {
                 token = token.push(
                     text(glyph.to_string())
-                        .size(24)
+                        .size(SUMMARY_FORMULA_SIZE)
                         .font(MUSIC_FONT)
                         .color(BODY),
                 );
             }
 
-            tokens.push(token.push(text(digit.to_string()).size(24).color(BODY)))
+            tokens.push(
+                token.push(
+                    text(digit.to_string())
+                        .size(SUMMARY_FORMULA_SIZE)
+                        .color(BODY),
+                ),
+            )
         })
 }
 
@@ -2789,6 +2815,38 @@ mod tests {
                 (None, 5),
                 (Some(SMUFL_FLAT), 7),
             ]
+        );
+    }
+
+    #[test]
+    fn summary_card_fits_a_two_line_name() {
+        // iced's `LineHeight::default()` — `Relative(1.3)` in `iced_core::text`. Restated
+        // here because iced resolves it internally, and the budget below is in laid-out
+        // pixels rather than font sizes.
+        const TEXT_LINE_HEIGHT: f32 = 1.3;
+        // The card's own `.spacing(10)` and `.padding(32)`, both in `ui_scale_trainer`.
+        const COLUMN_SPACING: f32 = 10.0;
+        const CARD_PADDING: f32 = 32.0;
+        // `Harmonic Minor` and the two pentatonics are all wider than the card at
+        // `SUMMARY_NAME_SIZE`, so a name has to be budgeted at two lines, not one.
+        const NAME_LINES: f32 = 2.0;
+
+        let line = |size: f32| size * TEXT_LINE_HEIGHT;
+        // The header row is as tall as the root label, which dominates the two ghost
+        // buttons sharing the line with it.
+        let needed = line(SUMMARY_ROOT_SIZE)
+            + COLUMN_SPACING
+            + NAME_LINES * line(SUMMARY_NAME_SIZE)
+            + COLUMN_SPACING
+            + line(SUMMARY_FORMULA_SIZE)
+            + 2.0 * CARD_PADDING;
+
+        assert!(
+            SUMMARY_CARD_HEIGHT >= needed,
+            "the summary card is {SUMMARY_CARD_HEIGHT} tall but needs {needed} for a \
+             two-line scale name above its formula. iced resolves a `Shrink` child against \
+             the space that is left, so the formula row would lay out at zero height and \
+             stop drawing entirely — silently, with no clipping and no panic."
         );
     }
 }
