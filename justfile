@@ -14,20 +14,22 @@ fmt:
 fmt-check:
     cargo fmt --all --check
 
-# --all-targets so the #[cfg(test)] modules are linted too
+# --all-targets so the #[cfg(test)] modules are linted too. --locked, here and on
+# test/build/build-release, makes a stale Cargo.lock a failure rather than something
+# cargo quietly rewrites — `run` and `fmt` stay unlocked so the inner loop is unaffected.
 lint:
-    cargo clippy --all-targets -- -D warnings
+    cargo clippy --locked --all-targets -- -D warnings
 
 # unit tests, no UI harness needed
 test:
-    cargo test
+    cargo test --locked
 
 build:
-    cargo build
+    cargo build --locked
 
 # the optimized binary the release workflow packages — its flags live here, not in the workflow
 build-release:
-    cargo build --release
+    cargo build --locked --release
 
 # launch the app
 run:
