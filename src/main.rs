@@ -27,7 +27,6 @@ fn main() -> iced::Result {
         .window_size(Size::new(1280.0, 960.0))
         .font(include_bytes!("../assets/fonts/DancingScript-Regular.ttf").as_slice())
         .font(include_bytes!("../assets/fonts/DancingScript-Bold.ttf").as_slice())
-        .font(include_bytes!("../assets/fonts/Leland.otf").as_slice())
         .font(include_bytes!("../assets/fonts/LelandText.otf").as_slice())
         .theme(theme)
         .subscription(App::subscription)

@@ -116,8 +116,8 @@ You may run, study, share and modify it; a version you pass on has to reach its 
 those same terms, source included.
 
 The fonts are a separate matter. They are compiled into the binary but licensed under the
-[SIL Open Font License 1.1](assets/fonts/OFL.txt) rather than the GPL — Leland and Leland
-Text © MuseScore BVBA, Dancing Script © the Dancing Script Project Authors, both embedded
+[SIL Open Font License 1.1](assets/fonts/OFL.txt) rather than the GPL — Leland Text ©
+MuseScore BVBA, Dancing Script © the Dancing Script Project Authors, both embedded
 unmodified. The OFL says plainly that a font may be bundled with software under any license,
 so the two sit beside each other without either reaching into the other. Both texts ship
 inside the release archives, since the binary redistributes the fonts by carrying them.
