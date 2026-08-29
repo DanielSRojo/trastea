@@ -61,8 +61,14 @@ const SUMMARY_ROOT_SIZE: f32 = 56.0;
 const SUMMARY_NAME_SIZE: f32 = 34.0;
 const SUMMARY_FORMULA_SIZE: f32 = 24.0;
 const ROOT_SELECTOR_CARD_WIDTH: f32 = 320.0;
-const SELECTOR_CARD_HEIGHT: f32 = 324.0;
+/// Tall enough for `KIND_ROW_WIDTHS`'s six rows; the root selector shares the constant and
+/// has room to spare. Sized by the same rule as `SUMMARY_CARD_HEIGHT`, and for the same
+/// reason — a fixed height a column outgrows costs the last row entirely, not visibly.
+const SELECTOR_CARD_HEIGHT: f32 = 400.0;
 const ROOT_BUTTON_SIZE: f32 = 50.0;
+/// The scale-kind pills' text size. Named for the reason the summary card's sizes are:
+/// `selector_card_fits_every_kind_row` budgets the card's height against it.
+const KIND_BUTTON_SIZE: f32 = 16.0;
 const SMUFL_FLAT: char = '\u{E260}';
 const SMUFL_SHARP: char = '\u{E262}';
 const SMUFL_DOUBLE_SHARP: char = '\u{E263}';
@@ -306,7 +312,13 @@ const HOME_MENU_ITEMS: usize = HOME_MENU.len();
 /// Row shapes of the two selector grids on the scale trainer. Both the views and
 /// the focus grid are built from these, so the two cannot drift out of sync.
 const ROOT_ROW_WIDTH: usize = 3;
-const KIND_ROW_WIDTHS: [usize; 5] = [4, 3, 2, 3, 4];
+/// Six rows, not the five a sixteen-item grid would suggest. `Voodoo | Spanish Gypsy |
+/// Whole Tone | Diminished` came to 456px against the 440px the card gets at the default
+/// 1280-wide window, so `Diminished` was cut off its right edge. Of every contiguous
+/// five-row shape only two fit at all, with 10px and 0px to spare; this is the one
+/// six-row shape that both fits — 73px spare on its widest row — and stays a palindrome,
+/// which the old 4-3-2-3-4 was.
+const KIND_ROW_WIDTHS: [usize; 6] = [3, 3, 2, 2, 3, 3];
 
 /// Columns in the Note Trainer's answer grid. Four divides the twelve pitch classes evenly
 /// and matches the four header controls above them, so the columns line up.
@@ -1427,7 +1439,7 @@ fn scale_kind_row(
         .enumerate()
         .fold(row![].spacing(8), |row, (i, kind)| {
             row.push(focus_ring(
-                button(text(kind.name()).size(16))
+                button(text(kind.name()).size(KIND_BUTTON_SIZE))
                     .padding([8, 12])
                     .style(if *kind == selected {
                         selected_root_button
@@ -1895,7 +1907,10 @@ mod tests {
         assert_eq!(roots, vec![(0, 3), (3, 3), (6, 3), (9, 3)]);
 
         let kinds: Vec<_> = kind_row_spans().collect();
-        assert_eq!(kinds, vec![(0, 4), (4, 3), (7, 2), (9, 3), (12, 4)]);
+        assert_eq!(
+            kinds,
+            vec![(0, 3), (3, 3), (6, 2), (8, 2), (10, 3), (13, 3)]
+        );
 
         let covered: usize = kinds.iter().map(|&(_, len)| len).sum();
         assert_eq!(covered, ScaleKind::ALL.len());
@@ -1969,17 +1984,17 @@ mod tests {
         );
         assert_eq!(arrow(FocusTarget::Back, Direction::Up), FocusTarget::Back);
 
-        // ScaleKind(3) ends the widest kind row, so nothing is to its right.
+        // ScaleKind(2) ends the widest kind row, so nothing is to its right.
         assert_eq!(
-            arrow(FocusTarget::ScaleKind(3), Direction::Right),
-            FocusTarget::ScaleKind(3)
+            arrow(FocusTarget::ScaleKind(2), Direction::Right),
+            FocusTarget::ScaleKind(2)
         );
     }
 
     #[test]
     fn down_past_the_root_grid_does_not_jump_into_the_taller_kinds_card() {
-        // The kinds card has a fifth row, the root card does not. Leaving the last
-        // root row must stay put rather than teleporting across to ScaleKind(12).
+        // The kinds card has a fifth and sixth row, the root card does not. Leaving the
+        // last root row must stay put rather than teleporting across to ScaleKind(10).
         for last_row_root in [
             FocusTarget::Root(9),
             FocusTarget::Root(10),
@@ -1991,16 +2006,17 @@ mod tests {
 
     #[test]
     fn vertical_moves_clamp_into_shorter_rows() {
-        // Row 1 of the kinds card holds 3 items (indices 4..7), so leaving the 4-wide
+        // Row 2 of the kinds card holds 2 items (indices 6..8), so leaving the 3-wide
         // row above it from its last column lands on that row's last item.
         assert_eq!(
-            arrow(FocusTarget::ScaleKind(3), Direction::Down),
-            FocusTarget::ScaleKind(6)
+            arrow(FocusTarget::ScaleKind(5), Direction::Down),
+            FocusTarget::ScaleKind(7)
         );
-        // Row 2 is narrower still (indices 7..9).
+        // Row 3 is the same width as row 2, so the column is carried straight down
+        // rather than clamped.
         assert_eq!(
-            arrow(FocusTarget::ScaleKind(6), Direction::Down),
-            FocusTarget::ScaleKind(8)
+            arrow(FocusTarget::ScaleKind(7), Direction::Down),
+            FocusTarget::ScaleKind(9)
         );
     }
 
@@ -2815,6 +2831,31 @@ mod tests {
                 (None, 5),
                 (Some(SMUFL_FLAT), 7),
             ]
+        );
+    }
+
+    #[test]
+    fn selector_card_fits_every_kind_row() {
+        // As in `summary_card_fits_a_two_line_name`: iced's default relative line height,
+        // and the card's own `.spacing(12)` and `.padding(32)` from `ui_scale_trainer`.
+        const TEXT_LINE_HEIGHT: f32 = 1.3;
+        const COLUMN_SPACING: f32 = 12.0;
+        const CARD_PADDING: f32 = 32.0;
+        // A pill is its text, the button's own `.padding([8, 12])`, and the 3px `focus_ring`
+        // wrapped round it. Only the vertical half of each matters here.
+        const BUTTON_PADDING_Y: f32 = 8.0;
+        const FOCUS_RING_PADDING: f32 = 3.0;
+
+        let rows = KIND_ROW_WIDTHS.len() as f32;
+        let pill =
+            KIND_BUTTON_SIZE * TEXT_LINE_HEIGHT + 2.0 * BUTTON_PADDING_Y + 2.0 * FOCUS_RING_PADDING;
+        let needed = rows * pill + (rows - 1.0) * COLUMN_SPACING + 2.0 * CARD_PADDING;
+
+        assert!(
+            SELECTOR_CARD_HEIGHT >= needed,
+            "the selector card is {SELECTOR_CARD_HEIGHT} tall but needs {needed} for \
+             {rows} rows of scale kinds; the last row would lay out at zero height and \
+             stop drawing, taking its kinds off the screen with it."
         );
     }
 
