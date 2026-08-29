@@ -2,12 +2,12 @@
 
 A keyboard-driven guitar trainer for the desktop, written in Rust with [iced](https://iced.rs) 0.14.
 
-Trastea draws a twelve-fret neck in standard tuning and drills two things against it: the
-shape of a scale, and the name of a note under your finger. Everything is reachable from
-the keyboard — the mouse is optional.
+Trastea draws a twelve-fret neck in standard tuning and drills three things against it: the
+shape of a scale, the name of a note under your finger, and the distance between two
+positions. Everything is reachable from the keyboard — the mouse is optional.
 
-> **Status: early.** The Scale Trainer and the Note Trainer work. The Interval Trainer is a
-> menu entry pointing at a placeholder screen, and `music::chords` is a documented stub.
+> **Status: early.** All three trainers work. `music::chords` is a documented stub, and the
+> chord layer it sketches is the next thing to build.
 
 ## Screens
 
@@ -25,16 +25,28 @@ the cursor to a position carrying it. A right answer lights green and a wrong on
 the next prompt follows a second later. `d` swaps the direction, `a` widens the pool from
 the seven naturals to all twelve pitch classes, `r` skips the current prompt.
 
+**Interval Trainer** — the same two directions, with nothing on screen named. A lit position
+stands in for the tonal center instead of a key, and no note name appears anywhere, so a
+prompt is answerable by measuring the distance between two marks and by nothing else. *Name
+it* lights a root and a target and asks what interval separates them; *Find it* lights a root,
+names an interval, and asks you to click or walk to a position carrying it. Twelve buttons
+cover the octave rather than thirteen: with no key established, the augmented fourth and the
+diminished fifth are the same six frets, so the drill judges by semitone distance instead of
+pretending to tell them apart. `d` swaps the direction, `r` skips the current prompt.
+
 ## Running
 
 ```sh
 cargo run          # launch the app
-cargo test         # 160 unit tests, no UI harness needed
+cargo test         # the unit tests, no UI harness needed
 ```
 
 Rust edition 2024. The only dependency is `iced` (with the `canvas` and `smol` features,
-the latter for the timer behind the Note Trainer's answer flash); the fonts
-under `assets/` are embedded into the binary at compile time.
+the latter for the timer behind the trainers' answer flash); the fonts under `assets/` are
+embedded into the binary at compile time.
+
+Tagged releases carry a prebuilt binary for x86_64 Linux and an `.app` bundle for Apple
+silicon. Every other platform builds from source with the above.
 
 Contributors can install [`just`](https://just.systems) and run `just` to see the repo's
 recipes; `just ci` runs the same gate CI runs, and nothing else here needs it.
@@ -61,19 +73,20 @@ the current screen is inert there.
 
 ```
 src/
-  main.rs            window, theme, embedded fonts
-  rng.rs             hand-rolled splitmix64 — seedable, so drills are reproducible in tests
-  music/             pure theory; no iced imports
-    notes.rs         PitchClass, Letter, Accidental, Note, Spelling
-    intervals.rs     Interval as a degree number + quality, not just a semitone count
-    scales.rs        ScaleKind and Scale::spell — degrees derived, not looked up
-    chords.rs        stub; see the module comment for the sketch
+  main.rs                window, theme, embedded fonts
+  rng.rs                 hand-rolled splitmix64 — seedable, so drills are reproducible
+  music/                 pure theory; no iced imports
+    notes.rs             PitchClass, Letter, Accidental, Note, Spelling
+    intervals.rs         Interval as a degree number + quality, not just a semitone count
+    scales.rs            ScaleKind and Scale::spell — degrees derived, not looked up
+    chords.rs            stub; see the module comment for the sketch
   ui/
-    mod.rs           App, Screen, Message, the focus grid, the neck's geometry, the
-                     Home and Scale Trainer views
-    note_trainer.rs  the drill's state machine and the screen that draws it
-    fretboard.rs     the neck as an iced canvas widget: one Layout drives both drawing
-                     and hit-testing, held together by a round-trip test
+    mod.rs               App, Screen, Message, the focus grid, the neck's geometry, the
+                         Home and Scale Trainer views
+    note_trainer.rs      the Note Trainer's state machine and the screen that draws it
+    interval_trainer.rs  the Interval Trainer's, on the same terms
+    fretboard.rs         the neck as an iced canvas widget: one Layout drives both drawing
+                         and hit-testing, held together by a round-trip test
 ```
 
 The split is load-bearing: `music/` never imports iced, and the UI holds no music theory of
@@ -83,11 +96,11 @@ case. Which of two enharmonic root names a scale gets is arithmetic too — fewe
 accidentals, then fewest accidentals — and only the eleven scales where that comes out
 exactly level fall back to what the note is conventionally called.
 
-`note_trainer.rs` keeps its state machine and its views together so the state can keep its
-fields private — they are read all over those views and nowhere else. `App` drives the drill
-through a dozen methods and never reaches past them; what the neck *is* stays in `mod.rs`,
-since that is the instrument rather than the drill and the next trainer will want it on the
-same terms.
+`note_trainer.rs` and `interval_trainer.rs` each keep their state machine and their views
+together so the state can keep its fields private — they are read all over those views and
+nowhere else. `App` drives both drills through the methods they mark `pub(super)` and never
+reaches past them; what the neck *is* stays in `mod.rs`, since that is the instrument rather
+than the drill, and both trainers want it on the same terms.
 
 ## Testing
 
