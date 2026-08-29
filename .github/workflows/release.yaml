@@ -60,21 +60,32 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      # Fonts are included in the binary. No other asset required
+      # The fonts are compiled into the binary, so the binary redistributes
+      # them: GPLv3 section 4 and OFL 1.1 clause 2 each require their license
+      # text to travel with the copy, which is why the archive is a staged
+      # directory rather than the bare executable.
       - name: Package tarball
         if: matrix.os == 'ubuntu-latest'
         run: |
-          mkdir -p dist
-          tar -czf "dist/trastea-${GITHUB_REF_NAME}-${{ matrix.name }}.tar.gz" \
-            -C target/release trastea
+          stage="trastea-${GITHUB_REF_NAME}-${{ matrix.name }}"
+          mkdir -p dist "${stage}"
+          cp target/release/trastea "${stage}/"
+          cp LICENSE "${stage}/"
+          cp assets/fonts/OFL.txt "${stage}/LICENSE-fonts.txt"
+          tar -czf "dist/${stage}.tar.gz" "${stage}"
 
       - name: Package .app bundle
         if: matrix.os == 'macos-latest'
         run: |
           version="${GITHUB_REF_NAME#v}"
           app="Trastea.app"
-          mkdir -p "${app}/Contents/MacOS"
+          mkdir -p "${app}/Contents/MacOS" "${app}/Contents/Resources"
           cp target/release/trastea "${app}/Contents/MacOS/trastea"
+
+          # Same obligation as the tarball; Resources/ is where a bundle
+          # conventionally carries them.
+          cp LICENSE "${app}/Contents/Resources/LICENSE"
+          cp assets/fonts/OFL.txt "${app}/Contents/Resources/LICENSE-fonts.txt"
 
           # NSHighResolutionCapable is not optional in practice: without it
           # macOS runs the app scaled and it renders blurry on Retina.

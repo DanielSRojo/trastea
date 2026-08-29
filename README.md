@@ -95,3 +95,16 @@ Tests live in-module next to what they cover. The music modules test spelling an
 arithmetic directly; the UI tests drive `App::update` with synthesized messages and assert
 on state, and the seeded RNG makes prompt sequences reproducible, so the drills are testable
 without rendering anything.
+
+## License
+
+Trastea is free software under the [GNU General Public License, version 3 or later](LICENSE).
+You may run, study, share and modify it; a version you pass on has to reach its users under
+those same terms, source included.
+
+The fonts are a separate matter. They are compiled into the binary but licensed under the
+[SIL Open Font License 1.1](assets/fonts/OFL.txt) rather than the GPL — Leland and Leland
+Text © MuseScore BVBA, Dancing Script © the Dancing Script Project Authors, both embedded
+unmodified. The OFL says plainly that a font may be bundled with software under any license,
+so the two sit beside each other without either reaching into the other. Both texts ship
+inside the release archives, since the binary redistributes the fonts by carrying them.

@@ -2,6 +2,10 @@
 name = "trastea"
 version = "0.1.0"
 edition = "2024"
+description = "A keyboard-driven guitar trainer for the desktop"
+repository = "https://github.com/DanielSRojo/trastea"
+license = "GPL-3.0-or-later"
+readme = "README.md"
 
 [dependencies]
 iced = { version = "0.14", features = ["canvas", "smol"] }
