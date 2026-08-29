@@ -6,6 +6,9 @@ description = "A keyboard-driven guitar trainer for the desktop"
 repository = "https://github.com/DanielSRojo/trastea"
 license = "GPL-3.0-or-later"
 readme = "README.md"
+# Not a crates.io crate. This is also what cargo-about's `private.ignore` keys
+# off, so it keeps Trastea out of its own third-party notices.
+publish = false
 
 [dependencies]
 iced = { version = "0.14", features = ["canvas", "smol"] }

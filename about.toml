@@ -21,8 +21,6 @@ accepted = [
     "Unicode-3.0",
     "CC0-1.0",
     "Unlicense",
-    # Trastea itself; the graph includes the root crate and it needs an id here.
-    "GPL-3.0-or-later",
 ]
 
 # Only the two targets the release workflow actually builds. Without this the graph
@@ -38,3 +36,10 @@ targets = [
 # not have to travel with the binary.
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
+
+# Trastea is `publish = false`, and this drops it from its own notices. Without it the
+# root crate is collected as though it were a third party: the GPL text then ships
+# twice — once as LICENSE, once here — and contradicts the header about.hbs writes,
+# which tells the reader that nothing on the page is Trastea's own.
+[private]
+ignore = true
