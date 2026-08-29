@@ -14,8 +14,16 @@ env:
 
 jobs:
   ci:
-    name: fmt, clippy, test, build
-    runs-on: ubuntu-latest
+    name: fmt, clippy, test, build (${{ matrix.os }})
+    # Both legs run the identical `just ci`: the gate has to cover every platform
+    # release.yaml publishes a binary for, and splitting stages by platform would put a
+    # judgement about which of them are portable back into the workflow.
+    strategy:
+      # every platform's problems on a single run, as in release.yaml's build matrix
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
 
