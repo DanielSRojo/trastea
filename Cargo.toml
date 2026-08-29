@@ -12,3 +12,26 @@ publish = false
 
 [dependencies]
 iced = { version = "0.14", features = ["canvas", "smol"] }
+
+# The flags for the binary the release workflow packages, kept here rather than in
+# release.yaml for the same reason build-release's flags live in the justfile.
+#
+# Measured on a clean `just build-release`, x86_64-linux:
+#
+#     stock release profile        21.8 MiB    96 s
+#     + lto/codegen-units          16.7 MiB   108 s   -23.2%
+#     + strip                      13.5 MiB    99 s   -19.5% again, -38.2% overall
+#
+# thin LTO rather than `lto = true`: fat LTO's extra link time and memory on a graph this
+# size buys little that thin does not already get. codegen-units = 1 is what makes either
+# worth having — the default 16 exists to parallelize compilation, which is the right
+# default everywhere except the build that runs once, on a tag.
+#
+# The strip costs something real: with no symbol table, a user's RUST_BACKTRACE from a panic
+# is hex addresses rather than function names. It stays because 3.3 MiB is a fifth of the
+# binary, which is past the line where that trade is worth making. If crash reports from
+# users ever start mattering more than download size, this is the line to remove.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
