@@ -33,5 +33,9 @@ build-release:
 run:
     cargo run
 
+# the third-party notices the release stages beside LICENSE — needs cargo-about installed
+notices:
+    cargo about generate about.hbs -o THIRD-PARTY-NOTICES.txt
+
 # the gate CI runs, in CI's order — dependencies run in sequence and stop at the first failure
 ci: fmt-check lint test build

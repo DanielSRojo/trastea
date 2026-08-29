@@ -121,3 +121,10 @@ MuseScore BVBA, Dancing Script © the Dancing Script Project Authors, both embed
 unmodified. The OFL says plainly that a font may be bundled with software under any license,
 so the two sit beside each other without either reaching into the other. Both texts ship
 inside the release archives, since the binary redistributes the fonts by carrying them.
+
+The crates are the same argument at a larger scale. Rust links them statically, so the
+binary carries their code too, and MIT and Apache-2.0 both ask for their notice to travel
+with a copy. `just notices` renders `THIRD-PARTY-NOTICES.txt` from `about.toml` — a couple
+of hundred crates, mostly `iced`'s tree — and the release stages it beside the other two.
+It is generated at release time rather than committed, so it cannot drift out of step with
+`Cargo.lock`.
