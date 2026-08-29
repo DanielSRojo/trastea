@@ -12,15 +12,19 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Fails the release before anything is built, so a bad tag never produces
-  # half a release that has to be deleted by hand.
+  # Fails the release before anything is built so a bad tag never produces a release.
   guard:
-    name: Verify tag and test
+    name: Verify tag and run the gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install just
+        uses: extractions/setup-just@v4
 
       - uses: Swatinem/rust-cache@v2
 
@@ -34,8 +38,8 @@ jobs:
           fi
           echo "tag and Cargo.toml agree on ${crate}"
 
-      - name: Test
-        run: cargo test
+      - name: just ci
+        run: just ci
 
   build:
     name: Build ${{ matrix.name }}
@@ -55,10 +59,13 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Install just
+        uses: extractions/setup-just@v4
+
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release
+        run: just build-release
 
       # The fonts are compiled into the binary, so the binary redistributes
       # them: GPLv3 section 4 and OFL 1.1 clause 2 each require their license

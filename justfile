@@ -25,6 +25,10 @@ test:
 build:
     cargo build
 
+# the optimized binary the release workflow packages — its flags live here, not in the workflow
+build-release:
+    cargo build --release
+
 # launch the app
 run:
     cargo run
