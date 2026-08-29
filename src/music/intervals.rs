@@ -85,13 +85,19 @@ impl Interval {
     /// "genuinely partial" beats picking a wrong answer. The letters are what
     /// resolve `F`→`B` as an augmented fourth and `F`→`B♭` as a perfect fourth.
     ///
-    /// Nothing in the app calls this yet — the interval trainer is still a
-    /// placeholder. It is kept because it is the one function whose meaning gets
-    /// sharper under spelling, and `expect` rather than `allow` so that the day a
-    /// caller appears, the stale attribute is a warning rather than a silent
-    /// leftover — this project has no `[lints]` table and nothing promotes
-    /// `unfulfilled_lint_expectations` above warn, but the zero-warning build is
-    /// enforced all the same, so a real caller landing here still gets caught.
+    /// Nothing in the app calls this. The interval trainer used to be the expected
+    /// caller, and now that the screen exists it turns out not to be: it lights its
+    /// tonal center rather than naming a key, so nothing on it is spelled and it
+    /// judges by semitone distance instead. A drill that *establishes* a key is what
+    /// would call this — there, `F`→`B` and `F`→`B♭` are different questions and the
+    /// degree number is the answer.
+    ///
+    /// Kept because it is the one function whose meaning gets sharper under spelling,
+    /// and `expect` rather than `allow` so that the day a caller appears, the stale
+    /// attribute is a warning rather than a silent leftover — this project has no
+    /// `[lints]` table and nothing promotes `unfulfilled_lint_expectations` above
+    /// warn, but the zero-warning build is enforced all the same, so a real caller
+    /// landing here still gets caught.
     ///
     /// `cfg_attr(not(test), ...)`, not a bare `#[expect]`, because this module's
     /// own tests call `between` directly: under a test build the function is no
@@ -100,7 +106,10 @@ impl Interval {
     /// build — the real binary — where "no caller yet" is actually true.
     #[cfg_attr(
         not(test),
-        expect(dead_code, reason = "the interval trainer screen will call this")
+        expect(
+            dead_code,
+            reason = "degree-aware theory kept ahead of its first caller"
+        )
     )]
     pub fn between(from: Note, to: Note) -> Option<Interval> {
         let steps = (to.letter as u8 + 7 - from.letter as u8) % 7;

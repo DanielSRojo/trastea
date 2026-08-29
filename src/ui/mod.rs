@@ -1,9 +1,14 @@
 mod fretboard;
+mod interval_trainer;
 mod note_trainer;
 use std::ops::Range;
 use std::time::Duration;
 
 use fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
+// Both trainers name their direction `Drill`, and both names are wanted here — the
+// focus grid branches on each. Aliased rather than renamed at the source, since inside
+// its own module each is simply the drill's direction.
+use interval_trainer::{Drill as IntervalDrill, IntervalTrainer, ui_interval_trainer};
 use note_trainer::{Drill, NoteTrainer, ui_note_trainer};
 
 use iced::{
@@ -32,6 +37,10 @@ const LINK: Color = Color::from_rgb8(0x50, 0xa7, 0xff);
 /// are the same literals `scale_markers` and `selected_root_button` already used inline.
 const DANGER: Color = Color::from_rgb8(0xff, 0x4d, 0x4d);
 const SUCCESS: Color = Color::from_rgb8(0x50, 0xe3, 0xc2);
+/// The Interval Trainer's tonal center, which needs a colour no other mark on that neck
+/// uses: `LINK` is the prompt, `DANGER` and `SUCCESS` are the answers, and white is the
+/// keyboard cursor's ring. Amber is what is left, and it reads as warm against all four.
+const ROOT_MARKER: Color = Color::from_rgb8(0xff, 0xb3, 0x4d);
 /// How long a correct answer stays lit before the next prompt replaces it.
 ///
 /// Long enough to register as an answer being *marked* rather than as the screen
@@ -83,6 +92,8 @@ pub struct App {
     /// The Note Trainer's drill. Its own struct rather than seven more fields here, so its
     /// rules stay testable without an `App`.
     note_trainer: NoteTrainer,
+    /// The Interval Trainer's drill, on the same terms and for the same reasons.
+    interval_trainer: IntervalTrainer,
 }
 
 /// What the fretboard's markers are labelled with: the notes' names, or the degrees
@@ -128,6 +139,31 @@ fn pitch_class_at(string: usize, fret: usize) -> Option<PitchClass> {
         .map(|open| open.transpose(fret as u8))
 }
 
+/// One place on the neck.
+///
+/// Here rather than in a trainer, because a position is a fact about the instrument and
+/// not about any one drill — the same reason `pitch_class_at` and `STANDARD_TUNING` live
+/// in this module.
+///
+/// Named fields rather than the bare `(usize, usize)` the Note Trainer uses. That pair is
+/// unambiguous there, where a prompt holds exactly one position; the Interval Trainer's
+/// *Name it* prompt holds two of them, and a root swapped with a target is a silent bug
+/// that inverts every interval on screen — a minor third read back as a major sixth, with
+/// nothing failing to compile. `Position { string, fret }` makes that swap unwriteable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Position {
+    string: usize,
+    fret: usize,
+}
+
+impl Position {
+    /// The pitch class sounding here, or `None` off the neck — `pitch_class_at`'s `Option`
+    /// and its reasoning, reached through the named fields.
+    fn pitch_class(self) -> Option<PitchClass> {
+        pitch_class_at(self.string, self.fret)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     Navigate(Screen),
@@ -152,6 +188,19 @@ pub enum Message {
     TogglePool,
     /// The Note Trainer's spelling, not the scale's — see `NoteTrainer::spelling`.
     ToggleNoteSpelling,
+    /// Answers a *Name it* prompt on the Interval Trainer with an interval.
+    AnswerInterval(Interval),
+    /// Answers the Interval Trainer's *Find it* prompt with a position — and what a press
+    /// on that screen's neck sends.
+    ///
+    /// Two loose `usize`s for the reason `ChooseNotePosition` takes them: the bare variant
+    /// constructor is handed to `Fretboard::on_press` as a `fn(usize, usize) -> Message`.
+    ChooseIntervalPosition(usize, usize),
+    SkipIntervalPrompt,
+    ToggleIntervalDirection,
+    /// The end of the Interval Trainer's answer flash. Its own variant rather than a shared
+    /// `AdvancePrompt` routed by screen, so a tick cannot retire the other trainer's prompt.
+    AdvanceIntervalPrompt,
     /// A character key that may be an accelerator on the current screen.
     ///
     /// Carries the character rather than an action because `translate_key` has no screen
@@ -188,6 +237,13 @@ pub enum FocusTarget {
     /// trainer derives its spelling rather than offering a choice. See `Scale::new`.
     NoteSpellingToggle,
     SkipPrompt,
+    /// The Interval Trainer's neck, as its *Find it* answer surface. Claims the motion keys
+    /// while focused, exactly as `Fretboard` does on the Note Trainer.
+    IntervalFretboard,
+    /// One of the twelve interval answer buttons, indexed into the drill's vocabulary.
+    IntervalAnswer(usize),
+    IntervalDirectionToggle,
+    SkipIntervalPrompt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -249,6 +305,7 @@ impl App {
         // drawn from it and a struct literal cannot borrow a field it is still building.
         let mut rng = Rng::from_clock();
         let note_trainer = NoteTrainer::new(&mut rng);
+        let interval_trainer = IntervalTrainer::new(&mut rng);
 
         let app = Self {
             screen: Screen::default(),
@@ -259,6 +316,7 @@ impl App {
             help_open: false,
             notation: Notation::Notes,
             note_trainer,
+            interval_trainer,
         };
 
         (app, Task::none())
@@ -270,6 +328,11 @@ impl App {
         // spent dismissing a panel the learner is still reading.
         if matches!(message, Message::AdvancePrompt) {
             self.note_trainer.advance(&mut self.rng);
+            return Task::none();
+        }
+
+        if matches!(message, Message::AdvanceIntervalPrompt) {
+            self.interval_trainer.advance(&mut self.rng);
             return Task::none();
         }
 
@@ -305,6 +368,16 @@ impl App {
             Message::ToggleDrillDirection => self.note_trainer.toggle_direction(&mut self.rng),
             Message::TogglePool => self.note_trainer.toggle_pool(&mut self.rng),
             Message::ToggleNoteSpelling => self.note_trainer.toggle_spelling(),
+            Message::AnswerInterval(interval) => self.interval_trainer.answer_interval(interval),
+            Message::ChooseIntervalPosition(string, fret) => {
+                self.interval_trainer.answer_position(string, fret)
+            }
+            Message::SkipIntervalPrompt => self.interval_trainer.skip(&mut self.rng),
+            Message::ToggleIntervalDirection => {
+                self.interval_trainer.toggle_direction(&mut self.rng)
+            }
+            // Handled above, before the help overlay gets a say.
+            Message::AdvanceIntervalPrompt => {}
             Message::Accelerate(c) => self.accelerate(c),
             Message::ToggleHelp => self.help_open = true,
             Message::FocusNext => self.cycle_focus(1),
@@ -326,6 +399,7 @@ impl App {
     fn open(&mut self, screen: Screen) {
         let wants_fresh_scale = screen == Screen::ScaleTrainer;
         let wants_fresh_prompt = screen == Screen::NoteTrainer;
+        let wants_fresh_interval = screen == Screen::IntervalTrainer;
 
         self.navigate_to(screen);
 
@@ -337,6 +411,10 @@ impl App {
         // showed. Settings and the best streak persist; the run does not.
         if wants_fresh_prompt {
             self.note_trainer.enter(&mut self.rng);
+        }
+
+        if wants_fresh_interval {
+            self.interval_trainer.enter(&mut self.rng);
         }
     }
 
@@ -416,6 +494,11 @@ impl App {
             return;
         }
 
+        if self.focused == FocusTarget::IntervalFretboard {
+            self.interval_trainer.move_cursor(direction);
+            return;
+        }
+
         let grid = self.focus_grid();
         self.focused = step_focus_2d(&grid, self.focused, direction);
     }
@@ -473,6 +556,16 @@ impl App {
             FocusTarget::PoolToggle => self.note_trainer.toggle_pool(&mut self.rng),
             FocusTarget::NoteSpellingToggle => self.note_trainer.toggle_spelling(),
             FocusTarget::SkipPrompt => self.note_trainer.skip(&mut self.rng),
+            FocusTarget::IntervalFretboard => self.interval_trainer.answer_at_cursor(),
+            FocusTarget::IntervalAnswer(index) => {
+                if let Some(interval) = interval_trainer::answer_at(index) {
+                    self.interval_trainer.answer_interval(interval);
+                }
+            }
+            FocusTarget::IntervalDirectionToggle => {
+                self.interval_trainer.toggle_direction(&mut self.rng)
+            }
+            FocusTarget::SkipIntervalPrompt => self.interval_trainer.skip(&mut self.rng),
         }
     }
 
@@ -493,7 +586,7 @@ impl App {
             ),
             Screen::IntervalTrainer => with_top_bar(
                 "Interval Trainer",
-                ui_placeholder("Interval Trainer"),
+                ui_interval_trainer(&self.interval_trainer, self.focused),
                 true,
                 self.focused,
             ),
@@ -528,14 +621,21 @@ impl App {
         // land anywhere between nothing and a full second after the answer, which is the
         // one thing a fixed pause must not do. It also keeps the app idle the rest of the
         // time, since nothing else here ticks.
+        // Each trainer's flash gets its own timer and its own message. Only one screen is
+        // ever on show, but a flash left behind on the other one keeps its timer alive until
+        // it is retired — harmless, because `advance` is a no-op once the prompt has moved
+        // on, and because a tick can only reach the trainer its variant names.
+        let mut streams = vec![keys];
+
         if self.note_trainer.is_flashing() {
-            Subscription::batch([
-                keys,
-                iced::time::every(ANSWER_FLASH).map(|_| Message::AdvancePrompt),
-            ])
-        } else {
-            keys
+            streams.push(iced::time::every(ANSWER_FLASH).map(|_| Message::AdvancePrompt));
         }
+
+        if self.interval_trainer.is_flashing() {
+            streams.push(iced::time::every(ANSWER_FLASH).map(|_| Message::AdvanceIntervalPrompt));
+        }
+
+        Subscription::batch(streams)
     }
 }
 
@@ -668,7 +768,47 @@ impl App {
 
                 grid
             }
-            Screen::IntervalTrainer => vec![vec![Some(FocusTarget::Back)]],
+            Screen::IntervalTrainer => {
+                // Back on a row of its own, as on the two screens above and for the same
+                // reason: the card's own row belongs to its controls.
+                let mut back_row: FocusRow = vec![None; ANSWER_ROW_WIDTH];
+                back_row[0] = Some(FocusTarget::Back);
+
+                let mut controls: FocusRow = vec![None; ANSWER_ROW_WIDTH];
+                for (cell, target) in controls.iter_mut().zip([
+                    FocusTarget::IntervalDirectionToggle,
+                    FocusTarget::SkipIntervalPrompt,
+                ]) {
+                    *cell = Some(target);
+                }
+
+                let mut grid = vec![back_row, controls];
+
+                match self.interval_trainer.drill() {
+                    IntervalDrill::NameIt => {
+                        let total = interval_trainer::ANSWER_COUNT;
+
+                        for start in (0..total).step_by(ANSWER_ROW_WIDTH) {
+                            let len = ANSWER_ROW_WIDTH.min(total - start);
+                            let mut row: FocusRow = vec![None; ANSWER_ROW_WIDTH];
+
+                            for (col, cell) in row.iter_mut().enumerate().take(len) {
+                                *cell = Some(FocusTarget::IntervalAnswer(start + col));
+                            }
+                            grid.push(row);
+                        }
+                    }
+                    // The neck is the answer surface, and it is one cell no matter how many
+                    // positions it holds — the cursor walks those, not the focus ring.
+                    IntervalDrill::FindIt => {
+                        let mut row: FocusRow = vec![None; ANSWER_ROW_WIDTH];
+                        row[0] = Some(FocusTarget::IntervalFretboard);
+                        grid.push(row);
+                    }
+                }
+
+                grid
+            }
         }
     }
 
@@ -872,7 +1012,13 @@ fn accelerators(screen: &Screen) -> Vec<Accelerator> {
             ('d', FocusTarget::DrillDirectionToggle, "swap direction"),
             ('a', FocusTarget::PoolToggle, "include accidentals"),
         ],
-        Screen::IntervalTrainer => Vec::new(),
+        // `r` and `d` mean here what they mean on the Note Trainer — replace what is on
+        // screen, and swap which way the drill runs. There is no `a`: this screen has no
+        // pool to widen.
+        Screen::IntervalTrainer => vec![
+            ('r', FocusTarget::SkipIntervalPrompt, "skip this interval"),
+            ('d', FocusTarget::IntervalDirectionToggle, "swap direction"),
+        ],
     }
 }
 
@@ -1429,25 +1575,6 @@ fn scrim_container(_theme: &iced::Theme) -> iced::widget::container::Style {
     }
 }
 
-fn ui_placeholder(label: &str) -> Element<'_, Message> {
-    use iced::Length;
-    use iced::widget::{column, container, text};
-
-    container(
-        column![
-            text(label).size(36).color(INK),
-            text("Coming soon").size(17).color(MUTE),
-        ]
-        .spacing(8),
-    )
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
-    .style(page_container)
-    .into()
-}
-
 fn trainer_button<'a>(
     title: &'static str,
     caption: &'static str,
@@ -1734,16 +1861,6 @@ mod tests {
             in_grid.sort_by_key(|t| format!("{t:?}"));
             assert_eq!(from_tab, in_grid, "{screen:?} membership differs");
         }
-    }
-
-    /// The Note Trainer used to be listed here. It has a screen now, so the interval
-    /// trainer is the last placeholder left.
-    #[test]
-    fn placeholder_screens_only_focus_back() {
-        assert_eq!(
-            app_on(Screen::IntervalTrainer).focusables(),
-            vec![FocusTarget::Back]
-        );
     }
 
     #[test]
