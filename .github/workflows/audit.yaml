@@ -1,0 +1,40 @@
+name: Audit
+
+on:
+  schedule:
+    # Mondays, 06:00 UTC
+    - cron: "0 6 * * 1"
+  pull_request:
+    paths:
+      - Cargo.lock
+      - deny.toml
+      - .github/workflows/audit.yaml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_DENY_VERSION: "0.20.2"
+
+jobs:
+  advisories:
+    name: cargo-deny advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --version "${CARGO_DENY_VERSION}"
+
+      - name: just deny
+        run: just deny

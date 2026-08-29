@@ -39,5 +39,11 @@ run:
 notices:
     cargo about generate about.hbs -o THIRD-PARTY-NOTICES.txt
 
+# advisories and yanked crates across everything Cargo.lock names — needs cargo-deny
+# installed. Deliberately not a stage of `ci`: the gate stays runnable with a Rust toolchain
+# and nothing else, the same reason `notices` sits outside it.
+deny:
+    cargo deny check advisories
+
 # the gate CI runs, in CI's order — dependencies run in sequence and stop at the first failure
 ci: fmt-check lint test build

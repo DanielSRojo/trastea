@@ -1,0 +1,51 @@
+# cargo-deny's configuration, scoped to advisories and nothing else.
+#
+# Licensing stays about.toml's job. cargo-deny has a [licenses] section that would happily
+# hold a second accepted-licence list — the same crates, and the same careful reasoning about
+# dual-licensed ones like self_cell and r-efi — free to drift from the list that actually
+# produces THIRD-PARTY-NOTICES.txt. about.toml remains the single licence authority because
+# it is the file that generates the artifact users receive.
+#
+# `just deny` runs `cargo deny check advisories` rather than a bare `cargo deny check`, so
+# the sections left unconfigured here cannot start failing the build when a cargo-deny
+# upgrade changes one of their defaults.
+
+[advisories]
+# A yanked crate in the lockfile deserves the same attention as an advisory against one.
+yanked = "deny"
+
+# Advisories accepted on purpose. Every entry carries why it is here and what would let it
+# be removed — the rule this codebase already applies to #[allow(...)]. Empty is the healthy
+# state; every one of these is on the list because iced 0.14's graph reaches it and no
+# upgrade within that graph clears it. The whole list is worth re-testing whenever iced moves.
+ignore = [
+    # quick-xml 0.39.2, twice: a quadratic attribute check and an unbounded namespace
+    # allocation, both denial-of-service against *untrusted* XML. Nothing here parses any.
+    # quick-xml's only parent is wayland-scanner, which is a proc-macro — it runs at compile
+    # time over the Wayland protocol descriptions shipped with the system and never appears
+    # in the binary. The fix is quick-xml >= 0.41.0, and wayland-scanner 0.31.9's requirement
+    # caps it at 0.39.x, so `cargo update` reaches 0.39.4 and no further. Clears itself when
+    # winit picks up a newer wayland-scanner.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+
+    # paste, unmaintained and archived, with no safe upgrade. A proc-macro, so compile-time
+    # only, and it is reached through `metal` — Apple's graphics binding — so it is not even
+    # in the graph for the Linux build. Gone when wgpu-hal drops it.
+    "RUSTSEC-2024-0436",
+
+    # ttf-parser, unmaintained, no safe upgrade. This is the one that genuinely ships: it
+    # sits under fontdb and cosmic-text, which is iced's text stack, and it parses the fonts
+    # embedded in the binary. Unmaintained is not the same as vulnerable, and the named
+    # alternative (skrifa) is a change only cosmic-text can make. Worth re-reading if it ever
+    # turns into an actual vulnerability advisory rather than a maintenance one.
+    "RUSTSEC-2026-0192",
+
+    # A yanked version rather than an advisory, and Windows-only: uds_windows is in the
+    # lockfile via zbus but is in the graph for neither target release.yaml builds. Ignored
+    # by crate rather than by raising `yanked` to a warning, so a yanked crate that does
+    # reach a shipped target still fails this check. `cargo update -p uds_windows` clears it
+    # for real, at the cost of moving 21 unrelated packages — not worth it for a crate that
+    # is never compiled here.
+    { crate = "uds_windows", reason = "windows-only; in the graph for neither shipped target" },
+]
