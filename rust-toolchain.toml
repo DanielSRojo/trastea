@@ -1,0 +1,14 @@
+# The compiler is a committed artifact rather than a date. Without this the gate ran on
+# whatever stable resolved to on the day it ran, so an upstream release could turn a pull
+# request red for a reason nothing in the diff caused — and a local run and CI could
+# disagree while the justfile promised they would not.
+#
+# The version string lives here and nowhere else. ci.yaml does not name a version; it
+# asserts that the toolchain it actually ran is the one this file names.
+#
+# This needs rustup. A distribution's own rust package ignores this file completely — it is
+# rustup's shim that reads it — so `pacman -S rustup` (or rustup.rs) is what makes the pin
+# real on a developer's machine.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]
