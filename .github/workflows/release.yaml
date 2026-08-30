@@ -21,10 +21,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
       - name: Install just
         uses: extractions/setup-just@v4
 
@@ -75,8 +71,6 @@ jobs:
             os: macos-latest
     steps:
       - uses: actions/checkout@v7
-
-      - uses: dtolnay/rust-toolchain@stable
 
       - name: Install just
         uses: extractions/setup-just@v4
