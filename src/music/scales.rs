@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use super::intervals::Interval;
-use super::notes::{Accidental, Letter, Note, PitchClass, Spelling};
+use super::notes::{Accidental, Note, PitchClass, Spelling, nearest_offset};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScaleKind {
@@ -168,19 +168,6 @@ impl Scale {
             .copied()
             .find(|interval| self.root.transpose(interval.semitones()) == pitch_class)
     }
-}
-
-/// How far `target` sits from `letter`'s natural pitch, as the nearest signed
-/// distance in −5..=6.
-///
-/// The fold is the fiddly part: `rem_euclid(12)` gives 0..=11, then anything
-/// above 6 has 12 subtracted. Without it a difference reads as +11 where −1 is
-/// meant, and no accidental covers +11.
-fn nearest_offset(target: PitchClass, letter: Letter) -> i8 {
-    let raw = (i16::from(target.semitone()) - i16::from(letter.natural_semitone())).rem_euclid(12);
-    let folded = if raw > 6 { raw - 12 } else { raw };
-
-    i8::try_from(folded).expect("the fold yields -5..=6")
 }
 
 impl ScaleKind {
@@ -489,6 +476,7 @@ impl ScaleKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::music::notes::Letter;
     use Accidental::{DoubleFlat, DoubleSharp, Flat, Natural, Sharp};
     use Letter::{A, B, C, D, E, F, G};
 

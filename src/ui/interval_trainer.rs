@@ -823,7 +823,7 @@ fn interval_label(
 #[cfg(test)]
 mod tests {
     use super::super::tests::{app_with_seed, press_into};
-    use super::super::{App, Screen, accelerators};
+    use super::super::{App, Notation, Screen, accelerators_for};
     use super::*;
     use iced::keyboard;
 
@@ -1674,7 +1674,7 @@ mod tests {
 
     #[test]
     fn the_help_overlay_lists_the_interval_trainers_keys() {
-        let claimed: Vec<char> = accelerators(&Screen::IntervalTrainer)
+        let claimed: Vec<char> = accelerators_for(&Screen::IntervalTrainer, Notation::Notes)
             .into_iter()
             .map(|(key, _, _)| key)
             .collect();

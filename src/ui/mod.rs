@@ -1,3 +1,5 @@
+mod chord_diagram;
+mod chord_library;
 mod fretboard;
 mod interval_trainer;
 mod note_trainer;
@@ -10,6 +12,8 @@ use fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 // its own module each is simply the drill's direction.
 use interval_trainer::{Drill as IntervalDrill, IntervalTrainer, ui_interval_trainer};
 use note_trainer::{Drill, NoteTrainer, ui_note_trainer};
+
+use chord_library::{ChordLibrary, KeyOutcome, ui_chord_library};
 
 use iced::{
     Background, Border, Color, Element, Padding, Pixels, Shadow, Subscription, Task, Vector, font,
@@ -73,6 +77,13 @@ const SMUFL_FLAT: char = '\u{E260}';
 const SMUFL_SHARP: char = '\u{E262}';
 const SMUFL_DOUBLE_SHARP: char = '\u{E263}';
 const SMUFL_DOUBLE_FLAT: char = '\u{E264}';
+/// SMuFL's chord-symbol range, already present in the embedded Leland subset and unused
+/// until now. A chord symbol set with these reads as one a musician wrote; the ASCII the
+/// parser accepts is a different job, done by `Display for Chord`.
+const SMUFL_CSYM_DIMINISHED: char = '\u{E870}';
+const SMUFL_CSYM_HALF_DIMINISHED: char = '\u{E871}';
+const SMUFL_CSYM_AUGMENTED: char = '\u{E872}';
+const SMUFL_CSYM_MAJOR_SEVENTH: char = '\u{E873}';
 const FEEL_FONT: iced::Font = iced::Font {
     family: font::Family::Name("Dancing Script"),
     weight: font::Weight::Bold,
@@ -113,6 +124,9 @@ pub struct App {
     note_trainer: NoteTrainer,
     /// The Interval Trainer's drill, on the same terms and for the same reasons.
     interval_trainer: IntervalTrainer,
+    /// The Chord Library's query and selections. Its own struct for the reason the two
+    /// drills have one: the fields are read all over its views and nowhere else.
+    chord_library: ChordLibrary,
 }
 
 /// What the fretboard's markers are labelled with: the notes' names, or the degrees
@@ -131,6 +145,9 @@ pub struct App {
 enum Notation {
     Notes,
     Intervals,
+    /// Which finger stops a string. Only a chord diagram has one to show, which is why
+    /// `cycle_for` exists rather than a plain three-way rotation.
+    Fingers,
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -140,6 +157,7 @@ pub enum Screen {
     ScaleTrainer,
     NoteTrainer,
     IntervalTrainer,
+    ChordLibrary,
 }
 
 /// Where the keyboard cursor starts: the open low E, the neck's top-left corner.
@@ -220,11 +238,36 @@ pub enum Message {
     /// The end of the Interval Trainer's answer flash. Its own variant rather than a shared
     /// `AdvancePrompt` routed by screen, so a tick cannot retire the other trainer's prompt.
     AdvanceIntervalPrompt,
+    /// Selects one chord in the library's list, by its index among the rows on show.
+    SelectChordRow(usize),
+    /// Selects one of the selected chord's voicings. A press anywhere inside a diagram
+    /// sends this, so selection does not depend on which position was pressed.
+    SelectVoicing(usize),
+    /// Picks a notation outright, by its index in the screen's `Notation::cycle_for`.
+    ///
+    /// Distinct from `ToggleNotation`, which advances: the library shows all three options
+    /// at once, and a press on one of them means that one rather than the next.
+    SetNotation(usize),
+    /// A key press, straight from the subscription and not yet meaning anything.
+    ///
+    /// The subscription used to translate keys inside its own closure, which worked only
+    /// while translation read no state. A focused text box makes it stateful, and a closure
+    /// capturing that state would be built once and kept: iced hashes a subscription recipe
+    /// rather than the values its closure closed over, so the stream would go on running
+    /// with the flag it started with. Carrying the raw key to `update` — where `&mut self`
+    /// is in hand — removes the question rather than answering it.
+    Key(keyboard::Key, keyboard::Modifiers),
     /// A character key that may be an accelerator on the current screen.
     ///
     /// Carries the character rather than an action because `translate_key` has no screen
     /// to look it up against; `update` resolves it, and ignores the ones nothing claims.
     Accelerate(char),
+    /// Puts the cursor in a screen's search box. Sent by `/` and by `Ctrl+K`.
+    ///
+    /// Not an `Accelerate`, because the two keys that send it are not characters a screen
+    /// claims: `Ctrl+K` is carved out of `COMMAND_MODIFIERS` by name, and both have to
+    /// reach one target rather than whichever focusable a screen happens to list.
+    OpenSearch,
     ToggleHelp,
     FocusNext,
     FocusPrevious,
@@ -263,6 +306,22 @@ pub enum FocusTarget {
     IntervalAnswer(usize),
     IntervalDirectionToggle,
     SkipIntervalPrompt,
+    /// The Chord Library's search box.
+    SearchBox,
+    /// One of the notation buttons, indexed into the screen's `Notation::cycle_for`.
+    ///
+    /// Three buttons rather than one that cycles: a control that changes what it says each
+    /// time it is pressed does not look like a control with options, so nobody presses it
+    /// twice to find out. The `i` key still cycles — see `App::accelerators`.
+    NotationChoice(usize),
+    /// The Chord Library's chord list.
+    ///
+    /// Claims all four motion keys while focused, as the two necks do: up and down walk
+    /// the chords, left and right walk the selected chord's voicings. The strip is not a
+    /// focusable of its own — the search spec puts the voicings on the horizontal axis
+    /// whenever the box is unfocused, and a third stop in the ring would instead make them
+    /// reachable only after tabbing past the list.
+    ChordList,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -289,7 +348,7 @@ struct MenuItem {
 /// The buttons, the focus grid's item count, and the digit accelerators are all built from
 /// this, so a trainer added here gains all three at once and cannot end up with a button
 /// but no key, or a key labelled with the wrong name.
-const HOME_MENU: [MenuItem; 3] = [
+const HOME_MENU: [MenuItem; 4] = [
     MenuItem {
         label: "Scale Trainer",
         caption: "Explore and learn guitar scales",
@@ -304,6 +363,11 @@ const HOME_MENU: [MenuItem; 3] = [
         label: "Interval Trainer",
         caption: "Recognize distances from a tonal center",
         screen: Screen::IntervalTrainer,
+    },
+    MenuItem {
+        label: "Chord Library",
+        caption: "Look up a chord and see where it sits",
+        screen: Screen::ChordLibrary,
     },
 ];
 
@@ -342,12 +406,43 @@ impl App {
             notation: Notation::Notes,
             note_trainer,
             interval_trainer,
+            chord_library: ChordLibrary::new(),
         };
 
         (app, Task::none())
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        // A raw key is resolved before anything else, because until it is translated it is
+        // not yet one of the messages the arms below are written against. `translate_key`
+        // never yields another `Key`, so this recurses exactly once.
+        if let Message::Key(key, modifiers) = message {
+            // The one branch that asks whether the search box has the keyboard, and the
+            // reason translation moved here from the subscription. While the box holds
+            // focus almost everything is text — `j` types rather than moving, `?` types
+            // rather than opening the help — so the key must not reach `translate_key` at
+            // all. What the box declines (a command-modified key, say) falls through.
+            if self.screen == Screen::ChordLibrary && self.chord_library.search_focused() {
+                match self.chord_library.handle_key(&key, modifiers) {
+                    KeyOutcome::Ignored => {}
+                    KeyOutcome::Handled => return Task::none(),
+                    // Enter hands the keyboard to the shapes, which is where a learner who
+                    // has just found their chord wants to be: the list claims the arrows,
+                    // so left and right walk the voicings straight away.
+                    KeyOutcome::Accepted => {
+                        self.focused = FocusTarget::ChordList;
+
+                        return Task::none();
+                    }
+                }
+            }
+
+            return match translate_key(key, modifiers) {
+                Some(message) => self.update(message),
+                None => Task::none(),
+            };
+        }
+
         // The flash timer is the clock talking, not the user, so it is handled ahead of the
         // overlay: a tick that arrived while the help panel was up would otherwise be
         // spent dismissing a panel the learner is still reading.
@@ -403,7 +498,21 @@ impl App {
             }
             // Handled above, before the help overlay gets a say.
             Message::AdvanceIntervalPrompt => {}
+            // Handled above too, and earliest of all: by here it has already become one of
+            // the other arms, or nothing.
+            Message::Key(..) => {}
+            Message::SelectChordRow(index) => self.chord_library.select_row(index),
+            Message::SelectVoicing(index) => self.chord_library.select_voicing(index),
+            Message::SetNotation(index) => self.activate(FocusTarget::NotationChoice(index)),
             Message::Accelerate(c) => self.accelerate(c),
+            // Scoped to the one screen with a box, the way an accelerator a screen does
+            // not claim is inert there. `Ctrl+K` reaches here from anywhere, so the guard
+            // is what keeps it from focusing a box nobody can see.
+            Message::OpenSearch => {
+                if self.screen == Screen::ChordLibrary {
+                    self.chord_library.focus_search();
+                }
+            }
             Message::ToggleHelp => self.help_open = true,
             Message::FocusNext => self.cycle_focus(1),
             Message::FocusPrevious => self.cycle_focus(-1),
@@ -425,6 +534,7 @@ impl App {
         let wants_fresh_scale = screen == Screen::ScaleTrainer;
         let wants_fresh_prompt = screen == Screen::NoteTrainer;
         let wants_fresh_interval = screen == Screen::IntervalTrainer;
+        let wants_the_search_box = screen == Screen::ChordLibrary;
 
         self.navigate_to(screen);
 
@@ -440,6 +550,16 @@ impl App {
 
         if wants_fresh_interval {
             self.interval_trainer.enter(&mut self.rng);
+        }
+
+        // The library opens ready to be typed into: it is a thing you come to in order to
+        // look something up, and a focus ring parked on Back would make the first keystroke
+        // do nothing. `enter` clears the query for the reason the trainers draw a fresh
+        // prompt — the screen never reopens on what it last showed — and the root it
+        // established survives, so an empty box still means "that root, every quality".
+        if wants_the_search_box {
+            self.chord_library.enter();
+            self.focused = FocusTarget::SearchBox;
         }
     }
 
@@ -488,7 +608,9 @@ impl App {
     fn toggle_notation(&mut self) {
         self.notation = match self.notation {
             Notation::Notes => Notation::Intervals,
-            Notation::Intervals => Notation::Notes,
+            // A scale has no fingering, so this field never holds `Fingers` — the library
+            // keeps its own setting, and the two screens no longer move each other.
+            Notation::Intervals | Notation::Fingers => Notation::Notes,
         };
     }
 
@@ -524,6 +646,18 @@ impl App {
             return;
         }
 
+        // The list claims all four: up and down walk the chords, left and right walk the
+        // selected chord's voicings. Tab is still the way out, as it is on the two necks.
+        if self.focused == FocusTarget::ChordList {
+            match direction {
+                Direction::Up => self.chord_library.move_row(-1),
+                Direction::Down => self.chord_library.move_row(1),
+                Direction::Left => self.chord_library.move_voicing(-1),
+                Direction::Right => self.chord_library.move_voicing(1),
+            }
+            return;
+        }
+
         let grid = self.focus_grid();
         self.focused = step_focus_2d(&grid, self.focused, direction);
     }
@@ -537,7 +671,8 @@ impl App {
     /// A miss is silent: `translate_key` forwards every character it does not recognise as
     /// a motion, so most of what arrives here is nothing at all.
     fn accelerate(&mut self, c: char) {
-        let target = accelerators(&self.screen)
+        let target = self
+            .accelerators()
             .into_iter()
             .find_map(|(key, target, _)| (key == c).then_some(target));
 
@@ -581,6 +716,11 @@ impl App {
             FocusTarget::PoolToggle => self.note_trainer.toggle_pool(&mut self.rng),
             FocusTarget::NoteSpellingToggle => self.note_trainer.toggle_spelling(),
             FocusTarget::SkipPrompt => self.note_trainer.skip(&mut self.rng),
+            FocusTarget::SearchBox => self.chord_library.focus_search(),
+            FocusTarget::NotationChoice(index) => self.chord_library.set_notation(index),
+            // Nothing to fire: the list is browsed with the arrows rather than activated,
+            // and a chord is already selected the moment the ring reaches it.
+            FocusTarget::ChordList => {}
             FocusTarget::IntervalFretboard => self.interval_trainer.answer_at_cursor(),
             FocusTarget::IntervalAnswer(index) => {
                 if let Some(interval) = interval_trainer::answer_at(index) {
@@ -615,10 +755,16 @@ impl App {
                 true,
                 self.focused,
             ),
+            Screen::ChordLibrary => with_top_bar(
+                "Chord Library",
+                ui_chord_library(&self.chord_library, self.focused),
+                true,
+                self.focused,
+            ),
         };
 
         if self.help_open {
-            iced::widget::stack![screen, ui_help_overlay(&self.screen)].into()
+            iced::widget::stack![screen, ui_help_overlay(self.accelerators())].into()
         } else {
             screen
         }
@@ -638,7 +784,10 @@ impl App {
             else {
                 return None;
             };
-            translate_key(modified_key, modifiers)
+            // Deliberately no translation here — see `Message::Key`. The closure captures
+            // nothing, which is what keeps this stream correct when the state that decides
+            // what a key means starts changing.
+            Some(Message::Key(modified_key, modifiers))
         });
 
         // The flash's timer, alive only while one is on screen. Starting the stream with
@@ -834,6 +983,23 @@ impl App {
 
                 grid
             }
+            // Two focusables, not three. The search spec puts the voicings on the
+            // horizontal axis whenever the box is unfocused, so the strip is browsed from
+            // the list rather than tabbed into — a third stop would make a voicing
+            // reachable only after walking past every chord.
+            Screen::ChordLibrary => vec![
+                vec![Some(FocusTarget::Back), None, None, None],
+                // The notation buttons sit beside the box rather than below the list, so
+                // Right walks into them: the list claims the motion keys, and anything
+                // under it in the grid would be reachable by Tab alone.
+                vec![
+                    Some(FocusTarget::SearchBox),
+                    Some(FocusTarget::NotationChoice(0)),
+                    Some(FocusTarget::NotationChoice(1)),
+                    Some(FocusTarget::NotationChoice(2)),
+                ],
+                vec![Some(FocusTarget::ChordList), None, None, None],
+            ],
         }
     }
 
@@ -851,7 +1017,9 @@ impl App {
         match &self.screen {
             Screen::ScaleTrainer => vec![0..ROOT_ROW_WIDTH, ROOT_ROW_WIDTH..width],
             // These screens have a single card, so one band spans the whole width.
-            Screen::Home | Screen::NoteTrainer | Screen::IntervalTrainer => vec![0..width],
+            Screen::Home | Screen::NoteTrainer | Screen::IntervalTrainer | Screen::ChordLibrary => {
+                vec![0..width]
+            }
         }
     }
 
@@ -972,6 +1140,14 @@ fn translate_key(key: keyboard::Key, modifiers: keyboard::Modifiers) -> Option<M
         keyboard::Key::Character("?") if !modifiers.intersects(COMMAND_MODIFIERS) => {
             Some(Message::ToggleHelp)
         }
+        // The mirror of the arm above: that one is a character admitted despite coming
+        // before the general arm, this one is a character admitted despite a command
+        // modifier being held. `COMMAND_MODIFIERS` is not relaxed — exactly one key is
+        // carved out of it, which is why `command_modifiers_suppress_character_keys` still
+        // covers every other letter under every modifier.
+        keyboard::Key::Character("k") if modifiers.contains(keyboard::Modifiers::CTRL) => {
+            Some(Message::OpenSearch)
+        }
         keyboard::Key::Character(c) if !modifiers.intersects(COMMAND_MODIFIERS) => character_key(c),
         _ => None,
     }
@@ -1011,9 +1187,20 @@ fn vim_motion(c: &str) -> Option<Message> {
 /// The label is what the help overlay shows, so a new accelerator documents itself.
 type Accelerator = (char, FocusTarget, &'static str);
 
-/// The accelerators a screen claims. A key absent here is inert on that screen, which is
-/// what keeps `r` from rerolling an invisible scale from the Home menu.
-fn accelerators(screen: &Screen) -> Vec<Accelerator> {
+impl App {
+    /// The accelerators the current screen claims. A key absent here is inert on that
+    /// screen, which is what keeps `r` from rerolling an invisible scale from the Home menu.
+    ///
+    /// A method rather than a free function of `&Screen`, for the reason the focus
+    /// functions above are: a screen's shape is no longer decided by which screen it is.
+    /// `i` on the library has to name *the next* notation button, and which one that is
+    /// depends on the notation now in force.
+    fn accelerators(&self) -> Vec<Accelerator> {
+        accelerators_for(&self.screen, self.chord_library.notation())
+    }
+}
+
+fn accelerators_for(screen: &Screen, notation: Notation) -> Vec<Accelerator> {
     match screen {
         // Numbered by position, so the menu order is the key order. `from_digit` runs out
         // after nine, which is the point at which a menu needs more than digits anyway.
@@ -1044,6 +1231,26 @@ fn accelerators(screen: &Screen) -> Vec<Accelerator> {
             ('r', FocusTarget::SkipIntervalPrompt, "skip this interval"),
             ('d', FocusTarget::IntervalDirectionToggle, "swap direction"),
         ],
+        // `/` is the same physical key as `?`, distinguished by shift: search, and help.
+        //
+        // One key per mode as well as the cycling one. With three modes visible, a learner
+        // who can see `fingers` should be able to reach it directly rather than pressing
+        // `i` until it comes round; `i` stays because that is what it means on the scale
+        // trainer, and it is the key a hand already knows.
+        Screen::ChordLibrary => {
+            let next = chord_library::NOTATIONS
+                .iter()
+                .position(|&at| at == notation)
+                .map_or(0, |at| (at + 1) % chord_library::NOTATIONS.len());
+
+            vec![
+                ('/', FocusTarget::SearchBox, "search"),
+                ('n', FocusTarget::NotationChoice(0), "note names"),
+                ('d', FocusTarget::NotationChoice(1), "degrees"),
+                ('f', FocusTarget::NotationChoice(2), "fingers"),
+                ('i', FocusTarget::NotationChoice(next), "cycle the three"),
+            ]
+        }
     }
 }
 
@@ -1460,7 +1667,10 @@ fn scale_kind_row(
 fn marker_label(notation: Notation, note: Note, degree: Interval) -> String {
     match notation {
         Notation::Notes => note.to_string(),
-        Notation::Intervals => degree.to_string(),
+        // A scale has no fingering. The library keeps its own setting now, so this field
+        // never actually holds `Fingers`; the arm is here to keep the match total rather
+        // than to describe anything the screen can reach.
+        Notation::Intervals | Notation::Fingers => degree.to_string(),
     }
 }
 
@@ -1519,7 +1729,7 @@ const NAVIGATION_KEYS: [(&str, &str); 5] = [
 /// Takes the screen rather than reading the history, so what it lists is always what is
 /// actually behind it. Nothing in here is focusable — it contributes no entry to
 /// `focus_grid`, which is why the focus system needs no notion of a modal layer.
-fn ui_help_overlay(screen: &Screen) -> Element<'static, Message> {
+fn ui_help_overlay(claimed: Vec<Accelerator>) -> Element<'static, Message> {
     use iced::Length;
     use iced::widget::{column, container, text};
 
@@ -1527,7 +1737,6 @@ fn ui_help_overlay(screen: &Screen) -> Element<'static, Message> {
         .into_iter()
         .map(|(keys, description)| (keys.to_string(), description));
 
-    let claimed = accelerators(screen);
     let has_accelerators = !claimed.is_empty();
     let screen_keys = claimed
         .into_iter()
@@ -1701,6 +1910,44 @@ fn ghost_button(
     }
 }
 
+/// A row in the chord list, or an unpicked diagram in the strip.
+///
+/// Square rather than the pill `ghost_button` draws, and borderless: a column of pills
+/// reads as a column of buttons, and the list is meant to read as a list.
+fn row_button(
+    _theme: &iced::Theme,
+    status: iced::widget::button::Status,
+) -> iced::widget::button::Style {
+    let background = match status {
+        iced::widget::button::Status::Hovered => CANVAS_SOFT_2,
+        _ => Color::TRANSPARENT,
+    };
+
+    iced::widget::button::Style {
+        background: Some(Background::Color(background)),
+        text_color: BODY,
+        border: Border::default().rounded(8),
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
+
+/// The picked row, and the picked diagram. Lifted off the card rather than coloured in:
+/// the symbol inside is already the loudest thing in the row, and a filled row would
+/// compete with it.
+fn selected_row_button(
+    _theme: &iced::Theme,
+    _status: iced::widget::button::Status,
+) -> iced::widget::button::Style {
+    iced::widget::button::Style {
+        background: Some(Background::Color(CANVAS_SOFT_2)),
+        text_color: INK,
+        border: Border::default().rounded(8).width(1).color(LINK),
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
+
 fn selected_root_button(
     _theme: &iced::Theme,
     _status: iced::widget::button::Status,
@@ -1832,9 +2079,16 @@ mod tests {
         }
     }
 
+    /// One focusable per menu entry, counted from the menu rather than written out — the
+    /// same source the buttons and the digit keys come from, so adding a trainer cannot
+    /// leave this asserting the old number.
     #[test]
-    fn home_has_three_focusables() {
-        assert_eq!(app_on(Screen::Home).focusables().len(), 3);
+    fn home_has_a_focusable_per_menu_entry() {
+        assert_eq!(
+            app_on(Screen::Home).focusables().len(),
+            HOME_MENU_ITEMS,
+            "the menu and its focus ring disagree"
+        );
     }
 
     #[test]
@@ -2193,12 +2447,13 @@ mod tests {
     }
 
     /// Every screen, so a new one cannot quietly escape the checks that sweep them all.
-    pub(super) fn every_screen() -> [Screen; 4] {
+    pub(super) fn every_screen() -> [Screen; 5] {
         [
             Screen::Home,
             Screen::ScaleTrainer,
             Screen::NoteTrainer,
             Screen::IntervalTrainer,
+            Screen::ChordLibrary,
         ]
     }
 
@@ -2225,10 +2480,13 @@ mod tests {
     }
 
     /// Presses a character key and lets the app act on whatever it translates to.
+    /// Drives a key press the way the subscription does: as a raw `Message::Key` into
+    /// `update`, which is where translation now happens. `press` above still probes
+    /// `translate_key` directly, because it is still a pure function and a test that can
+    /// say "this produced no message" is stronger than one that can only say "nothing
+    /// changed".
     pub(super) fn press_into(app: &mut App, c: &str, modifiers: keyboard::Modifiers) {
-        if let Some(message) = press(c, modifiers) {
-            let _ = app.update(message);
-        }
+        let _ = app.update(Message::Key(keyboard::Key::Character(c.into()), modifiers));
     }
 
     /// Shift+h delivers the capital, not the lowercase letter with a flag set. An earlier
@@ -2270,7 +2528,28 @@ mod tests {
             keyboard::Modifiers::ALT,
         ] {
             assert!(press("r", modifiers).is_none(), "{modifiers:?}+r");
+            // `k` too, everywhere except the one combination carved out below. The letter
+            // is named here so the exception cannot silently widen to the whole key.
+            if modifiers != keyboard::Modifiers::CTRL {
+                assert!(press("k", modifiers).is_none(), "{modifiers:?}+k");
+            }
         }
+    }
+
+    /// The one character key admitted while a command modifier is held. `COMMAND_MODIFIERS`
+    /// still suppresses everything else, which the test above is what proves.
+    #[test]
+    fn ctrl_k_is_the_only_hole_in_the_command_modifiers() {
+        assert!(matches!(
+            press("k", keyboard::Modifiers::CTRL),
+            Some(Message::OpenSearch)
+        ));
+
+        // Neither neighbouring letter, and not `k` under the other two modifiers.
+        assert!(press("j", keyboard::Modifiers::CTRL).is_none());
+        assert!(press("l", keyboard::Modifiers::CTRL).is_none());
+        assert!(press("k", keyboard::Modifiers::ALT).is_none());
+        assert!(press("k", keyboard::Modifiers::LOGO).is_none());
     }
 
     #[test]
@@ -2323,7 +2602,12 @@ mod tests {
     #[test]
     fn i_is_inert_on_screens_that_do_not_claim_it() {
         for screen in every_screen() {
-            if screen == Screen::ScaleTrainer {
+            // Read from the table rather than listed here, so a screen that takes up `i`
+            // exempts itself instead of turning this into a failure to edit by hand.
+            if accelerators_for(&screen, Notation::Notes)
+                .iter()
+                .any(|&(key, ..)| key == 'i')
+            {
                 continue;
             }
 
@@ -2398,6 +2682,298 @@ mod tests {
         assert_eq!(app.focused, FocusTarget::ScaleKind(2));
     }
 
+    #[test]
+    fn the_chord_library_is_reachable_from_the_menu() {
+        let mut app = app_with_seed(0xc40d);
+        // The library is the fourth entry, so it takes the fourth digit — both derived
+        // from `HOME_MENU`, which is why adding it needed nothing else.
+        press_into(&mut app, "4", keyboard::Modifiers::empty());
+
+        assert_eq!(app.screen, Screen::ChordLibrary);
+    }
+
+    #[test]
+    fn the_chord_library_reaches_every_widget_exactly_once() {
+        let targets = app_on(Screen::ChordLibrary).focusables();
+
+        assert_eq!(
+            targets,
+            vec![
+                FocusTarget::Back,
+                FocusTarget::SearchBox,
+                FocusTarget::NotationChoice(0),
+                FocusTarget::NotationChoice(1),
+                FocusTarget::NotationChoice(2),
+                FocusTarget::ChordList,
+            ]
+        );
+    }
+
+    #[test]
+    fn slash_and_ctrl_k_both_open_the_search() {
+        for open in ["/", "k"] {
+            let mut app = app_on(Screen::ChordLibrary);
+            let modifiers = if open == "k" {
+                keyboard::Modifiers::CTRL
+            } else {
+                keyboard::Modifiers::empty()
+            };
+
+            press_into(&mut app, open, modifiers);
+
+            assert!(
+                app.chord_library.search_focused(),
+                "{open:?} did not open the box"
+            );
+            assert_eq!(app.chord_library.query(), "", "{open:?} typed itself");
+        }
+    }
+
+    #[test]
+    fn the_search_keys_are_inert_on_the_other_screens() {
+        for screen in every_screen() {
+            if screen == Screen::ChordLibrary {
+                continue;
+            }
+
+            let mut app = app_with_seed(0x5ea4);
+            app.navigate_to(screen);
+
+            let before = snapshot(&app);
+            press_into(&mut app, "/", keyboard::Modifiers::empty());
+            press_into(&mut app, "k", keyboard::Modifiers::CTRL);
+
+            assert_eq!(
+                snapshot(&app),
+                before,
+                "{:?} claimed a search key",
+                app.screen
+            );
+            assert!(!app.chord_library.search_focused());
+        }
+    }
+
+    #[test]
+    fn a_focused_box_swallows_the_motions_and_the_help_key() {
+        let mut app = app_on(Screen::ChordLibrary);
+        press_into(&mut app, "/", keyboard::Modifiers::empty());
+
+        let ring = app.focused;
+        for c in ["c", "m", "j", "?"] {
+            press_into(&mut app, c, keyboard::Modifiers::empty());
+        }
+
+        assert_eq!(app.chord_library.query(), "cmj?");
+        assert_eq!(app.focused, ring, "a motion moved the ring");
+        assert!(!app.help_open, "the help key opened the overlay");
+    }
+
+    #[test]
+    fn a_focused_box_swallows_the_screen_accelerators() {
+        let mut app = app_on(Screen::ChordLibrary);
+        press_into(&mut app, "/", keyboard::Modifiers::empty());
+
+        let notation = app.notation;
+        press_into(&mut app, "i", keyboard::Modifiers::empty());
+
+        assert_eq!(app.chord_library.query(), "i");
+        assert_eq!(app.notation, notation, "the accelerator fired while typing");
+    }
+
+    #[test]
+    fn escape_leaves_the_box_before_it_leaves_the_screen() {
+        // `navigate_to` rather than `app_on`, because the second half of this needs a
+        // history for `GoBack` to pop.
+        let mut app = app_with_seed(0xe5c);
+        app.navigate_to(Screen::ChordLibrary);
+        press_into(&mut app, "/", keyboard::Modifiers::empty());
+        press_into(&mut app, "c", keyboard::Modifiers::empty());
+
+        press_named(&mut app, Named::Escape);
+        assert!(!app.chord_library.search_focused());
+        assert_eq!(app.chord_library.query(), "c", "escape cleared the query");
+        assert_eq!(app.screen, Screen::ChordLibrary, "escape went back too");
+
+        // Once the box is out of the way, escape means what it means everywhere.
+        press_named(&mut app, Named::Escape);
+        assert_eq!(app.screen, Screen::Home);
+    }
+
+    #[test]
+    fn the_keys_get_their_meanings_back_after_the_box() {
+        let mut app = app_on(Screen::ChordLibrary);
+        press_into(&mut app, "/", keyboard::Modifiers::empty());
+        press_named(&mut app, Named::Escape);
+
+        press_into(&mut app, "i", keyboard::Modifiers::empty());
+        assert_ne!(
+            app.chord_library.notation(),
+            Notation::Fingers,
+            "i did not fire again"
+        );
+
+        press_into(&mut app, "?", keyboard::Modifiers::empty());
+        assert!(app.help_open, "? did not open the overlay again");
+    }
+
+    #[test]
+    fn enter_moves_the_ring_from_the_box_to_the_shapes() {
+        // Type to find it, enter to look at it: the arrows have to walk the voicings the
+        // moment the box lets go, without a Tab in between.
+        let mut app = app_with_seed(0x3117);
+        app.open(Screen::ChordLibrary);
+
+        press_into(&mut app, "e", keyboard::Modifiers::empty());
+        press_named(&mut app, Named::Enter);
+
+        assert!(!app.chord_library.search_focused());
+        assert_eq!(app.focused, FocusTarget::ChordList);
+
+        press_into(&mut app, "l", keyboard::Modifiers::empty());
+        assert_eq!(
+            app.chord_library.selected_voicing(),
+            1,
+            "the arrows did not walk"
+        );
+    }
+
+    #[test]
+    fn escape_leaves_the_ring_where_it_was() {
+        // Escape is backing out rather than finishing, so it does not hand the keyboard on.
+        let mut app = app_with_seed(0xe5c2);
+        app.open(Screen::ChordLibrary);
+
+        press_named(&mut app, Named::Escape);
+
+        assert!(!app.chord_library.search_focused());
+        assert_eq!(app.focused, FocusTarget::SearchBox);
+    }
+
+    #[test]
+    fn the_list_claims_the_motions_and_walks_two_axes() {
+        let mut app = app_on(Screen::ChordLibrary);
+        app.focused = FocusTarget::ChordList;
+
+        press_into(&mut app, "j", keyboard::Modifiers::empty());
+        assert_eq!(app.chord_library.selected_row(), 1);
+        assert_eq!(app.focused, FocusTarget::ChordList, "the ring moved off");
+
+        press_into(&mut app, "l", keyboard::Modifiers::empty());
+        assert_eq!(app.chord_library.selected_voicing(), 1);
+
+        press_into(&mut app, "h", keyboard::Modifiers::empty());
+        assert_eq!(app.chord_library.selected_voicing(), 0);
+    }
+
+    #[test]
+    fn a_notation_button_picks_that_notation_rather_than_the_next() {
+        // The difference between three buttons and one that cycles: pressing the second
+        // means the second, from wherever the setting happens to be.
+        let mut app = app_on(Screen::ChordLibrary);
+
+        for (index, expected) in [
+            (2, Notation::Fingers),
+            (0, Notation::Notes),
+            (1, Notation::Intervals),
+            (1, Notation::Intervals),
+        ] {
+            let _ = app.update(Message::SetNotation(index));
+
+            assert_eq!(app.chord_library.notation(), expected, "button {index}");
+        }
+    }
+
+    #[test]
+    fn the_library_opens_on_fingers_and_leaves_the_scale_trainer_alone() {
+        // Fingers is what a learner opening this screen wants: it answers "how do I play
+        // this". The Scale Trainer has no fingering and keeps its own setting, so picking
+        // one here cannot change what that screen labels its markers with.
+        let mut app = app_with_seed(0xf14);
+        app.open(Screen::ChordLibrary);
+
+        assert_eq!(app.chord_library.notation(), Notation::Fingers);
+        assert_eq!(app.notation, Notation::Notes, "the scale trainer moved");
+
+        // Out of the box first: `d` is a note name, so while the box has the keyboard it
+        // has to type rather than switch modes, or `d` could never begin a search for a D
+        // chord. See `the_mode_keys_type_while_the_box_has_focus`.
+        press_named(&mut app, Named::Escape);
+        press_into(&mut app, "d", keyboard::Modifiers::empty());
+
+        assert_eq!(app.chord_library.notation(), Notation::Intervals);
+        assert_eq!(app.notation, Notation::Notes, "the scale trainer moved");
+    }
+
+    #[test]
+    fn the_mode_keys_type_while_the_box_has_focus() {
+        // The collision worth stating: `n`, `d` and `f` are all note names, so a focused
+        // search box must take them as text. The screen opens with the box focused, so the
+        // mode keys are a thing you reach for after `Esc` — exactly as `/` and `i` are.
+        let mut app = app_with_seed(0x4b0);
+        app.open(Screen::ChordLibrary);
+
+        press_into(&mut app, "d", keyboard::Modifiers::empty());
+
+        assert_eq!(app.chord_library.query(), "d");
+        assert_eq!(
+            app.chord_library.notation(),
+            Notation::Fingers,
+            "d switched"
+        );
+    }
+
+    #[test]
+    fn n_d_and_f_each_pick_their_own_mode() {
+        let mut app = app_on(Screen::ChordLibrary);
+
+        for (key, expected) in [
+            ("n", Notation::Notes),
+            ("d", Notation::Intervals),
+            ("f", Notation::Fingers),
+            ("n", Notation::Notes),
+        ] {
+            press_into(&mut app, key, keyboard::Modifiers::empty());
+
+            assert_eq!(app.chord_library.notation(), expected, "{key}");
+        }
+    }
+
+    #[test]
+    fn i_still_cycles_now_that_the_buttons_are_separate() {
+        // The keyboard keeps its one-key habit: `i` names whichever button comes next, so
+        // its accelerator target moves with the setting rather than being fixed.
+        let mut app = app_on(Screen::ChordLibrary);
+        app.chord_library.set_notation(0);
+
+        for expected in [Notation::Intervals, Notation::Fingers, Notation::Notes] {
+            press_into(&mut app, "i", keyboard::Modifiers::empty());
+
+            assert_eq!(app.chord_library.notation(), expected);
+        }
+    }
+
+    #[test]
+    fn the_library_cycles_three_notations_and_the_scale_trainer_two() {
+        let mut app = app_on(Screen::ChordLibrary);
+        app.chord_library.set_notation(0);
+
+        for expected in [
+            Notation::Intervals,
+            Notation::Fingers,
+            Notation::Notes,
+            Notation::Intervals,
+        ] {
+            press_into(&mut app, "i", keyboard::Modifiers::empty());
+            assert_eq!(app.chord_library.notation(), expected);
+        }
+
+        let mut app = app_on(Screen::ScaleTrainer);
+        for expected in [Notation::Intervals, Notation::Notes, Notation::Intervals] {
+            press_into(&mut app, "i", keyboard::Modifiers::empty());
+            assert_eq!(app.notation, expected, "the scale trainer reached a third");
+        }
+    }
+
     /// Guards the promise that scoping is structural: an accelerator can only name a widget
     /// the screen actually has, so reshaping a focus grid cannot strand one.
     #[test]
@@ -2405,11 +2981,20 @@ mod tests {
         for screen in every_screen() {
             let reachable = app_on(screen.clone()).focusables();
 
-            for (key, target, label) in accelerators(&screen) {
-                assert!(
-                    reachable.contains(&target),
-                    "{screen:?} binds {key:?} ({label}) to {target:?}, which is not on it"
-                );
+            // Every notation, not just the default: the library's `i` names whichever
+            // button comes next, so its target moves as the setting does and each of
+            // those has to be a widget the screen actually has.
+            for (index, &notation) in chord_library::NOTATIONS.iter().enumerate() {
+                let mut app = app_on(screen.clone());
+                app.chord_library.set_notation(index);
+
+                for (key, target, label) in app.accelerators() {
+                    assert!(
+                        reachable.contains(&target),
+                        "{screen:?} under {notation:?} binds {key:?} ({label}) to \
+                         {target:?}, which is not on it"
+                    );
+                }
             }
         }
     }
@@ -2418,7 +3003,7 @@ mod tests {
     /// this, a fourth entry would silently be the only one you cannot reach by number.
     #[test]
     fn every_home_menu_item_has_a_digit_accelerator() {
-        let bound = accelerators(&Screen::Home);
+        let bound = accelerators_for(&Screen::Home, Notation::Notes);
 
         assert_eq!(bound.len(), HOME_MENU.len());
 
@@ -2448,11 +3033,16 @@ mod tests {
             press_into(&mut app, &key.to_string(), keyboard::Modifiers::empty());
 
             assert_eq!(app.screen, item.screen, "{key} opened the wrong screen");
-            assert_eq!(
-                app.focused,
-                app_on(item.screen.clone()).focusables()[0],
-                "{key} did not reset focus"
-            );
+
+            // The ring lands on the screen's first focusable, except where the screen
+            // asks for somewhere else: the library opens with the caret in its search
+            // box, since looking something up starts with typing.
+            let landed = match item.screen {
+                Screen::ChordLibrary => FocusTarget::SearchBox,
+                _ => app_on(item.screen.clone()).focusables()[0],
+            };
+
+            assert_eq!(app.focused, landed, "{key} did not reset focus");
         }
     }
 
@@ -2532,7 +3122,10 @@ mod tests {
     #[test]
     fn no_screen_binds_the_same_accelerator_twice() {
         for screen in every_screen() {
-            let mut keys: Vec<char> = accelerators(&screen).iter().map(|(k, _, _)| *k).collect();
+            let mut keys: Vec<char> = accelerators_for(&screen, Notation::Notes)
+                .iter()
+                .map(|(k, _, _)| *k)
+                .collect();
             let count = keys.len();
             keys.sort_unstable();
             keys.dedup();
@@ -2544,11 +3137,10 @@ mod tests {
     /// Pressing a named key and letting the app act on it, for the keys `press` cannot
     /// build because they produce no character.
     pub(super) fn press_named(app: &mut App, named: Named) {
-        if let Some(message) =
-            translate_key(keyboard::Key::Named(named), keyboard::Modifiers::empty())
-        {
-            let _ = app.update(message);
-        }
+        let _ = app.update(Message::Key(
+            keyboard::Key::Named(named),
+            keyboard::Modifiers::empty(),
+        ));
     }
 
     #[test]
