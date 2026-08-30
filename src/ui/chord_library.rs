@@ -30,6 +30,10 @@ use super::{
 /// use every bit of it.
 const REACH: u8 = 3;
 
+/// How many fingers a hand brings to the neck. A barre counts as one however many strings
+/// it covers.
+const FINGERS: usize = 4;
+
 /// What one string does in a shape.
 ///
 /// An enum rather than an `Option<u8>` with a comment, because a muted string and a string
@@ -451,6 +455,161 @@ const SHAPES: &[Shape] = &[
         base: ChordQuality::Dominant7,
         root_string: 1,
     },
+    // Reduced shapes, and the reason they are here: the six-string ones above only stay
+    // fingerable near the nut. Altering a quality drags strings apart, and a placement that
+    // needs a fifth finger is refused — which left ten of the twelve major sixths with no
+    // shape at all. Dropping a string or two costs a doubled note nobody misses and takes
+    // the A-shape sixth from two playable placements to twenty-two.
+    Shape {
+        name: "E shape, four strings",
+        strings: [
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+            Muted,
+            Muted,
+            Sounded {
+                offset: 1,
+                degree: 3,
+            },
+            Sounded {
+                offset: 0,
+                degree: 5,
+            },
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+        ],
+        base: ChordQuality::Major,
+        root_string: 0,
+    },
+    Shape {
+        name: "A shape, three strings",
+        strings: [
+            Muted,
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+            Sounded {
+                offset: 2,
+                degree: 5,
+            },
+            Muted,
+            Sounded {
+                offset: 2,
+                degree: 3,
+            },
+            Muted,
+        ],
+        base: ChordQuality::Major,
+        root_string: 1,
+    },
+    Shape {
+        name: "E shape, four strings",
+        strings: [
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+            Sounded {
+                offset: 2,
+                degree: 5,
+            },
+            Muted,
+            Sounded {
+                offset: 1,
+                degree: 3,
+            },
+            Sounded {
+                offset: 2,
+                degree: 6,
+            },
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+        ],
+        base: ChordQuality::Major6,
+        root_string: 0,
+    },
+    Shape {
+        name: "A shape, four strings",
+        strings: [
+            Muted,
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+            Sounded {
+                offset: 2,
+                degree: 5,
+            },
+            Muted,
+            Sounded {
+                offset: 2,
+                degree: 3,
+            },
+            Sounded {
+                offset: 2,
+                degree: 6,
+            },
+        ],
+        base: ChordQuality::Major6,
+        root_string: 1,
+    },
+    Shape {
+        name: "E shape, four strings",
+        strings: [
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+            Muted,
+            Sounded {
+                offset: 0,
+                degree: 7,
+            },
+            Sounded {
+                offset: 1,
+                degree: 3,
+            },
+            Sounded {
+                offset: 0,
+                degree: 5,
+            },
+            Muted,
+        ],
+        base: ChordQuality::Dominant7,
+        root_string: 0,
+    },
+    Shape {
+        name: "A shape, four strings",
+        strings: [
+            Muted,
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+            Muted,
+            Sounded {
+                offset: 0,
+                degree: 7,
+            },
+            Sounded {
+                offset: 2,
+                degree: 3,
+            },
+            Sounded {
+                offset: 0,
+                degree: 5,
+            },
+        ],
+        base: ChordQuality::Dominant7,
+        root_string: 1,
+    },
 ];
 
 /// One way to play a chord: a fret per string, or nothing sounding there.
@@ -525,21 +684,45 @@ impl Voicing {
             u8::try_from(rank)
                 .ok()?
                 .checked_add(if barre.is_some() { 2 } else { 1 })
-                .filter(|&finger| finger <= 4)
+                .filter(|&finger| usize::from(finger) <= FINGERS)
         })
     }
 
-    /// The fret a barre sits on: the shape's index fret, when it is stopped at all and
-    /// more than one string rests there.
-    pub fn barre_fret(self) -> Option<u8> {
-        let at_index = self
-            .strings
-            .into_iter()
-            .flatten()
-            .filter(|&fret| fret == self.index_fret)
-            .count();
+    /// Whether a hand has enough fingers for this.
+    ///
+    /// Four, with a barre counting as one however many strings it covers. A voicing needing
+    /// a fifth is refused with the placements that run off the neck or past a reach — it is
+    /// the same kind of unplayable, and a diagram that drew a dot it could not name a finger
+    /// for was the visible symptom of it not being checked.
+    fn is_fingerable(self) -> bool {
+        self.fingers()
+            .iter()
+            .zip(self.strings)
+            .all(|(finger, fret)| finger.is_some() || !matches!(fret, Some(f) if f > 0))
+    }
 
-        (self.index_fret > 0 && at_index > 1).then_some(self.index_fret)
+    /// The fret a barre sits on: the lowest stopped one, when more than one string rests
+    /// there *and* the voicing needs more fingers than a hand has.
+    ///
+    /// The *lowest stopped* fret, not the shape's index fret, which is where this was wrong.
+    /// Altering a quality can drop a string below the fret its shape sits at — C♯°7 on the A
+    /// shape is `x 4 5 3 5 3`, sitting at the fourth with two strings at the third — and
+    /// keying on the index fret found no barre there, leaving five stopped strings for four
+    /// fingers. A finger bars the lowest thing it is holding; nothing about the shape's own
+    /// index fret enters into it.
+    ///
+    /// The strings resting on it need not be adjacent. A bar covers the ones between as
+    /// well, and a string stopped higher up simply sounds its own note instead — which is
+    /// how every barre chord with a shape on top of it works.
+    pub fn barre_fret(self) -> Option<u8> {
+        let lowest = self.stopped().min()?;
+        let resting = self.stopped().filter(|&fret| fret == lowest).count();
+
+        // A hand has four fingers, so a barre is what happens when a voicing needs five.
+        // Below that there is no reason to lay one down: open D is `x x 0 2 3 2`, two
+        // strings on its lowest fret and barre-able in principle, and nobody plays it that
+        // way because three separate fingers are free and easier.
+        (resting > 1 && self.stopped().count() > FINGERS).then_some(lowest)
     }
 }
 
@@ -586,7 +769,11 @@ impl Shape {
         let stopped: Vec<u8> = voicing.stopped().collect();
         let span = stopped.iter().max()?.checked_sub(*stopped.iter().min()?)?;
 
-        (span <= REACH).then_some(voicing)
+        if span > REACH || !voicing.is_fingerable() {
+            return None;
+        }
+
+        Some(voicing)
     }
 
     /// Whether `kind` names the same degree numbers this shape was drawn against.
@@ -1738,6 +1925,58 @@ mod tests {
             assert!(!shape.carries(ChordQuality::Dominant7));
             assert!(shape.carries(ChordQuality::Minor));
         }
+    }
+
+    #[test]
+    fn every_stopped_string_gets_a_finger() {
+        // The bug this exists for: `C♯°7` on the A shape is `x 4 5 3 5 3`, a shape sitting
+        // at the fourth fret with two strings dropped to the third by the alteration.
+        // `barre_fret` keyed on the shape's index fret, found no barre at 4, and left five
+        // stopped strings for four fingers — the fifth drew a dot with no number in it.
+        for &root in &PitchClass::ALL {
+            for &kind in ChordQuality::ALL {
+                for voicing in voicings(Chord::new(root, kind)) {
+                    let fingers = voicing.fingers();
+
+                    for (string, fret) in voicing.strings().iter().enumerate() {
+                        if matches!(fret, Some(f) if *f > 0) {
+                            assert!(
+                                fingers[string].is_some(),
+                                "{root:?} {kind:?} as {} leaves string {string} unfingered",
+                                voicing.shape_name(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_barre_sits_on_the_lowest_stopped_fret() {
+        // Not on the shape's index fret, which is what it used to read.
+        let c_sharp_dim7 = Chord::new(pc(1), ChordQuality::Diminished7);
+        let voicing = voicings(c_sharp_dim7)
+            .into_iter()
+            .find(|v| v.shape_name() == "A shape")
+            .expect("the A shape carries a diminished seventh");
+
+        assert_eq!(
+            voicing.strings()[1],
+            Some(4),
+            "the shape sits at the fourth"
+        );
+        assert_eq!(voicing.barre_fret(), Some(3), "the barre is below it");
+    }
+
+    #[test]
+    fn a_voicing_within_a_hand_is_not_barred() {
+        // A barre is what happens when a chord needs a fifth finger. Open D is `x x 0 2 3 2`
+        // — two strings on its lowest fret, barre-able in principle, and fingered with three
+        // separate fingers by everyone who plays it.
+        let open_d = only(Chord::new(pc(2), ChordQuality::Major), "D shape", 0);
+
+        assert_eq!(open_d.barre_fret(), None);
     }
 
     #[test]
