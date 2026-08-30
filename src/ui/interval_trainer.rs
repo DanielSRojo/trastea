@@ -36,8 +36,8 @@ const CURSOR_START: Position = Position {
 /// One entry of the answer vocabulary.
 ///
 /// `twin` is the other spelling of the same distance, where the neck cannot tell the two
-/// apart. Only the tritone has one: every other distance in an octave has a single name at
-/// this level of the theory. Carrying the twin as an `Interval` rather than as a written
+/// apart — the tritone, and the two chord degrees the library added to `Interval`. Carrying
+/// the twin as an `Interval` rather than as a written
 /// label is what stops the button's text from drifting away from the interval it stands
 /// for — the label is rendered from these two, never stored beside them.
 struct AnswerChoice {
@@ -49,8 +49,8 @@ struct AnswerChoice {
 ///
 /// One table, and the grid, the focus rows, and the pool prompts are drawn from all read
 /// it — the way `HOME_MENU` is the single source of the menu's buttons, focus cells, and
-/// digit keys. `Interval::ALL` is thirteen; this is that list with the two tritone
-/// spellings collapsed into one entry, which is what makes the count divide evenly into
+/// digit keys. `Interval::ALL` is fifteen; this is that list with each distance written two
+/// ways collapsed into one entry, which is what makes the count divide evenly into
 /// `ANSWER_ROW_WIDTH` and leaves no ragged final row.
 const ANSWERS: [AnswerChoice; 12] = [
     AnswerChoice {
@@ -87,11 +87,11 @@ const ANSWERS: [AnswerChoice; 12] = [
     },
     AnswerChoice {
         interval: Interval::MinorSixth,
-        twin: None,
+        twin: Some(Interval::AugmentedFifth),
     },
     AnswerChoice {
         interval: Interval::MajorSixth,
-        twin: None,
+        twin: Some(Interval::DiminishedSeventh),
     },
     AnswerChoice {
         interval: Interval::MinorSeventh,
@@ -456,9 +456,9 @@ impl IntervalTrainer {
 
 /// How wide one answer button is.
 ///
-/// Wider than the Note Trainer's square `ROOT_BUTTON_SIZE` buttons because one label here
-/// is twice the length of the others: the tritone names both of its spellings, and a grid
-/// whose columns changed width with their contents would stop reading as a grid.
+/// Wider than the Note Trainer's square `ROOT_BUTTON_SIZE` buttons because the twinned
+/// labels are twice the length of the others — they name both spellings — and a grid whose
+/// columns changed width with their contents would stop reading as a grid.
 const ANSWER_BUTTON_WIDTH: f32 = 76.0;
 
 /// The Interval Trainer.
@@ -554,7 +554,7 @@ pub(super) fn ui_interval_trainer(
 
 /// The vocabulary entry for an interval — the one the grid would draw for it.
 ///
-/// The tritone's two spellings share an entry, so `DiminishedFifth` resolves to the
+/// Two spellings of one distance share an entry, so `DiminishedFifth` resolves to the
 /// `AugmentedFourth` entry that names them both. Falls back to a twinless entry for an
 /// interval outside the vocabulary, which the drill cannot produce but which spares this
 /// from being fallible for a case no caller could act on.
@@ -788,8 +788,7 @@ fn interval_answer_row(
 ///
 /// Built the way `intervalic_text` builds the scale trainer's formula row, and for the same
 /// reason: the accidental glyph renders in `MUSIC_FONT` and the degree digit in the body
-/// font, and one `text` widget cannot carry both. The tritone is the one entry that runs
-/// this twice.
+/// font, and one `text` widget cannot carry both. The twinned entries run this twice.
 fn interval_label(
     choice: &AnswerChoice,
     size: u32,
@@ -835,10 +834,10 @@ mod tests {
         assert_eq!(ANSWERS.len(), 12);
         assert_eq!(ANSWER_COUNT, ANSWERS.len());
 
-        // Twelve entries and twelve distinct distances is the whole tritone decision stated
-        // as an invariant: judging compares semitones, so two buttons standing for one
-        // distance would be two spellings of the same answer with no way to tell which the
-        // drill meant.
+        // Twelve entries and twelve distinct distances is the whole twin decision stated as
+        // an invariant: judging compares semitones, so two buttons standing for one distance
+        // would be two spellings of the same answer with no way to tell which the drill
+        // meant.
         let mut distances: Vec<u8> = ANSWERS
             .iter()
             .map(|choice| choice.interval.semitones())
@@ -878,19 +877,30 @@ mod tests {
     }
 
     #[test]
-    fn only_the_tritone_has_a_twin() {
+    fn a_twin_is_the_same_distance_written_a_second_way() {
         let twinned: Vec<&AnswerChoice> = ANSWERS.iter().filter(|c| c.twin.is_some()).collect();
 
-        assert_eq!(twinned.len(), 1);
-        assert_eq!(twinned[0].interval, Interval::AugmentedFourth);
-        assert_eq!(twinned[0].twin, Some(Interval::DiminishedFifth));
-        // The two spellings the neck cannot separate: same distance, different degree.
-        assert_eq!(Interval::AugmentedFourth.semitones(), 6);
-        assert_eq!(Interval::DiminishedFifth.semitones(), 6);
-        assert_ne!(
-            Interval::AugmentedFourth.number(),
-            Interval::DiminishedFifth.number()
-        );
+        assert_eq!(twinned.len(), 3);
+
+        for choice in twinned {
+            let twin = choice.twin.expect("filtered to the twinned entries");
+
+            // What earns an entry a twin, and the only thing that does: the neck cannot
+            // separate two spellings of one distance, so the drill offers them as one
+            // answer. A pair differing in distance would be two answers wrongly merged.
+            assert_eq!(
+                choice.interval.semitones(),
+                twin.semitones(),
+                "{} and {twin} are different distances",
+                choice.interval
+            );
+            assert_ne!(
+                choice.interval.number(),
+                twin.number(),
+                "{} and {twin} are the same degree",
+                choice.interval
+            );
+        }
     }
 
     #[test]
