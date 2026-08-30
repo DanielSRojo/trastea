@@ -47,7 +47,9 @@ jobs:
       # file on either platform. Generating here rather than in each build job keeps
       # the cargo-about install off the macOS runner and out of the matrix.
       - name: Install cargo-about
-        run: cargo install cargo-about --locked --features cli --version "${CARGO_ABOUT_VERSION}"
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@${{ env.CARGO_ABOUT_VERSION }}
 
       - name: just notices
         run: just notices
