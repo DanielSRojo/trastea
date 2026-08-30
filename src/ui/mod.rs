@@ -33,6 +33,9 @@ const INK: Color = Color::WHITE;
 const BODY: Color = Color::from_rgb8(0xb5, 0xb5, 0xb5);
 const MUTE: Color = Color::from_rgb8(0x77, 0x77, 0x77);
 const HAIRLINE: Color = Color::from_rgb8(0x1f, 0x1f, 0x1f);
+/// A hairline bright enough to read as a rule between groups rather than as an edge, which
+/// is what `HAIRLINE` is for. Also the colour of the slash between a black key's two names.
+const HAIRLINE_INK: Color = Color::from_rgb8(0x33, 0x33, 0x33);
 const CANVAS: Color = Color::BLACK;
 const CANVAS_SOFT: Color = Color::from_rgb8(0x0a, 0x0a, 0x0a);
 const CANVAS_SOFT_2: Color = Color::from_rgb8(0x11, 0x11, 0x11);
@@ -412,7 +415,24 @@ impl App {
         (app, Task::none())
     }
 
+    /// Dispatches the message, then keeps the chord list scrolled to its selection.
+    ///
+    /// Split from `dispatch` rather than folded into every arm that moves the selection:
+    /// the selection moves from the arrows, from a click, and from the query changing under
+    /// it, and threading a `Task` back out of each would spread one concern across all of
+    /// them. Comparing before and after asks the question once, where the answer is known.
     pub fn update(&mut self, message: Message) -> Task<Message> {
+        let was = self.chord_library.selected_row();
+        let task = self.dispatch(message);
+
+        if self.screen == Screen::ChordLibrary && self.chord_library.selected_row() != was {
+            return Task::batch([task, self.chord_library.follow_selection()]);
+        }
+
+        task
+    }
+
+    fn dispatch(&mut self, message: Message) -> Task<Message> {
         // A raw key is resolved before anything else, because until it is translated it is
         // not yet one of the messages the arms below are written against. `translate_key`
         // never yields another `Key`, so this recurses exactly once.
@@ -438,7 +458,10 @@ impl App {
             }
 
             return match translate_key(key, modifiers) {
-                Some(message) => self.update(message),
+                // `dispatch`, not `update`: the wrapper has already taken its "before"
+                // reading, and recursing through it would take a second one that could
+                // only ever agree with the first.
+                Some(message) => self.dispatch(message),
                 None => Task::none(),
             };
         }
@@ -671,6 +694,13 @@ impl App {
     /// A miss is silent: `translate_key` forwards every character it does not recognise as
     /// a motion, so most of what arrives here is nothing at all.
     fn accelerate(&mut self, c: char) {
+        // Offered to the screen first, because `gg` is a *pair* of keys and the accelerator
+        // table maps one key to one widget — it has nowhere to keep "a `g` is pending". A
+        // screen that wants a motion of its own takes it here and the table never sees it.
+        if self.screen == Screen::ChordLibrary && self.chord_library.motion(c) {
+            return;
+        }
+
         let target = self
             .accelerators()
             .into_iter()
@@ -1249,6 +1279,11 @@ fn accelerators_for(screen: &Screen, notation: Notation) -> Vec<Accelerator> {
                 ('d', FocusTarget::NotationChoice(1), "degrees"),
                 ('f', FocusTarget::NotationChoice(2), "fingers"),
                 ('i', FocusTarget::NotationChoice(next), "cycle the three"),
+                // Here for the overlay's sake. `accelerate` takes `g` and `G` before it
+                // consults this table, because `gg` is two keys and a table entry is one —
+                // so the target is the widget they move rather than one they activate, and
+                // `gg` is named in the label because it has no row of its own.
+                ('G', FocusTarget::ChordList, "last chord, gg for the first"),
             ]
         }
     }
@@ -1844,6 +1879,18 @@ fn page_container(_theme: &iced::Theme) -> iced::widget::container::Style {
     iced::widget::container::Style {
         text_color: Some(INK),
         background: Some(Background::Color(CANVAS)),
+        border: Border::default(),
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
+
+/// A one-pixel rule. A filled container rather than a border, since a `Border` draws on all
+/// four sides and only the underline is wanted.
+fn hairline_rule(_theme: &iced::Theme) -> iced::widget::container::Style {
+    iced::widget::container::Style {
+        text_color: None,
+        background: Some(Background::Color(HAIRLINE_INK)),
         border: Border::default(),
         shadow: Shadow::default(),
         snap: true,
@@ -2847,6 +2894,55 @@ mod tests {
 
         assert!(!app.chord_library.search_focused());
         assert_eq!(app.focused, FocusTarget::SearchBox);
+    }
+
+    #[test]
+    fn g_and_shift_g_jump_to_the_ends_of_the_list() {
+        let mut app = app_with_seed(0x99);
+        app.open(Screen::ChordLibrary);
+        press_named(&mut app, Named::Escape);
+
+        let last = app.chord_library.rows().len() - 1;
+
+        press_into(&mut app, "G", keyboard::Modifiers::SHIFT);
+        assert_eq!(app.chord_library.selected_row(), last);
+
+        press_into(&mut app, "g", keyboard::Modifiers::empty());
+        press_into(&mut app, "g", keyboard::Modifiers::empty());
+        assert_eq!(app.chord_library.selected_row(), 0);
+    }
+
+    #[test]
+    fn one_g_is_not_a_jump_and_does_not_lie_in_wait() {
+        let mut app = app_with_seed(0x9a);
+        app.open(Screen::ChordLibrary);
+        press_named(&mut app, Named::Escape);
+
+        let last = app.chord_library.rows().len() - 1;
+        press_into(&mut app, "G", keyboard::Modifiers::SHIFT);
+
+        // One `g` on its own moves nothing.
+        press_into(&mut app, "g", keyboard::Modifiers::empty());
+        assert_eq!(app.chord_library.selected_row(), last);
+
+        // And anything between the two halves cancels it, so a stale `g` cannot turn the
+        // next keystroke into a jump.
+        press_into(&mut app, "i", keyboard::Modifiers::empty());
+        press_into(&mut app, "g", keyboard::Modifiers::empty());
+        assert_eq!(app.chord_library.selected_row(), last, "a stale g fired");
+    }
+
+    #[test]
+    fn the_jump_keys_type_while_the_box_has_focus() {
+        // `g` is a note name, so a focused box has to take it as text.
+        let mut app = app_with_seed(0x9b);
+        app.open(Screen::ChordLibrary);
+
+        press_into(&mut app, "g", keyboard::Modifiers::empty());
+        press_into(&mut app, "g", keyboard::Modifiers::empty());
+
+        assert_eq!(app.chord_library.query(), "gg");
+        assert_eq!(app.chord_library.selected_row(), 0);
     }
 
     #[test]
