@@ -12,6 +12,8 @@ env:
   CARGO_TERM_COLOR: always
   # pinned so a release cannot start emitting different notices than the one before it
   CARGO_ABOUT_VERSION: "0.9.2"
+  # same reason: the notes a release publishes come from the version this line names
+  GIT_CLIFF_VERSION: "2.13.1"
 
 jobs:
   # Fails the release before anything is built so a bad tag never produces a release.
@@ -19,7 +21,11 @@ jobs:
     name: Verify tag and run the gate
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 — git-cliff walks the commits and tags behind this one, which the
+      # default shallow checkout does not have
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Install just
         uses: extractions/setup-just@v4
@@ -54,6 +60,22 @@ jobs:
         with:
           name: notices
           path: THIRD-PARTY-NOTICES.txt
+          if-no-files-found: error
+
+      # Generated here rather than in the release job for the same reason as the notices:
+      # this is the one job that has the repository checked out.
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff@${{ env.GIT_CLIFF_VERSION }}
+
+      - name: just notes
+        run: just notes
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: RELEASE_NOTES.md
           if-no-files-found: error
 
   build:
@@ -163,6 +185,11 @@ jobs:
           path: dist
           merge-multiple: true
 
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+          path: notes
+
       - name: Checksums
         run: |
           cd dist
@@ -172,6 +199,6 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
-          generate_release_notes: true
+          body_path: notes/RELEASE_NOTES.md
           fail_on_unmatched_files: true
           prerelease: ${{ contains(github.ref_name, '-') }}

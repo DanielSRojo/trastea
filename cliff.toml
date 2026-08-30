@@ -1,0 +1,35 @@
+# git-cliff turns the conventional commits in a tag's range into the release body the
+# release workflow publishes. `just notes` runs it; its flags live in the justfile.
+
+[changelog]
+# no header — this is a release body, not a CHANGELOG.md
+body = """
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim }}
+{% for commit in commits %}\
+- {% if commit.scope %}**{{ commit.scope }}**: {% endif %}{{ commit.message }}
+{% endfor %}\
+{% endfor %}
+"""
+trim = true
+
+[git]
+conventional_commits = true
+# a commit that does not parse is a mistake worth seeing in the notes, not one to hide
+filter_unconventional = false
+protect_breaking_commits = true
+commit_parsers = [
+  { message = "^Merge", skip = true },
+  # the <!-- n --> prefixes only exist to order the sections: group_by sorts the group
+  # names alphabetically, and striptags takes them back out of the heading
+  { message = "^feat", group = "<!-- 0 -->Features" },
+  { message = "^fix", group = "<!-- 1 -->Fixes" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
+  { message = "^refactor", group = "<!-- 3 -->Refactoring" },
+  { message = "^docs", group = "<!-- 4 -->Documentation" },
+  { message = "^test", group = "<!-- 5 -->Tests" },
+  { message = "^(build|ci|chore)", skip = true },
+  # last, so anything that did not parse lands here instead of being dropped silently:
+  # group_by drops a commit with no group, which would hide the mistake rather than show it
+  { message = ".*", group = "<!-- 6 -->Other" },
+]

@@ -39,6 +39,14 @@ run:
 notices:
     cargo about generate about.hbs -o THIRD-PARTY-NOTICES.txt
 
+# the release body the workflow publishes, for the tag at HEAD — needs git-cliff installed
+notes:
+    git-cliff --current --output RELEASE_NOTES.md
+
+# the same notes for a version that is not tagged yet, to stdout — the pre-tag dry run
+notes-preview version:
+    git-cliff --unreleased --tag v{{version}}
+
 # advisories and yanked crates across everything Cargo.lock names — needs cargo-deny
 # installed. Deliberately not a stage of `ci`: the gate stays runnable with a Rust toolchain
 # and nothing else, the same reason `notices` sits outside it.
