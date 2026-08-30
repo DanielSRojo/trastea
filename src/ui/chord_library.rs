@@ -13,14 +13,14 @@
 use iced::keyboard;
 
 use crate::music::chords::{Chord, ChordQuality, Query};
-use crate::music::notes::PitchClass;
+use crate::music::notes::{PitchClass, Spelling};
 
 use super::chord_diagram::{ChordDiagram, FEATURE, STRIP, StringMark, chord_diagram, window_for};
 use super::{
-    BODY, FocusTarget, INK, MUSIC_FONT, MUTE, Message, NECK_FRETS, Notation, SMUFL_CSYM_AUGMENTED,
-    SMUFL_CSYM_DIMINISHED, SMUFL_CSYM_HALF_DIMINISHED, SMUFL_CSYM_MAJOR_SEVENTH, SMUFL_SHARP,
-    STANDARD_TUNING, SUCCESS, card_container, focus_ring, ghost_button, intervalic_text,
-    note_label, pitch_class_at,
+    BODY, FocusTarget, HAIRLINE_INK, INK, MUSIC_FONT, MUTE, Message, NECK_FRETS, Notation,
+    SMUFL_CSYM_AUGMENTED, SMUFL_CSYM_DIMINISHED, SMUFL_CSYM_HALF_DIMINISHED,
+    SMUFL_CSYM_MAJOR_SEVENTH, SMUFL_SHARP, STANDARD_TUNING, SUCCESS, card_container, focus_ring,
+    ghost_button, hairline_rule, intervalic_text, note_label, pitch_class_at,
 };
 
 /// How many frets apart a shape's stopped notes may sit.
@@ -872,12 +872,14 @@ pub(super) struct ChordLibrary {
     /// widget would receive keys *as well as* the global subscription — both would fire,
     /// and `l` would insert a character and move the focus ring. One owner, one caret.
     caret: usize,
-    /// The root the list is built on. Survives the query being cleared, which is what makes
-    /// an empty box mean "this root, every quality" rather than "nothing chosen".
-    root: PitchClass,
     selected_row: usize,
     selected_voicing: usize,
     search_focused: bool,
+    /// Whether a `g` is waiting for its second half.
+    ///
+    /// `gg` is the one two-key gesture in the app. Anything other than a second `g` clears
+    /// it, so a half-typed motion never lies in wait to change what the next key does.
+    pending_g: bool,
     /// What the diagrams' marks say, kept here rather than on `App`.
     ///
     /// Held by the screen because only this screen can draw all three, and because sharing
@@ -891,10 +893,10 @@ impl ChordLibrary {
         Self {
             query: String::new(),
             caret: 0,
-            root: PitchClass::new(0),
             selected_row: 0,
             selected_voicing: 0,
             search_focused: false,
+            pending_g: false,
             // Fingers by default: the question this screen is opened to answer is "how do
             // I play this", and a fingering answers it in a way a note name does not.
             notation: Notation::Fingers,
@@ -913,7 +915,7 @@ impl ChordLibrary {
 
     /// Opening the screen: an empty box with the caret in it, and the notation left as the
     /// learner last set it. The query goes because the first keystroke should start a new
-    /// search rather than extend the last one; the root it established stays.
+    /// search rather than extend the last one.
     pub(super) fn enter(&mut self) {
         self.set_query(String::new());
         self.focus_search();
@@ -921,10 +923,6 @@ impl ChordLibrary {
 
     pub(super) fn query(&self) -> &str {
         &self.query
-    }
-
-    pub(super) fn root(&self) -> PitchClass {
-        self.root
     }
 
     pub(super) fn search_focused(&self) -> bool {
@@ -937,66 +935,79 @@ impl ChordLibrary {
     /// case of searching rather than a mode of its own. A query that parses picks exactly;
     /// one that does not falls back to approximate matching, which is the only place a
     /// score is involved and never competes with an exact hit.
-    pub(super) fn rows(&self) -> Vec<ChordQuality> {
+    pub(super) fn rows(&self) -> Vec<Chord> {
         match Query::parse(&self.query) {
-            None if self.query.trim().is_empty() => ChordQuality::ALL.to_vec(),
+            None if self.query.trim().is_empty() => every_chord().collect(),
             None => self.approximate_rows(),
-            Some(Query::Root(_)) => ChordQuality::ALL.to_vec(),
-            Some(Query::Quality(kind)) | Some(Query::Chord { kind, .. }) => vec![kind],
+            Some(Query::Root(root)) => every_chord().filter(|chord| chord.root() == root).collect(),
+            Some(Query::Quality(kind)) => {
+                every_chord().filter(|chord| chord.kind() == kind).collect()
+            }
+            Some(Query::Chord { root, kind }) => vec![Chord::new(root, kind)],
         }
     }
 
-    /// Rows for a query the grammar could not read: the qualities whose symbol on this root
-    /// contains the query's characters in order, nearest match first.
+    /// Rows for a query the grammar could not read: the chords whose symbol contains the
+    /// query's characters in order, nearest match first.
     ///
     /// A subsequence rather than a substring, so `cmj7` still reaches `Cmaj7`. The hazard
     /// this would otherwise carry — `cm7` scoring against `Cmaj7` — cannot arise, because
     /// `cm7` parses and never reaches here.
-    fn approximate_rows(&self) -> Vec<ChordQuality> {
+    fn approximate_rows(&self) -> Vec<Chord> {
         let needle = self.query.trim().to_lowercase();
-        let mut scored: Vec<(usize, usize, usize)> = ChordQuality::ALL
-            .iter()
+        // The library's own order is the last tiebreak, so two equally good matches come
+        // out in the order the list would have shown them anyway.
+        let mut scored: Vec<(usize, usize, usize, Chord)> = every_chord()
             .enumerate()
-            .filter_map(|(order, &kind)| {
-                let symbol = Chord::new(self.root, kind).to_string().to_lowercase();
-                let (start, span) = subsequence(&needle, &symbol)?;
+            .filter_map(|(order, chord)| {
+                let (start, span) = subsequence(&needle, &chord.to_string().to_lowercase())?;
 
-                Some((start, span, order))
+                Some((start, span, order, chord))
             })
             .collect();
 
-        scored.sort_unstable();
-        scored
-            .into_iter()
-            .map(|(_, _, order)| ChordQuality::ALL[order])
-            .collect()
+        scored.sort_unstable_by_key(|&(start, span, order, _)| (start, span, order));
+        scored.into_iter().map(|(.., chord)| chord).collect()
     }
 
     pub(super) fn selected_row(&self) -> usize {
         self.selected_row
     }
 
+    /// Scrolls the list so the selected row is on screen.
+    ///
+    /// Proportional: the offset is the selection's share of the rows, so the highlight
+    /// starts at the top of the viewport for the first row and reaches the bottom for the
+    /// last, staying inside it all the way between. Exact at both ends, and near enough in
+    /// the middle that the group headers' extra height does not push it out — which is what
+    /// spares this from having to know the viewport's size or a row's height in pixels.
+    pub(super) fn follow_selection(&self) -> iced::Task<Message> {
+        let rows = self.rows().len();
+        let y = if rows > 1 {
+            self.selected_row as f32 / (rows - 1) as f32
+        } else {
+            0.0
+        };
+
+        iced::widget::operation::snap_to(
+            list_id(),
+            iced::widget::operation::RelativeOffset { x: 0.0, y },
+        )
+    }
+
     pub(super) fn selected_chord(&self) -> Option<Chord> {
-        self.rows()
-            .get(self.selected_row)
-            .map(|&kind| Chord::new(self.root, kind))
+        self.rows().get(self.selected_row).copied()
     }
 
     pub(super) fn selected_voicing(&self) -> usize {
         self.selected_voicing
     }
 
-    /// Replaces the query, taking a root from it when it names one.
-    ///
-    /// The root is state rather than a function of the query, which is what lets an emptied
-    /// box keep showing the root the last resolved query established.
+    /// Replaces the query. Nothing is remembered from it: the list is the whole library
+    /// filtered by whatever is typed, so an empty box means the whole library rather than
+    /// "the last root you named", which was state the screen never showed anybody.
     fn set_query(&mut self, query: String) {
         self.query = query;
-
-        if let Some(Query::Root(root) | Query::Chord { root, .. }) = Query::parse(&self.query) {
-            self.root = root;
-        }
-
         self.selected_row = 0;
         self.selected_voicing = 0;
     }
@@ -1042,9 +1053,35 @@ impl ChordLibrary {
         self.selected_voicing = next as usize;
     }
 
+    /// The vim motions this screen claims for itself: `gg` to the first chord, `G` to the
+    /// last. Reports whether it took the key.
+    ///
+    /// Only reached with the search box unfocused, since a focused box takes every character
+    /// as text — which it must, because `g` is a note name.
+    pub(super) fn motion(&mut self, c: char) -> bool {
+        let pending = std::mem::replace(&mut self.pending_g, false);
+
+        match c {
+            'g' if pending => self.select_row(0),
+            'g' => {
+                self.pending_g = true;
+
+                return true;
+            }
+            'G' => {
+                let last = self.rows().len().saturating_sub(1);
+                self.select_row(last);
+            }
+            _ => return false,
+        }
+
+        true
+    }
+
     pub(super) fn focus_search(&mut self) {
         self.search_focused = true;
         self.caret = self.query.chars().count();
+        self.pending_g = false;
     }
 
     /// Handles a key while the box has focus, reporting what it did.
@@ -1129,6 +1166,24 @@ pub(super) enum KeyOutcome {
     Handled,
     /// Claimed, and the box is finished: move the ring to the shapes.
     Accepted,
+}
+
+/// The chord list's scrollable, named so `follow_selection` can reach it.
+fn list_id() -> iced::widget::Id {
+    iced::widget::Id::new("chord-library-list")
+}
+
+/// Every chord the library holds, by root and then by quality.
+///
+/// The whole cross product, because the list is a filter over it rather than a window onto
+/// one root. Building all 180 costs about 33µs — the rows are cheap; it is the widgets that
+/// are not, which is why the view groups them rather than showing a flat wall.
+fn every_chord() -> impl Iterator<Item = Chord> {
+    PitchClass::ALL.into_iter().flat_map(|root| {
+        ChordQuality::ALL
+            .iter()
+            .map(move |&kind| Chord::new(root, kind))
+    })
 }
 
 /// Where `needle`'s characters appear in `haystack`, in order, as `(start, span)`.
@@ -1317,6 +1372,51 @@ fn diagram_for(chord: Chord, voicing: Voicing, notation: Notation) -> ChordDiagr
     }
 }
 
+/// The rule between one root's chords and the next.
+///
+/// Both names on the five black keys, because the rows below genuinely use both: pitch
+/// class 1 spells `D♭` under a major triad and `C♯` under a minor one, since `D♭ F A♭`
+/// costs two flats where `C♯ E♯ G♯` costs three sharps. A header reading `C♯` alone would
+/// be wrong about a third of its own group — and showing the pair says the thing the
+/// spelling rule exists to teach, which is that the name follows the chord.
+fn root_header(root: PitchClass, after_a_group: bool) -> iced::Element<'static, Message> {
+    use iced::Length;
+    use iced::widget::{Space, column, container, row, text};
+
+    let sharp = Spelling::Sharps.spell(root);
+    let flat = Spelling::Flats.spell(root);
+
+    let name = if sharp == flat {
+        row![note_label(sharp, 13, MUTE)]
+    } else {
+        row![
+            note_label(sharp, 13, MUTE),
+            text("/").size(13).color(HAIRLINE_INK),
+            note_label(flat, 13, MUTE),
+        ]
+        .spacing(5)
+    };
+
+    container(
+        column![
+            name,
+            // A hairline rather than a bordered container: a `Border` would draw on all
+            // four sides, and only the underline is wanted.
+            container(Space::new().height(Length::Fixed(1.0)))
+                .width(Length::Fill)
+                .style(hairline_rule),
+        ]
+        .spacing(4),
+    )
+    .padding(iced::Padding {
+        top: if after_a_group { 14.0 } else { 4.0 },
+        bottom: 2.0,
+        left: 12.0,
+        right: 12.0,
+    })
+    .into()
+}
+
 pub(super) fn ui_chord_library(
     library: &ChordLibrary,
     focused: FocusTarget,
@@ -1369,8 +1469,16 @@ pub(super) fn ui_chord_library(
         scrollable(
             rows.iter()
                 .enumerate()
-                .fold(column![].spacing(2), |list, (index, &kind)| {
-                    let chord = Chord::new(library.root(), kind);
+                .fold(column![].spacing(2), |list, (index, &chord)| {
+                    // A header wherever the root changes. Derived here rather than stored
+                    // in the rows, so the selection stays a plain index into the chords and
+                    // the arrows never have to step over anything unselectable.
+                    let opens_a_group = index == 0 || rows[index - 1].root() != chord.root();
+                    let list = if opens_a_group {
+                        list.push(root_header(chord.root(), index > 0))
+                    } else {
+                        list
+                    };
                     let picked = index == library.selected_row();
 
                     list.push(
@@ -1386,6 +1494,7 @@ pub(super) fn ui_chord_library(
                     )
                 }),
         )
+        .id(list_id())
         .height(Length::Fill)
         .into()
     };
@@ -2110,45 +2219,55 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_query_lists_every_quality() {
+    fn an_empty_query_lists_the_whole_library() {
         let library = ChordLibrary::new();
 
-        assert_eq!(library.rows(), ChordQuality::ALL.to_vec());
-        assert_eq!(library.rows().len(), 15);
+        assert_eq!(library.rows().len(), 12 * 15);
     }
 
     #[test]
-    fn the_rows_keep_the_curated_order() {
-        // Not alphabetical: triads first, extensions last.
+    fn the_rows_run_by_root_then_by_the_curated_quality_order() {
+        // Not alphabetical: within a root, triads first and extensions last.
         let rows = ChordLibrary::new().rows();
 
-        assert_eq!(rows.first(), Some(&ChordQuality::Major));
-        assert_eq!(rows.last(), Some(&ChordQuality::Augmented7));
+        assert_eq!(rows.first().map(|c| c.to_string()), Some("C".into()));
+        assert_eq!(rows[1].to_string(), "Cm");
+        assert_eq!(rows[15].root(), pc(1), "the second group is the next root");
+        assert_eq!(
+            rows.last().map(|c| c.kind()),
+            Some(ChordQuality::Augmented7)
+        );
     }
 
     #[test]
-    fn a_root_alone_rebuilds_the_list_on_that_root() {
+    fn a_root_alone_narrows_to_that_root() {
         let library = typed("f#");
+        let rows = library.rows();
 
-        assert_eq!(library.root(), pc(6));
-        assert_eq!(library.rows(), ChordQuality::ALL.to_vec());
+        assert_eq!(rows.len(), 15);
+        assert!(rows.iter().all(|chord| chord.root() == pc(6)));
     }
 
     #[test]
-    fn a_quality_alone_filters_without_moving_the_root() {
-        let mut library = typed("f#");
-        library.set_query("m7b5".to_string());
+    fn a_quality_alone_narrows_to_that_quality_on_every_root() {
+        // The list is a filter over the whole library now, so a bare quality is twelve
+        // chords rather than one — which is the more useful answer and the more obvious
+        // one, since nothing on screen was ever naming a "current root".
+        let library = typed("m7b5");
+        let rows = library.rows();
 
-        assert_eq!(library.root(), pc(6), "the root moved");
-        assert_eq!(library.rows(), vec![ChordQuality::HalfDiminished7]);
+        assert_eq!(rows.len(), 12);
+        assert!(
+            rows.iter()
+                .all(|chord| chord.kind() == ChordQuality::HalfDiminished7)
+        );
     }
 
     #[test]
-    fn a_root_and_a_quality_do_both() {
+    fn a_root_and_a_quality_narrow_to_one_chord() {
         let library = typed("bbmaj7");
 
-        assert_eq!(library.root(), pc(10));
-        assert_eq!(library.rows(), vec![ChordQuality::Major7]);
+        assert_eq!(library.rows().len(), 1);
         assert_eq!(
             library.selected_chord().map(|c| c.to_string()),
             Some("Bbmaj7".into())
@@ -2156,14 +2275,11 @@ mod tests {
     }
 
     #[test]
-    fn clearing_the_query_keeps_the_root_it_established() {
-        // The reason the root is state and not a function of the query: an emptied box
-        // means "this root, every quality", not "nothing chosen".
+    fn clearing_the_query_restores_the_whole_library() {
         let mut library = typed("f#maj7");
         library.set_query(String::new());
 
-        assert_eq!(library.root(), pc(6));
-        assert_eq!(library.rows(), ChordQuality::ALL.to_vec());
+        assert_eq!(library.rows().len(), 12 * 15);
     }
 
     #[test]
@@ -2172,10 +2288,10 @@ mod tests {
         // the major seventh here. Parsing settles it outright and nothing else is listed.
         let library = typed("cm7");
 
-        assert_eq!(library.rows(), vec![ChordQuality::Minor7]);
+        assert_eq!(library.rows().len(), 1);
         assert_eq!(
-            library.selected_chord().map(|c| c.kind()),
-            Some(ChordQuality::Minor7)
+            library.selected_chord().map(|c| c.to_string()),
+            Some("Cm7".into())
         );
     }
 
@@ -2184,7 +2300,10 @@ mod tests {
         // A typo: `cmj7` reads as no chord, and the subsequence finds the one meant.
         let library = typed("cmj7");
 
-        assert_eq!(library.rows().first(), Some(&ChordQuality::Major7));
+        assert_eq!(
+            library.rows().first().map(|c| c.to_string()),
+            Some("Cmaj7".into())
+        );
     }
 
     #[test]
@@ -2197,16 +2316,40 @@ mod tests {
 
     #[test]
     fn a_row_is_named_under_the_quality_it_carries() {
-        // The scale trainer's rule, carried across: pitch class 10 is not spelled one
-        // fixed way down the list, it is spelled as each chord is written.
-        let library = typed("a#");
-        let names: Vec<String> = library
+        // The scale trainer's rule, carried across: a pitch class is not spelled one fixed
+        // way down a group, it is spelled as each chord is written. This is also why a
+        // group header has to show both names — see `root_header`.
+        let names: Vec<String> = typed("a#")
             .rows()
             .iter()
-            .map(|&kind| Chord::new(library.root(), kind).to_string())
+            .map(|chord| chord.to_string())
             .collect();
 
         assert!(names.iter().any(|name| name.starts_with("Bb")));
+        assert!(names.iter().any(|name| name.starts_with("A#")));
+    }
+
+    #[test]
+    fn a_black_key_group_needs_both_of_its_names() {
+        // What `root_header` renders the pair for. On the five black keys the qualities
+        // genuinely disagree, so one name would be wrong about part of its own group.
+        for &root in &PitchClass::ALL {
+            let spellings: Vec<String> = ChordQuality::ALL
+                .iter()
+                .map(|&kind| Chord::new(root, kind).root_note().to_string())
+                .collect();
+            let mut distinct = spellings.clone();
+            distinct.sort();
+            distinct.dedup();
+
+            let has_two_names = Spelling::Sharps.spell(root) != Spelling::Flats.spell(root);
+
+            assert_eq!(
+                distinct.len() > 1,
+                has_two_names,
+                "{root:?} spells {distinct:?}"
+            );
+        }
     }
 
     #[test]
@@ -2245,8 +2388,8 @@ mod tests {
         library.move_row(-1);
         assert_eq!(library.selected_row(), 0);
 
-        library.move_row(100);
-        assert_eq!(library.selected_row(), ChordQuality::ALL.len() - 1);
+        library.move_row(10_000);
+        assert_eq!(library.selected_row(), library.rows().len() - 1);
     }
 
     #[test]
@@ -2264,7 +2407,7 @@ mod tests {
         );
         assert!(!library.search_focused());
         assert_eq!(library.query(), "cmaj7", "the query was cleared");
-        assert_eq!(library.rows(), vec![ChordQuality::Major7]);
+        assert_eq!(library.rows().len(), 1);
     }
 
     #[test]
