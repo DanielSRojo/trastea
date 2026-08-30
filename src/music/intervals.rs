@@ -13,8 +13,12 @@ pub enum Interval {
     AugmentedFourth,
     DiminishedFifth,
     PerfectFifth,
+    /// Here for the augmented triad; `ScaleKind::WholeTone` spells around its absence.
+    AugmentedFifth,
     MinorSixth,
     MajorSixth,
+    /// Here for the diminished seventh chord.
+    DiminishedSeventh,
     MinorSeventh,
     MajorSeventh,
 }
@@ -30,8 +34,10 @@ impl Interval {
         Interval::AugmentedFourth,
         Interval::DiminishedFifth,
         Interval::PerfectFifth,
+        Interval::AugmentedFifth,
         Interval::MinorSixth,
         Interval::MajorSixth,
+        Interval::DiminishedSeventh,
         Interval::MinorSeventh,
         Interval::MajorSeventh,
     ];
@@ -43,9 +49,9 @@ impl Interval {
             Interval::MinorSecond | Interval::MajorSecond => 2,
             Interval::MinorThird | Interval::MajorThird => 3,
             Interval::PerfectFourth | Interval::AugmentedFourth => 4,
-            Interval::DiminishedFifth | Interval::PerfectFifth => 5,
+            Interval::DiminishedFifth | Interval::PerfectFifth | Interval::AugmentedFifth => 5,
             Interval::MinorSixth | Interval::MajorSixth => 6,
-            Interval::MinorSeventh | Interval::MajorSeventh => 7,
+            Interval::DiminishedSeventh | Interval::MinorSeventh | Interval::MajorSeventh => 7,
         }
     }
 
@@ -64,7 +70,8 @@ impl Interval {
             | Interval::DiminishedFifth
             | Interval::MinorSixth
             | Interval::MinorSeventh => Accidental::Flat,
-            Interval::AugmentedFourth => Accidental::Sharp,
+            Interval::AugmentedFourth | Interval::AugmentedFifth => Accidental::Sharp,
+            Interval::DiminishedSeventh => Accidental::DoubleFlat,
         }
     }
 
@@ -150,7 +157,18 @@ mod tests {
     fn all_lists_every_variant() {
         // The same tripwire ScaleKind::ALL carries: the tests below iterate ALL,
         // so a variant added to the enum and not to the list is silently skipped.
-        assert_eq!(Interval::ALL.len(), 13);
+        assert_eq!(Interval::ALL.len(), 15);
+    }
+
+    #[test]
+    fn the_chord_degrees_derive_from_number_and_alteration() {
+        // AugmentedFifth and DiminishedSeventh were added for the chord library with
+        // arms in number() and alteration() and nowhere else. These hold if — and only
+        // if — semitones() and Display are still derived from those two.
+        assert_eq!(Interval::AugmentedFifth.semitones(), 8);
+        assert_eq!(Interval::DiminishedSeventh.semitones(), 9);
+        assert_eq!(Interval::AugmentedFifth.to_string(), "#5");
+        assert_eq!(Interval::DiminishedSeventh.to_string(), "bb7");
     }
 
     #[test]
@@ -167,8 +185,10 @@ mod tests {
             (Interval::AugmentedFourth, 6),
             (Interval::DiminishedFifth, 6),
             (Interval::PerfectFifth, 7),
+            (Interval::AugmentedFifth, 8),
             (Interval::MinorSixth, 8),
             (Interval::MajorSixth, 9),
+            (Interval::DiminishedSeventh, 9),
             (Interval::MinorSeventh, 10),
             (Interval::MajorSeventh, 11),
         ];
@@ -223,8 +243,10 @@ mod tests {
             (Interval::AugmentedFourth, "#4"),
             (Interval::DiminishedFifth, "b5"),
             (Interval::PerfectFifth, "5"),
+            (Interval::AugmentedFifth, "#5"),
             (Interval::MinorSixth, "b6"),
             (Interval::MajorSixth, "6"),
+            (Interval::DiminishedSeventh, "bb7"),
             (Interval::MinorSeventh, "b7"),
             (Interval::MajorSeventh, "7"),
         ];
@@ -275,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn between_is_none_beyond_the_thirteen() {
+    fn between_is_none_beyond_the_fifteen() {
         // A doubly augmented fourth is a real distance and not one of ours.
         let f_flat = note(Letter::F, Accidental::Flat);
         let b_sharp = note(Letter::B, Accidental::Sharp);
