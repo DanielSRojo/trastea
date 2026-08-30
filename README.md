@@ -128,3 +128,5 @@ with a copy. `just notices` renders `THIRD-PARTY-NOTICES.txt` from `about.toml` 
 of hundred crates, mostly `iced`'s tree — and the release stages it beside the other two.
 It is generated at release time rather than committed, so it cannot drift out of step with
 `Cargo.lock`.
+
+<!-- temporary: verifying audit.yaml's paths filter — this PR is closed unmerged -->
