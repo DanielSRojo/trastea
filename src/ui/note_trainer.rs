@@ -710,7 +710,7 @@ fn note_answer_row(
 #[cfg(test)]
 mod tests {
     use super::super::tests::{app_with_seed, every_screen, press_into, press_named};
-    use super::super::{App, Screen, accelerators, translate_key};
+    use super::super::{App, Notation, Screen, accelerators_for, translate_key};
     use super::*;
     use iced::keyboard;
     use iced::keyboard::key::Named;
@@ -1582,7 +1582,7 @@ mod tests {
 
     #[test]
     fn the_help_overlay_lists_the_note_trainers_keys() {
-        let bound = accelerators(&Screen::NoteTrainer);
+        let bound = accelerators_for(&Screen::NoteTrainer, Notation::Notes);
         let keys: Vec<char> = bound.iter().map(|&(key, _, _)| key).collect();
 
         assert_eq!(keys, vec!['r', 'd', 'a']);

@@ -192,6 +192,23 @@ impl Note {
     }
 }
 
+/// How far `target` sits from `letter`'s natural pitch, as the nearest signed
+/// distance in −5..=6.
+///
+/// The fold is the fiddly part: `rem_euclid(12)` gives 0..=11, then anything
+/// above 6 has 12 subtracted. Without it a difference reads as +11 where −1 is
+/// meant, and no accidental covers +11.
+///
+/// Here rather than beside either caller: `scales` and `chords` both spell a
+/// degree by forcing its letter and asking what accidental corrects the pitch,
+/// and two copies of this fold would be two things to keep in step.
+pub fn nearest_offset(target: PitchClass, letter: Letter) -> i8 {
+    let raw = (i16::from(target.semitone()) - i16::from(letter.natural_semitone())).rem_euclid(12);
+    let folded = if raw > 6 { raw - 12 } else { raw };
+
+    i8::try_from(folded).expect("the fold yields -5..=6")
+}
+
 /// ASCII, for the fretboard markers — see `Accidental::ascii`. The cards spell the
 /// same notes with SMuFL glyphs instead.
 impl fmt::Display for Note {
