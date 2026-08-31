@@ -624,6 +624,9 @@ pub struct Voicing {
     /// The fret the shape sits at. Zero is the open position.
     index_fret: u8,
     shape_name: &'static str,
+    /// The shape's own fingering, carried into this placement. What [`Voicing::fingers`] uses
+    /// where it stands, and what it checks before deciding that.
+    fingering: [Option<u8>; 6],
 }
 
 impl Voicing {
@@ -646,11 +649,64 @@ impl Voicing {
 
     /// Which finger stops each string, or `None` where nothing does.
     ///
-    /// Assigned by ascending fret, with everything sitting on a barred index fret taking
-    /// the first finger. Correct for the common shapes and approximate for a few; it is a
-    /// label on a reference rather than a claim about technique, and the two other
-    /// notations are a keypress away. A real solver is its own project.
+    /// The shape's own fingering where it stands for this placement, and an ascending-fret
+    /// assignment where it does not. The shape has to be asked first because a released finger
+    /// is invisible to the frets: Em is `0 2 2 0 0 0`, and nothing in those numbers says the
+    /// index was lifted rather than never placed. The frets are the better authority the rest of
+    /// the time, which is most of the time. A real solver is still its own project.
     pub fn fingers(self) -> [Option<u8>; 6] {
+        self.shape_fingering()
+            .unwrap_or_else(|| self.ordered_fingering())
+    }
+
+    /// The fingering carried from the shape, or `None` where it does not describe this placement.
+    ///
+    /// It stops describing it whenever an alteration moves a string without asking the shape:
+    /// a fifth finger, a barred string held by something other than the first, one finger on two
+    /// unbarred strings, or a crossing — a higher finger below a lower one. Am is the everyday
+    /// case. Flattening the third drops the B string under its neighbours, so carrying the shape's
+    /// fingering would cross, and the sort takes over.
+    fn shape_fingering(self) -> Option<[Option<u8>; 6]> {
+        let barre = self.barre_fret();
+        let stopped = self.strings.map(|fret| fret.filter(|&fret| fret > 0));
+
+        let mut assigned: Vec<(u8, u8)> = Vec::new();
+        for pair in self.fingering.into_iter().zip(stopped) {
+            match pair {
+                (Some(finger), Some(fret)) => {
+                    if usize::from(finger) > FINGERS || (Some(fret) == barre && finger != 1) {
+                        return None;
+                    }
+
+                    assigned.push((finger, fret));
+                }
+                (None, None) => {}
+                // A stopped string with nobody on it, or a finger on a string nothing stops.
+                _ => return None,
+            }
+        }
+
+        // Sorted by finger, so the frets beside them may not descend. Two strings may share a
+        // finger only where the bar covers them both.
+        assigned.sort_unstable();
+        assigned
+            .windows(2)
+            .all(|pair| {
+                let &[(finger, fret), (next_finger, next_fret)] = pair else {
+                    return true;
+                };
+
+                if finger == next_finger {
+                    Some(fret) == barre && Some(next_fret) == barre
+                } else {
+                    fret <= next_fret
+                }
+            })
+            .then_some(self.fingering)
+    }
+
+    /// Fingers by ascending fret, the lower string first where two share one.
+    fn ordered_fingering(self) -> [Option<u8>; 6] {
         let barre = self.barre_fret();
 
         // Ordered by `(fret, string)`, which is the whole rule: fingers go on in order of
@@ -727,6 +783,34 @@ impl Voicing {
 }
 
 impl Shape {
+    /// This shape with every string stopped: the fingering of its barre chord.
+    ///
+    /// The first finger holds the index fret; the offsets above it take the rest in order, the
+    /// lower string first where two share one. Derived rather than recorded for the reason `base`
+    /// is a quality rather than a list of degrees — a table beside the offsets would be a second
+    /// thing to keep in step with them.
+    fn movable_fingering(&self) -> [Option<u8>; 6] {
+        let mut above: Vec<(u8, usize)> = self
+            .strings
+            .iter()
+            .enumerate()
+            .filter_map(|(string, role)| match *role {
+                Sounded { offset, .. } if offset > 0 => Some((offset, string)),
+                _ => None,
+            })
+            .collect();
+        above.sort_unstable();
+
+        std::array::from_fn(|string| match self.strings[string] {
+            Muted => None,
+            Sounded { offset: 0, .. } => Some(1),
+            Sounded { .. } => above
+                .iter()
+                .position(|&(_, at)| at == string)
+                .and_then(|rank| u8::try_from(rank + 2).ok()),
+        })
+    }
+
     /// Places this shape so its root lands on `root`, built as `kind`.
     ///
     /// `None` when the shape cannot carry the quality or the placement is unplayable:
@@ -760,10 +844,26 @@ impl Shape {
             strings[index] = Some(fret);
         }
 
+        let carried = self.movable_fingering();
+
+        // The first finger is off the neck when every string it holds sounds open, and the rest
+        // come down one to meet it. Em is E major with its third released, not renumbered.
+        let released = !(0..6).any(|string| {
+            carried[string] == Some(1) && strings[string].is_some_and(|fret| fret > 0)
+        });
+
+        let fingering = std::array::from_fn(|string| {
+            strings[string]
+                .filter(|&fret| fret > 0)
+                .and(carried[string])
+                .and_then(|finger| finger.checked_sub(u8::from(released)))
+        });
+
         let voicing = Voicing {
             strings,
             index_fret,
             shape_name: self.name,
+            fingering,
         };
 
         let stopped: Vec<u8> = voicing.stopped().collect();
@@ -2156,6 +2256,21 @@ mod tests {
                 "A shape",
                 [None, None, Some(2), Some(3), Some(1), None],
             ),
+            // 0 2 2 0 0 0 — the third falls open here, and the fingers that survive keep the
+            // numbers they had in E major rather than sliding down to the first and second.
+            (
+                4,
+                ChordQuality::Minor,
+                "E shape",
+                [None, Some(2), Some(3), None, None, None],
+            ),
+            // x x 0 2 3 1 — the third stays fretted, so the frets order the fingers.
+            (
+                2,
+                ChordQuality::Minor,
+                "D shape",
+                [None, None, None, Some(2), Some(3), Some(1)],
+            ),
         ];
 
         for &(root, kind, shape, expected) in cases {
@@ -2168,6 +2283,222 @@ mod tests {
                 voicing.strings()
             );
         }
+    }
+
+    #[test]
+    fn a_shape_fully_stopped_is_fingered_like_its_barre_chord() {
+        // The five CAGED triads as their barre chords are played. Every placement of a shape is
+        // this, less the strings that sound open, so these are the numbers the open chords above
+        // are derived from rather than a second record of them.
+        let cases: &[(&str, [Option<u8>; 6])] = &[
+            (
+                "E shape",
+                [Some(1), Some(3), Some(4), Some(2), Some(1), Some(1)],
+            ),
+            (
+                "A shape",
+                [None, Some(1), Some(2), Some(3), Some(4), Some(1)],
+            ),
+            ("D shape", [None, None, Some(1), Some(2), Some(4), Some(3)]),
+            (
+                "C shape",
+                [None, Some(4), Some(3), Some(1), Some(2), Some(1)],
+            ),
+            (
+                "G shape",
+                [Some(3), Some(2), Some(1), Some(1), Some(1), Some(4)],
+            ),
+        ];
+
+        for &(name, expected) in cases {
+            let shape = SHAPES
+                .iter()
+                .find(|shape| shape.name == name && shape.base == ChordQuality::Major)
+                .unwrap_or_else(|| panic!("{name} is not in the table"));
+
+            assert_eq!(shape.movable_fingering(), expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn no_shape_skips_a_finger_or_doubles_one_above_its_index_fret() {
+        // The check on the derivation across every entry, not just the five pinned above. The
+        // first finger holds the index fret however many strings rest there; each finger above it
+        // holds one string, and they run without a gap.
+        for shape in SHAPES {
+            let fingering = shape.movable_fingering();
+
+            let mut named: Vec<u8> = fingering.iter().flatten().copied().collect();
+            named.sort_unstable();
+            named.dedup();
+
+            let run: Vec<u8> = (1..=u8::try_from(named.len()).unwrap_or(u8::MAX)).collect();
+            assert_eq!(named, run, "{} skips a finger", shape.name);
+
+            for finger in named.into_iter().filter(|&finger| finger > 1) {
+                let held = fingering
+                    .iter()
+                    .filter(|&&held| held == Some(finger))
+                    .count();
+
+                assert_eq!(
+                    held, 1,
+                    "{} puts finger {finger} on two strings",
+                    shape.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_barred_shape_is_fingered_the_way_the_shape_records_it() {
+        // F major is the E shape with the nut's open strings under the bar. Nothing is released,
+        // so nothing is lowered, and the fingering is the shape's own.
+        let voicing = only(Chord::new(pc(5), ChordQuality::Major), "E shape", 1);
+
+        assert_eq!(
+            frets(voicing),
+            vec![Some(1), Some(3), Some(3), Some(2), Some(1), Some(1)]
+        );
+        assert_eq!(
+            voicing.fingers(),
+            [Some(1), Some(3), Some(4), Some(2), Some(1), Some(1)]
+        );
+    }
+
+    #[test]
+    fn a_sharpened_degree_on_the_index_fret_keeps_the_first_finger_busy() {
+        // The E shape carries a fifth on its index fret, so sharpening it stops a string the
+        // first finger was holding. The index has work, nothing comes down, and no dot is
+        // numbered zero — which is what lowering on `index_fret == 0` instead would have done.
+        let voicing = only(Chord::new(pc(4), ChordQuality::Augmented), "E shape", 0);
+
+        assert_eq!(
+            frets(voicing),
+            vec![Some(0), Some(3), Some(2), Some(1), Some(1), Some(0)]
+        );
+        assert!(
+            voicing
+                .fingers()
+                .iter()
+                .flatten()
+                .all(|&finger| (1..=4).contains(&finger)),
+            "{:?}",
+            voicing.fingers()
+        );
+    }
+
+    #[test]
+    fn a_carried_fingering_stands_only_where_it_describes_the_placement() {
+        let open_d = [None, None, Some(0), Some(2), Some(3), Some(2)];
+        let f_major = [Some(1), Some(3), Some(3), Some(2), Some(1), Some(1)];
+
+        let stands = |strings, fingering| {
+            Voicing {
+                strings,
+                index_fret: 0,
+                shape_name: "by hand",
+                fingering,
+            }
+            .shape_fingering()
+            .is_some()
+        };
+
+        assert!(stands(
+            open_d,
+            [None, None, None, Some(1), Some(3), Some(2)]
+        ));
+        // A fifth finger.
+        assert!(!stands(
+            open_d,
+            [None, None, None, Some(1), Some(5), Some(2)]
+        ));
+        // A stopped string with nobody on it.
+        assert!(!stands(open_d, [None, None, None, None, Some(3), Some(2)]));
+        // One finger on two strings no bar covers.
+        assert!(!stands(
+            open_d,
+            [None, None, None, Some(1), Some(1), Some(2)]
+        ));
+        // A crossing: the third finger below the second.
+        assert!(!stands(
+            open_d,
+            [None, None, None, Some(1), Some(2), Some(3)]
+        ));
+
+        assert!(stands(
+            f_major,
+            [Some(1), Some(3), Some(4), Some(2), Some(1), Some(1)]
+        ));
+        // A barred string held by something other than the first finger.
+        assert!(!stands(
+            f_major,
+            [Some(1), Some(3), Some(4), Some(2), Some(2), Some(1)]
+        ));
+    }
+
+    #[test]
+    fn no_voicing_in_the_library_crosses_its_fingers() {
+        for &root in &PitchClass::ALL {
+            for &kind in ChordQuality::ALL {
+                for voicing in voicings(Chord::new(root, kind)) {
+                    let fingers = voicing.fingers();
+                    let mut assigned: Vec<(u8, u8)> = (0..6)
+                        .filter_map(|string| Some((fingers[string]?, voicing.strings()[string]?)))
+                        .collect();
+                    assigned.sort_unstable();
+
+                    for pair in assigned.windows(2) {
+                        let &[(finger, fret), (next_finger, next_fret)] = pair else {
+                            continue;
+                        };
+
+                        assert!(
+                            fret <= next_fret,
+                            "{root:?} {kind:?} puts finger {next_finger} at {next_fret}, \
+                             below finger {finger} at {fret}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn only_an_open_string_changes_what_the_frets_alone_would_say() {
+        // Where a placement has no open string, release and lowering do nothing, so the carried
+        // fingering either agrees with the sort or contradicts the frets and is thrown away for
+        // it. A released finger is the one thing the frets cannot see, and this is the bound on
+        // where the two can differ.
+        for &root in &PitchClass::ALL {
+            for &kind in ChordQuality::ALL {
+                for voicing in voicings(Chord::new(root, kind)) {
+                    if voicing.fingers() == voicing.ordered_fingering() {
+                        continue;
+                    }
+
+                    assert!(
+                        voicing.strings().contains(&Some(0)),
+                        "{root:?} {kind:?} at {} differs from the sort with nothing open",
+                        voicing.index_fret()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_library_offers_the_same_voicings_however_the_fingers_are_numbered() {
+        // A placement is refused for needing a fifth finger when more than four strings need
+        // stopping off the barre, which is a property of the placement rather than of the
+        // numbering. 592 before this module learned to carry a shape's fingering, and after.
+        let total: usize = PitchClass::ALL
+            .iter()
+            .flat_map(|&root| ChordQuality::ALL.iter().map(move |&kind| (root, kind)))
+            .map(|(root, kind)| voicings(Chord::new(root, kind)).len())
+            .sum();
+
+        assert_eq!(total, 592);
     }
 
     #[test]

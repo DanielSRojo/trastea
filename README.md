@@ -137,9 +137,13 @@ same rule, which is why a group in the library can hold both spellings of one pi
 major triad and a `C♯` minor one.
 
 The line the chord library draws is one step further out. A shape on the neck is instrument
-knowledge rather than theory — no arithmetic produces the fact that guitarists finger an E
-major that way — so the shapes are a table and everything downstream of them is not. There
-is no per-chord entry, no per-root entry and no per-position entry anywhere below.
+knowledge rather than theory — no arithmetic produces the fact that guitarists play an E
+major on those strings, with the third where it is — so the shapes are a table and everything
+downstream of them is not. There is no per-chord entry, no per-root entry and no per-position
+entry anywhere below, and the fingering is not an entry either. A shape with every string
+stopped is a barre chord: the first finger holds the index fret and the offsets above it take
+the rest in order. Every placement is that, less the strings that sound open — which is why E
+minor comes out fingered like E major with the third lifted, rather than renumbered from one.
 
 `note_trainer.rs`, `interval_trainer.rs` and `chord_library.rs` each keep their state and
 their views together so the state can keep its fields private — they are read all over those
@@ -163,7 +167,7 @@ without rendering anything.
 The ones worth knowing about are exhaustive rather than illustrative, because the domain is
 small enough to walk. Every chord on every root is spelled and checked for a repeated letter;
 every voicing the library offers is checked to sound only that chord's notes, to stay within
-a hand, and to name a finger for every string it stops. The two canvases each hold a
+a hand, to name a finger for every string it stops and never to cross those fingers. The two canvases each hold a
 round-trip test — every position drawn resolves back to itself when pressed — which is what
 keeps drawing and hit-testing from being edited apart.
 
