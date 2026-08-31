@@ -55,6 +55,66 @@ only the strings whose degrees that quality alters — so an open E and a barred
 of the same entry. A placement that would fall below the nut, outrun a hand, run off the neck
 or need a fifth finger is refused rather than shown.
 
+## Installing
+
+Two ways in: `cargo` builds it from source on any platform iced supports, and a tagged
+release carries a prebuilt archive for the two platforms CI builds.
+
+### With cargo
+
+```sh
+cargo install trastea --locked
+```
+
+That drops a `trastea` binary in `~/.cargo/bin`. `--locked` builds against the `Cargo.lock`
+the release was cut from rather than resolving fresh versions, which is what makes your
+build the one CI tested. `--version 0.2.0` pins an older release, and `--force` reinstalls
+one you already have.
+
+To build the current `main` instead of the latest release, point the same command at the
+repository:
+
+```sh
+cargo install --git https://github.com/DanielSRojo/trastea --locked
+```
+
+Either form is the route for anything the release archives do not cover — Windows, x86_64
+macOS, a Linux that is not x86_64 — and the only one that needs a Rust toolchain. The
+compiler CI uses is pinned in `rust-toolchain.toml`, but rustup reads that file from inside
+a checkout only, so `cargo install` builds on whatever toolchain you have; anything at or
+past the pinned version is fine.
+
+### From a release archive
+
+The [releases page](https://github.com/DanielSRojo/trastea/releases) carries, per tag:
+
+| File | What it is |
+| --- | --- |
+| `trastea-vX.Y.Z-x86_64-linux.tar.gz` | the binary |
+| `trastea-vX.Y.Z-aarch64-macos.zip` | a `Trastea.app` bundle for Apple silicon |
+| `SHA256SUMS` | checksums covering both |
+
+Each archive stages `LICENSE`, `LICENSE-fonts.txt` and `THIRD-PARTY-NOTICES.txt` beside
+the binary, since the binary carries the fonts and the crates compiled into it.
+
+On Linux, verify and unpack:
+
+```sh
+sha256sum --check --ignore-missing SHA256SUMS
+tar -xzf trastea-v0.2.0-x86_64-linux.tar.gz
+install -Dm755 trastea-v0.2.0-x86_64-linux/trastea ~/.local/bin/trastea
+```
+
+On macOS, unzip and move `Trastea.app` into `/Applications`. The bundle is neither signed
+nor notarized, so Gatekeeper refuses the first launch — open it once from the context menu
+with **Open**, or clear the quarantine attribute yourself:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Trastea.app
+```
+
+Either one is a one-time thing; it launches normally after that.
+
 ## Running
 
 ```sh
@@ -65,9 +125,6 @@ cargo test         # the unit tests, no UI harness needed
 Rust edition 2024. The only dependency is `iced` (with the `canvas` and `smol` features,
 the latter for the timer behind the trainers' answer flash); the fonts under `assets/` are
 embedded into the binary at compile time.
-
-Tagged releases carry a prebuilt binary for x86_64 Linux and an `.app` bundle for Apple
-silicon. Every other platform builds from source with the above.
 
 Contributors can install [`just`](https://just.systems) and run `just` to see the repo's
 recipes; `just ci` runs the same gate CI runs, and nothing else here needs it.
