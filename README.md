@@ -1,5 +1,10 @@
 # Trastea
 
+[![ci](https://img.shields.io/github/actions/workflow/status/DanielSRojo/trastea/ci.yaml?branch=main&label=ci)](https://github.com/DanielSRojo/trastea/actions/workflows/ci.yaml)
+[![audit](https://img.shields.io/github/actions/workflow/status/DanielSRojo/trastea/audit.yaml?branch=main&label=audit)](https://github.com/DanielSRojo/trastea/actions/workflows/audit.yaml)
+[![crates.io](https://img.shields.io/crates/v/trastea)](https://crates.io/crates/trastea)
+[![license](https://img.shields.io/crates/l/trastea)](LICENSE)
+
 A keyboard-driven guitar trainer for the desktop, written in Rust with [iced](https://iced.rs) 0.14.
 
 Trastea draws a twelve-fret neck in standard tuning and drills three things against it: the
