@@ -96,7 +96,7 @@ impl Layout {
         let y = if fret == 0 {
             self.pad_top - self.note_radius - self.open_marker_gap
         } else {
-            (self.fret_y(fret - 1) + self.fret_y(fret)) / 2.0
+            f32::midpoint(self.fret_y(fret - 1), self.fret_y(fret))
         };
 
         Point::new(self.string_x(string), y)
@@ -262,14 +262,14 @@ impl<Message> canvas::Program<Message> for Fretboard<Message> {
             );
         }
 
-        let marker_x = (string_x(2) + string_x(3)) / 2.0;
-        let lower_double_marker_x = (string_x(1) + string_x(2)) / 2.0;
-        let upper_double_marker_x = (string_x(3) + string_x(4)) / 2.0;
+        let marker_x = f32::midpoint(string_x(2), string_x(3));
+        let lower_double_marker_x = f32::midpoint(string_x(1), string_x(2));
+        let upper_double_marker_x = f32::midpoint(string_x(3), string_x(4));
         let dot_gray = Color::from_rgb8(0x88, 0x88, 0x88);
         let fret_marker_radius = 6.5;
 
         for &f in &[3_usize, 5, 7, 9] {
-            let y = (fret_y(f - 1) + fret_y(f)) / 2.0;
+            let y = f32::midpoint(fret_y(f - 1), fret_y(f));
             frame.fill(
                 &Path::circle(Point::new(marker_x, y), fret_marker_radius),
                 Fill::from(dot_gray),
@@ -278,7 +278,7 @@ impl<Message> canvas::Program<Message> for Fretboard<Message> {
 
         // Double dot at fret 12
         {
-            let y = (fret_y(11) + fret_y(12)) / 2.0;
+            let y = f32::midpoint(fret_y(11), fret_y(12));
             frame.fill(
                 &Path::circle(Point::new(lower_double_marker_x, y), fret_marker_radius),
                 Fill::from(dot_gray),

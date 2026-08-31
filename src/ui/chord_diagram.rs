@@ -186,7 +186,7 @@ impl Layout {
             self.pad_top - self.dot_radius - self.mark_gap
         } else {
             let band = usize::from(fret - self.window.first_fret);
-            (self.band_y(band) + self.band_y(band + 1)) / 2.0
+            f32::midpoint(self.band_y(band), self.band_y(band + 1))
         };
 
         Point::new(self.string_x(string), y)
