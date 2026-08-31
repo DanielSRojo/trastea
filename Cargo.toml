@@ -2,6 +2,9 @@
 name = "trastea"
 version = "0.2.1"
 edition = "2024"
+# The floor a `cargo install` is checked against, since rustup reads rust-toolchain.toml
+# inside a checkout only. Same version, two audiences: that file pins what the gate runs.
+rust-version = "1.98"
 description = "A keyboard-driven guitar trainer for the desktop"
 repository = "https://github.com/DanielSRojo/trastea"
 license = "GPL-3.0-or-later"
