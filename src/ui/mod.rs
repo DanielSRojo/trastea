@@ -3486,6 +3486,28 @@ mod tests {
     }
 
     #[test]
+    fn every_scale_marker_is_filled_so_the_ring_stays_the_question() {
+        // The prompt's ring is the only outlined marker; a scale dot must not become one.
+        for root in PitchClass::ALL {
+            for &kind in ScaleKind::ALL {
+                let scale = Scale::new(root, kind);
+
+                for notation in [Notation::Notes, Notation::Intervals] {
+                    for marker in scale_markers(scale, notation) {
+                        assert_eq!(
+                            marker.style,
+                            MarkerStyle::Filled,
+                            "{scale:?} string {} fret {}",
+                            marker.string,
+                            marker.fret
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn standard_tuning_low_open_string_is_e_natural() {
         // Pins STANDARD_TUNING itself: E A D G B E low to high, pitch classes
         // 4 9 2 7 11 4. Nothing else asserts this constant directly.
