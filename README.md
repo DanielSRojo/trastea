@@ -71,18 +71,11 @@ the release was cut from rather than resolving fresh versions, which is what mak
 build the one CI tested. `--version 0.2.0` pins an older release, and `--force` reinstalls
 one you already have.
 
-To build the current `main` instead of the latest release, point the same command at the
-repository:
-
-```sh
-cargo install --git https://github.com/DanielSRojo/trastea --locked
-```
-
-Either form is the route for anything the release archives do not cover — Windows, x86_64
-macOS, a Linux that is not x86_64 — and the only one that needs a Rust toolchain. The
-compiler CI uses is pinned in `rust-toolchain.toml`, but rustup reads that file from inside
-a checkout only, so `cargo install` builds on whatever toolchain you have; anything at or
-past the pinned version is fine.
+This is the route for anything the release archives do not cover — Windows, x86_64 macOS,
+a Linux that is not x86_64 — and the only one that needs a Rust toolchain. The compiler CI
+uses is pinned in `rust-toolchain.toml`, but rustup reads that file from inside a checkout
+only, so `cargo install` builds on whatever toolchain you have; anything at or past the
+pinned version is fine.
 
 ### From a release archive
 
