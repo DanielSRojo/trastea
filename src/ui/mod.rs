@@ -7,11 +7,8 @@ use std::ops::Range;
 use std::time::Duration;
 
 use fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
-// Both trainers name their direction `Drill`, and both names are wanted here — the
-// focus grid branches on each. Aliased rather than renamed at the source, since inside
-// its own module each is simply the drill's direction.
-use interval_trainer::{Drill as IntervalDrill, IntervalTrainer, ui_interval_trainer};
-use note_trainer::{Drill, NoteTrainer, ui_note_trainer};
+use interval_trainer::{IntervalTrainer, ui_interval_trainer};
+use note_trainer::{NoteTrainer, ui_note_trainer};
 
 use chord_library::{ChordLibrary, KeyOutcome, ui_chord_library};
 
@@ -201,6 +198,25 @@ impl Position {
     /// and its reasoning, reached through the named fields.
     fn pitch_class(self) -> Option<PitchClass> {
         pitch_class_at(self.string, self.fret)
+    }
+}
+
+/// Which way a drill is running. Transient only — passed to `draw_prompt` to say which
+/// kind of prompt to make, never stored. The stored direction is `Prompt`'s variant.
+///
+/// Here rather than in either trainer: both mean the same two words by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Drill {
+    NameIt,
+    FindIt,
+}
+
+impl Drill {
+    fn flipped(self) -> Drill {
+        match self {
+            Drill::NameIt => Drill::FindIt,
+            Drill::FindIt => Drill::NameIt,
+        }
     }
 }
 
@@ -989,7 +1005,7 @@ impl App {
                 let mut grid = vec![back_row, controls];
 
                 match self.interval_trainer.drill() {
-                    IntervalDrill::NameIt => {
+                    Drill::NameIt => {
                         let total = interval_trainer::ANSWER_COUNT;
 
                         for start in (0..total).step_by(ANSWER_ROW_WIDTH) {
@@ -1004,7 +1020,7 @@ impl App {
                     }
                     // The neck is the answer surface, and it is one cell no matter how many
                     // positions it holds — the cursor walks those, not the focus ring.
-                    IntervalDrill::FindIt => {
+                    Drill::FindIt => {
                         let mut row: FocusRow = vec![None; ANSWER_ROW_WIDTH];
                         row[0] = Some(FocusTarget::IntervalFretboard);
                         grid.push(row);
@@ -1855,6 +1871,28 @@ fn scrim_container(_theme: &iced::Theme) -> iced::widget::container::Style {
         shadow: Shadow::default(),
         snap: true,
     }
+}
+
+/// The current run and the best of the session.
+///
+/// The live streak is drawn in the theme's success colour: the per-answer flash says a
+/// single answer was right and then goes, and a standing streak keeps saying it.
+fn streak_readout(streak: u32, best: u32) -> Element<'static, Message> {
+    use iced::widget::{column, row, text};
+
+    let stat = |label: &'static str, value: u32, color: Color| {
+        column![
+            text(value.to_string()).size(30).color(color),
+            text(label).size(12).color(MUTE),
+        ]
+        .spacing(2)
+    };
+
+    let live = if streak > 0 { SUCCESS } else { MUTE };
+
+    row![stat("streak", streak, live), stat("best", best, INK)]
+        .spacing(28)
+        .into()
 }
 
 fn trainer_button<'a>(

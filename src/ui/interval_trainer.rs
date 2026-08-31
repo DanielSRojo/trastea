@@ -17,10 +17,10 @@ use iced::{Color, Element, Padding};
 
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::{
-    ANSWER_ROW_WIDTH, BODY, CANVAS, CURSOR_HOME, DANGER, Direction, FocusTarget, INK, LINK,
+    ANSWER_ROW_WIDTH, BODY, CANVAS, CURSOR_HOME, DANGER, Direction, Drill, FocusTarget, INK, LINK,
     MUSIC_FONT, MUTE, Message, NECK_FRETS, NECK_STRINGS, Position, ROOT_BUTTON_SIZE, ROOT_MARKER,
     SELECTOR_CARD_HEIGHT, SUCCESS, SUMMARY_CARD_HEIGHT, card_container, correct_answer_button,
-    focus_ring, ghost_button, interval_token, wrong_answer_button,
+    focus_ring, ghost_button, interval_token, streak_readout, wrong_answer_button,
 };
 use crate::music::intervals::Interval;
 use crate::music::notes::PitchClass;
@@ -144,14 +144,6 @@ enum Answer {
     Position(Position),
 }
 
-/// Which way the drill is running. Transient only, exactly as in the Note Trainer: the
-/// stored direction is `Prompt`'s variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Drill {
-    NameIt,
-    FindIt,
-}
-
 impl Prompt {
     fn drill(self) -> Drill {
         match self {
@@ -163,15 +155,6 @@ impl Prompt {
     fn root(self) -> Position {
         match self {
             Prompt::NameIt { root, .. } | Prompt::FindIt { root, .. } => root,
-        }
-    }
-}
-
-impl Drill {
-    fn flipped(self) -> Drill {
-        match self {
-            Drill::NameIt => Drill::FindIt,
-            Drill::FindIt => Drill::NameIt,
         }
     }
 }
@@ -519,7 +502,7 @@ pub(super) fn ui_interval_trainer(
             row![
                 question,
                 Space::new().width(Length::Fill),
-                streak_readout(trainer),
+                streak_readout(trainer.streak, trainer.best_streak),
             ],
             interval_trainer_controls(trainer, focused),
         ]
@@ -635,28 +618,6 @@ fn position_markers(trainer: &IntervalTrainer) -> Vec<NoteMarker> {
                 .filter_map(|answer| marker(answer, SUCCESS)),
         )
         .collect()
-}
-
-/// The current run and the best of the session.
-fn streak_readout(trainer: &IntervalTrainer) -> Element<'static, Message> {
-    use iced::widget::{column, row, text};
-
-    let stat = |label: &'static str, value: u32, color: Color| {
-        column![
-            text(value.to_string()).size(30).color(color),
-            text(label).size(12).color(MUTE),
-        ]
-        .spacing(2)
-    };
-
-    let live = if trainer.streak > 0 { SUCCESS } else { MUTE };
-
-    row![
-        stat("streak", trainer.streak, live),
-        stat("best", trainer.best_streak, INK),
-    ]
-    .spacing(28)
-    .into()
 }
 
 /// The header row: direction and skip.

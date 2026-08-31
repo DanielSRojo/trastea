@@ -13,10 +13,10 @@ use iced::{Color, Element, Padding};
 
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::{
-    ANSWER_ROW_WIDTH, BODY, CANVAS, CURSOR_HOME, DANGER, Direction, FocusTarget, INK, LINK,
+    ANSWER_ROW_WIDTH, BODY, CANVAS, CURSOR_HOME, DANGER, Direction, Drill, FocusTarget, INK, LINK,
     MUSIC_FONT, MUTE, Message, NECK_FRETS, NECK_STRINGS, ROOT_BUTTON_SIZE, SELECTOR_CARD_HEIGHT,
     SMUFL_FLAT, SMUFL_SHARP, SUCCESS, SUMMARY_CARD_HEIGHT, card_container, correct_answer_button,
-    focus_ring, ghost_button, note_label, pitch_class_at, wrong_answer_button,
+    focus_ring, ghost_button, note_label, pitch_class_at, streak_readout, wrong_answer_button,
 };
 use crate::music::notes::{PitchClass, Spelling};
 use crate::rng::Rng;
@@ -74,28 +74,11 @@ impl Pool {
     }
 }
 
-/// Which way the drill is running. Transient only — passed to `draw_prompt` to say which
-/// kind of prompt to make, never stored. The stored direction is `Prompt`'s variant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Drill {
-    NameIt,
-    FindIt,
-}
-
 impl Prompt {
     fn drill(self) -> Drill {
         match self {
             Prompt::NameIt { .. } => Drill::NameIt,
             Prompt::FindIt(_) => Drill::FindIt,
-        }
-    }
-}
-
-impl Drill {
-    fn flipped(self) -> Drill {
-        match self {
-            Drill::NameIt => Drill::FindIt,
-            Drill::FindIt => Drill::NameIt,
         }
     }
 }
@@ -439,7 +422,7 @@ pub(super) fn ui_note_trainer(
             row![
                 question,
                 Space::new().width(Length::Fill),
-                streak_readout(trainer),
+                streak_readout(trainer.streak, trainer.best_streak),
             ],
             note_trainer_controls(trainer, focused),
         ]
@@ -533,31 +516,6 @@ fn position_markers(trainer: &NoteTrainer) -> Vec<NoteMarker> {
                 .filter_map(|answer| marker(answer, SUCCESS)),
         )
         .collect()
-}
-
-/// The current run and the best of the session.
-///
-/// The live streak is drawn in the theme's success colour: the per-answer flash says a
-/// single answer was right and then goes, and a standing streak keeps saying it.
-fn streak_readout(trainer: &NoteTrainer) -> Element<'static, Message> {
-    use iced::widget::{column, row, text};
-
-    let stat = |label: &'static str, value: u32, color: Color| {
-        column![
-            text(value.to_string()).size(30).color(color),
-            text(label).size(12).color(MUTE),
-        ]
-        .spacing(2)
-    };
-
-    let live = if trainer.streak > 0 { SUCCESS } else { MUTE };
-
-    row![
-        stat("streak", trainer.streak, live),
-        stat("best", trainer.best_streak, INK),
-    ]
-    .spacing(28)
-    .into()
 }
 
 /// The header row: direction, pool, spelling, skip.
