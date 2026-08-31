@@ -2,6 +2,7 @@ target/
 .agents/
 .claude/
 .codegraph/
+.env*
 .omo/
 CLAUDE.md
 DESIGN.md
