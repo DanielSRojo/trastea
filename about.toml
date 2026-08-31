@@ -37,9 +37,14 @@ targets = [
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
 
-# Trastea is `publish = false`, and this drops it from its own notices. Without it the
-# root crate is collected as though it were a third party: the GPL text then ships
-# twice — once as LICENSE, once here — and contradicts the header about.hbs writes,
-# which tells the reader that nothing on the page is Trastea's own.
+# Drops Trastea from its own notices. Without it the root crate is collected as though
+# it were a third party: the GPL text then ships twice — once as LICENSE, once here —
+# and contradicts the header about.hbs writes, which tells the reader that nothing on
+# the page is Trastea's own. It fails louder than that, in fact, since GPL-3.0-or-later
+# is deliberately absent from `accepted` above: cargo-about errors and writes no file.
+#
+# `ignore` on its own only covers crates that are published nowhere, so naming crates-io
+# as a private registry is what keeps this working now that Trastea publishes there.
 [private]
 ignore = true
+registries = ["crates-io"]

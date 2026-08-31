@@ -47,6 +47,12 @@ notes:
 notes-preview version:
     git-cliff --unreleased --tag v{{version}}
 
+# publish to crates.io — the release workflow runs this with a short-lived trusted-publishing
+# token in CARGO_REGISTRY_TOKEN. Verifies by building the packaged crate before it uploads,
+# which is the last chance to catch a tarball that is missing a file the build needs.
+publish:
+    cargo publish --locked
+
 # advisories and yanked crates across everything Cargo.lock names — needs cargo-deny
 # installed. Deliberately not a stage of `ci`: the gate stays runnable with a Rust toolchain
 # and nothing else, the same reason `notices` sits outside it.

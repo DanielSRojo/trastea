@@ -202,3 +202,31 @@ jobs:
           body_path: notes/RELEASE_NOTES.md
           fail_on_unmatched_files: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  # Last, and deliberately so: a GitHub release can be deleted and re-cut, a version on
+  # crates.io can only be yanked. Everything that can still fail runs before the step that
+  # cannot be taken back.
+  publish:
+    name: Publish to crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # the OIDC claim crates.io trades for a short-lived registry token — no
+      # CARGO_REGISTRY_TOKEN secret to store, rotate or leak
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - name: just publish
+        run: just publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

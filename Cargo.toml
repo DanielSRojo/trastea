@@ -6,9 +6,11 @@ description = "A keyboard-driven guitar trainer for the desktop"
 repository = "https://github.com/DanielSRojo/trastea"
 license = "GPL-3.0-or-later"
 readme = "README.md"
-# Not a crates.io crate. This is also what cargo-about's `private.ignore` keys
-# off, so it keeps Trastea out of its own third-party notices.
-publish = false
+keywords = ["guitar", "music", "fretboard", "trainer", "iced"]
+categories = ["gui"]
+# crates.io and nowhere else. The list form rather than `true` is deliberate: about.toml
+# names crates-io a private registry, which is what keeps Trastea out of its own notices.
+publish = ["crates-io"]
 
 [dependencies]
 iced = { version = "0.14", features = ["canvas", "smol"] }
