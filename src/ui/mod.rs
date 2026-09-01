@@ -1363,6 +1363,89 @@ fn focus_ring_style(is_focused: bool) -> iced::widget::container::Style {
     }
 }
 
+/// The pill controls: the row above a drill, and the pair beside the scale trainer's root.
+///
+/// `ghost_button` rounds to a full pill, so the label is what decides the shape the button
+/// comes out — one glyph and nothing else draws a circle beside its neighbours' lozenges,
+/// and a label in `MUSIC_FONT` stands shorter than one in the body font, since the button is
+/// as tall as the label's line box and SMuFL's metrics are nothing like a text face's.
+/// `control_label` pins the line box; `control_glyph` puts a floor under the width.
+const CONTROL_SIZE: f32 = 15.0;
+const CONTROL_LINE_HEIGHT: f32 = 19.0;
+const CONTROL_GLYPH_WIDTH: f32 = 26.0;
+const CONTROL_ACCIDENTAL_SIZE: f32 = 28.0;
+/// How far a lone accidental drops, as a fraction of its own size. See `control_accidental`.
+/// Measured off the rendered pills: each lands the glyph's ink on the centre the letters in
+/// the row beside it sit on.
+const SHARP_DROP: f32 = 0.11;
+const FLAT_DROP: f32 = 0.18;
+
+fn control_button<'a>(
+    label: impl Into<Element<'a, Message>>,
+    message: Message,
+    is_focused: bool,
+) -> Element<'a, Message> {
+    use iced::widget::button;
+
+    focus_ring(
+        button(label)
+            .padding([8, 14])
+            .style(ghost_button)
+            .on_press(message),
+        is_focused,
+    )
+}
+
+/// A control's label, laid in the row's line box. The size stays the caller's: a SMuFL glyph
+/// is drawn against a staff space rather than a cap height, so it has to be set larger than
+/// the words beside it to carry the same weight.
+fn control_label(label: iced::widget::Text<'static>, size: f32) -> iced::widget::Text<'static> {
+    label
+        .size(size)
+        .line_height(iced::widget::text::LineHeight::Absolute(Pixels(
+            CONTROL_LINE_HEIGHT,
+        )))
+}
+
+/// A label with no word to it — a glyph, or a glyph and a degree — widened to the floor.
+fn control_glyph<'a>(label: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
+    use iced::Length;
+    use iced::widget::container;
+
+    container(label)
+        .center_x(Length::Fixed(CONTROL_GLYPH_WIDTH))
+        .into()
+}
+
+/// A lone accidental: set large enough to read with nothing beside it, and dropped onto the
+/// row's optical centre.
+///
+/// SMuFL draws an accidental against a staff rather than a cap height, so its ink sits high
+/// in the ascent-and-descent box the line box centres — and a flat, which hangs its bowl
+/// under the staff line it belongs to, starts higher than a sharp and has further to fall.
+/// Next to a letter that is exactly what an accidental should do; alone in a pill it reads
+/// as floating. Fixing the container's height is what makes the top padding move the glyph
+/// rather than the pill.
+fn control_accidental(glyph: char) -> Element<'static, Message> {
+    use iced::Length;
+    use iced::widget::{container, text};
+
+    let drop = if glyph == SMUFL_FLAT {
+        FLAT_DROP
+    } else {
+        SHARP_DROP
+    };
+
+    container(control_label(
+        text(glyph.to_string()).font(MUSIC_FONT),
+        CONTROL_ACCIDENTAL_SIZE,
+    ))
+    .center_x(Length::Fixed(CONTROL_GLYPH_WIDTH))
+    .height(Length::Fixed(CONTROL_LINE_HEIGHT))
+    .padding(Padding::default().top(CONTROL_ACCIDENTAL_SIZE * drop))
+    .into()
+}
+
 fn ui_home(focused: FocusTarget) -> Element<'static, Message> {
     use iced::Length;
     use iced::widget::{column, container, row, text};
@@ -1405,7 +1488,7 @@ fn ui_scale_trainer(
     focused: FocusTarget,
 ) -> Element<'static, Message> {
     use iced::Length;
-    use iced::widget::{Space, button, column, container, row, text};
+    use iced::widget::{Space, column, container, row, text};
 
     // Display only: no press handler and no cursor, so the neck stays the picture it has
     // always been here. `Message` is inferred from the `Element` this becomes.
@@ -1420,30 +1503,27 @@ fn ui_scale_trainer(
             row![
                 note_label(scale.root_note(), SUMMARY_ROOT_SIZE, INK),
                 Space::new().width(Length::Fill),
-                focus_ring(
-                    // One degree, not a formula fragment: `1♭3` was tried first, on the
-                    // grounds that it reads less like an instruction to flatten the
-                    // third, and it crowded the header row — three buttons and the root
-                    // label share this line. Built like the formula row it points at —
-                    // the glyph in MUSIC_FONT, the digit in the body font — because one
-                    // `text` cannot carry both.
-                    button(
+                // One degree, not a formula fragment: `1♭3` was tried first, on the
+                // grounds that it reads less like an instruction to flatten the third,
+                // and it crowded the header row — three buttons and the root label share
+                // this line. Built like the formula row it points at — the glyph in
+                // MUSIC_FONT, the digit in the body font — because one `text` cannot
+                // carry both, and both at one size because that is how the pair is
+                // written.
+                control_button(
+                    control_glyph(
                         row![
-                            text(SMUFL_FLAT.to_string()).size(20).font(MUSIC_FONT),
-                            text("3").size(20),
+                            control_label(text(SMUFL_FLAT.to_string()).font(MUSIC_FONT), 20.0),
+                            control_label(text("3"), 20.0),
                         ]
                         .spacing(0)
-                    )
-                    .padding([8, 12])
-                    .style(ghost_button)
-                    .on_press(Message::ToggleNotation),
+                    ),
+                    Message::ToggleNotation,
                     focused == FocusTarget::NotationToggle,
                 ),
-                focus_ring(
-                    button(text("R").size(20))
-                        .padding([8, 12])
-                        .style(ghost_button)
-                        .on_press(Message::RerollScale),
+                control_button(
+                    control_glyph(control_label(text("R"), CONTROL_SIZE)),
+                    Message::RerollScale,
                     focused == FocusTarget::RerollScale,
                 ),
             ]
@@ -1763,15 +1843,19 @@ fn scale_markers(scale: Scale, notation: Notation) -> Vec<NoteMarker> {
 
 /// The keys that mean the same thing on every screen.
 ///
+/// Named in words rather than in the keycap glyphs — `⇧`, `⌫` — a keyboard shortcut is
+/// usually written with: nothing embedded here draws them, and what the system falls back
+/// to renders them as a sliver.
+///
 /// Written out rather than derived from `translate_key`. These are structural and will not
 /// move, so the cost of them drifting is near zero — unlike the per-screen accelerators
 /// beneath them in the overlay, which grow with every feature and so are read from the same
 /// declaration that dispatches them.
 const NAVIGATION_KEYS: [(&str, &str); 5] = [
-    ("Tab   ⇧Tab", "next / previous"),
+    ("Tab   Shift+Tab", "next / previous"),
     ("↑ ↓ ← →   k j h l", "move the focus ring"),
     ("Enter   Space", "activate"),
-    ("Esc   ⌫", "back"),
+    ("Esc   Backspace", "back"),
     ("?", "this list"),
 ];
 

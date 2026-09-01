@@ -13,9 +13,10 @@ use iced::{Color, Element, Padding};
 
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::{
-    ANSWER_ROW_WIDTH, BODY, CANVAS, CURSOR_HOME, DANGER, Direction, Drill, FocusTarget, INK, LINK,
-    MUSIC_FONT, MUTE, Message, NECK_FRETS, NECK_STRINGS, ROOT_BUTTON_SIZE, SELECTOR_CARD_HEIGHT,
-    SMUFL_FLAT, SMUFL_SHARP, SUCCESS, SUMMARY_CARD_HEIGHT, card_container, correct_answer_button,
+    ANSWER_ROW_WIDTH, BODY, CANVAS, CONTROL_SIZE, CURSOR_HOME, DANGER, Direction, Drill,
+    FocusTarget, INK, LINK, MUTE, Message, NECK_FRETS, NECK_STRINGS, ROOT_BUTTON_SIZE,
+    SELECTOR_CARD_HEIGHT, SMUFL_FLAT, SMUFL_SHARP, SUCCESS, SUMMARY_CARD_HEIGHT, card_container,
+    control_accidental, control_button, control_glyph, control_label, correct_answer_button,
     focus_ring, ghost_button, note_label, pitch_class_at, streak_readout, wrong_answer_button,
 };
 use crate::music::notes::{PitchClass, Spelling};
@@ -518,25 +519,22 @@ fn position_markers(trainer: &NoteTrainer) -> Vec<NoteMarker> {
         .collect()
 }
 
+/// The accidental the spelling control wears: the one in force, not the one pressing it
+/// would bring.
+fn spelling_glyph(spelling: Spelling) -> char {
+    match spelling {
+        Spelling::Sharps => SMUFL_SHARP,
+        Spelling::Flats => SMUFL_FLAT,
+    }
+}
+
 /// The header row: direction, pool, spelling, skip.
 ///
-/// The first two are labelled with the mode they are *currently* in rather than with what
+/// The first three are labelled with the mode they are *currently* in rather than with what
 /// pressing them would do, so the row doubles as a status line — there is nowhere else on
 /// this screen that says which way the drill is running.
 fn note_trainer_controls(trainer: &NoteTrainer, focused: FocusTarget) -> Element<'static, Message> {
-    use iced::widget::{button, row, text};
-
-    let label = |content: String| text(content).size(15);
-
-    let ghost = |content: Element<'static, Message>, message: Message, is_focused: bool| {
-        focus_ring(
-            button(content)
-                .padding([8, 14])
-                .style(ghost_button)
-                .on_press(message),
-            is_focused,
-        )
-    };
+    use iced::widget::{row, text};
 
     let direction = match trainer.prompt.drill() {
         Drill::NameIt => "name it",
@@ -549,26 +547,23 @@ fn note_trainer_controls(trainer: &NoteTrainer, focused: FocusTarget) -> Element
     };
 
     row![
-        ghost(
-            label(direction.to_owned()).into(),
+        control_button(
+            control_label(text(direction), CONTROL_SIZE),
             Message::ToggleDrillDirection,
             focused == FocusTarget::DrillDirectionToggle,
         ),
-        ghost(
-            label(pool.to_owned()).into(),
+        control_button(
+            control_label(text(pool), CONTROL_SIZE),
             Message::TogglePool,
             focused == FocusTarget::PoolToggle,
         ),
-        ghost(
-            text(format!("{SMUFL_SHARP}{SMUFL_FLAT}"))
-                .size(20)
-                .font(MUSIC_FONT)
-                .into(),
+        control_button(
+            control_accidental(spelling_glyph(trainer.spelling)),
             Message::ToggleNoteSpelling,
             focused == FocusTarget::NoteSpellingToggle,
         ),
-        ghost(
-            text("R").size(20).into(),
+        control_button(
+            control_glyph(control_label(text("R"), CONTROL_SIZE)),
             Message::SkipPrompt,
             focused == FocusTarget::SkipPrompt,
         ),
@@ -1046,6 +1041,18 @@ mod tests {
             before,
             "the spelling toggle disturbed the drill"
         );
+    }
+
+    /// The control says which spelling is running, so it has to move when the spelling does.
+    #[test]
+    fn the_spelling_control_wears_the_spelling_in_force() {
+        let (mut trainer, _) = trainer_with_seed(8);
+
+        assert_eq!(spelling_glyph(trainer.spelling), SMUFL_SHARP);
+
+        trainer.toggle_spelling();
+
+        assert_eq!(spelling_glyph(trainer.spelling), SMUFL_FLAT);
     }
 
     #[test]

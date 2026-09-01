@@ -135,10 +135,10 @@ The focus ring is a 2-D grid rather than a flat tab order, so `↑ ↓ ← →` 
 
 | Key | Action |
 | --- | --- |
-| `Tab` / `⇧Tab` | next / previous |
+| `Tab` / `Shift+Tab` | next / previous |
 | `↑ ↓ ← →`, `k j h l` | move the focus ring |
 | `Enter`, `Space` | activate |
-| `Esc`, `⌫` | back |
+| `Esc`, `Backspace` | back |
 | `?` | list the keys that work on this screen |
 | `1`–`9` | jump straight to a Home menu entry |
 

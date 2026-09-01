@@ -17,9 +17,10 @@ use iced::{Color, Element, Padding};
 
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::{
-    ANSWER_ROW_WIDTH, BODY, CANVAS, CURSOR_HOME, DANGER, Direction, Drill, FocusTarget, INK, LINK,
-    MUSIC_FONT, MUTE, Message, NECK_FRETS, NECK_STRINGS, Position, ROOT_BUTTON_SIZE, ROOT_MARKER,
-    SELECTOR_CARD_HEIGHT, SUCCESS, SUMMARY_CARD_HEIGHT, card_container, correct_answer_button,
+    ANSWER_ROW_WIDTH, BODY, CANVAS, CONTROL_SIZE, CURSOR_HOME, DANGER, Direction, Drill,
+    FocusTarget, INK, LINK, MUSIC_FONT, MUTE, Message, NECK_FRETS, NECK_STRINGS, Position,
+    ROOT_BUTTON_SIZE, ROOT_MARKER, SELECTOR_CARD_HEIGHT, SUCCESS, SUMMARY_CARD_HEIGHT,
+    card_container, control_button, control_glyph, control_label, correct_answer_button,
     focus_ring, ghost_button, interval_token, streak_readout, wrong_answer_button,
 };
 use crate::music::intervals::Interval;
@@ -629,17 +630,7 @@ fn interval_trainer_controls(
     trainer: &IntervalTrainer,
     focused: FocusTarget,
 ) -> Element<'static, Message> {
-    use iced::widget::{button, row, text};
-
-    let ghost = |content: Element<'static, Message>, message: Message, is_focused: bool| {
-        focus_ring(
-            button(content)
-                .padding([8, 14])
-                .style(ghost_button)
-                .on_press(message),
-            is_focused,
-        )
-    };
+    use iced::widget::{row, text};
 
     let direction = match trainer.prompt.drill() {
         Drill::NameIt => "name it",
@@ -647,13 +638,13 @@ fn interval_trainer_controls(
     };
 
     row![
-        ghost(
-            text(direction).size(15).into(),
+        control_button(
+            control_label(text(direction), CONTROL_SIZE),
             Message::ToggleIntervalDirection,
             focused == FocusTarget::IntervalDirectionToggle,
         ),
-        ghost(
-            text("R").size(20).into(),
+        control_button(
+            control_glyph(control_label(text("R"), CONTROL_SIZE)),
             Message::SkipIntervalPrompt,
             focused == FocusTarget::SkipIntervalPrompt,
         ),
