@@ -1715,21 +1715,24 @@ fn detail_pane(
             .color(MUTE)
             .into()
     } else {
-        scrollable(shapes.iter().enumerate().fold(
-            row![].spacing(12),
-            |strip, (index, &voicing)| {
-                strip.push(voicing_card(
-                    chord,
-                    voicing,
-                    index,
-                    index == selected,
-                    notation,
-                ))
-            },
-        ))
-        .direction(scrollable::Direction::Horizontal(
-            scrollable::Scrollbar::default(),
-        ))
+        // Wrapped rather than scrolled sideways: a shape that does not fit drops to the
+        // next line, so the whole set is one block to read instead of a strip to drag.
+        scrollable(
+            shapes
+                .iter()
+                .enumerate()
+                .fold(row![].spacing(12), |strip, (index, &voicing)| {
+                    strip.push(voicing_card(
+                        chord,
+                        voicing,
+                        index,
+                        index == selected,
+                        notation,
+                    ))
+                })
+                .wrap()
+                .vertical_spacing(12),
+        )
         .into()
     };
 
