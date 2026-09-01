@@ -1,6 +1,6 @@
 [package]
 name = "trastea"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 # The floor a `cargo install` is checked against, since rustup reads rust-toolchain.toml
 # inside a checkout only. Same version, two audiences: that file pins what the gate runs.
