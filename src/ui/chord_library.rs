@@ -1033,18 +1033,23 @@ impl ChordLibrary {
     /// The qualities surviving the query, in the order they are listed.
     ///
     /// An empty query is every quality on the current root — browsing is the zero-input
-    /// case of searching rather than a mode of its own. A query that parses picks exactly;
-    /// one that does not falls back to approximate matching, which is the only place a
-    /// score is involved and never competes with an exact hit.
+    /// case of searching rather than a mode of its own. A query that parses picks the
+    /// chord it names and the ones extending it; one that does not falls back to
+    /// approximate matching, which is the only place a score is involved and never
+    /// competes with an exact hit.
     pub(super) fn rows(&self) -> Vec<Chord> {
         match Query::parse(&self.query) {
             None if self.query.trim().is_empty() => every_chord().collect(),
             None => self.approximate_rows(),
             Some(Query::Root(root)) => every_chord().filter(|chord| chord.root() == root).collect(),
-            Some(Query::Quality(kind)) => {
-                every_chord().filter(|chord| chord.kind() == kind).collect()
-            }
-            Some(Query::Chord { root, kind }) => vec![Chord::new(root, kind)],
+            // `covers` rather than `==`: a named quality is where the learner has typed to,
+            // not where they are going, so `Cmaj` must not hide the `Cmaj7` it starts.
+            Some(Query::Quality(kind)) => every_chord()
+                .filter(|chord| kind.covers(chord.kind()))
+                .collect(),
+            Some(Query::Chord { root, kind }) => every_chord()
+                .filter(|chord| chord.root() == root && kind.covers(chord.kind()))
+                .collect(),
         }
     }
 
@@ -2650,7 +2655,9 @@ mod tests {
     }
 
     #[test]
-    fn a_root_and_a_quality_narrow_to_one_chord() {
+    fn a_root_and_a_quality_narrow_to_that_chord() {
+        // Nothing is written longer than `maj7`, so this one narrows to a single row. See
+        // `a_named_quality_keeps_the_chords_that_extend_it` for one that does not.
         let library = typed("bbmaj7");
 
         assert_eq!(library.rows().len(), 1);
@@ -2679,6 +2686,38 @@ mod tests {
             library.selected_chord().map(|c| c.to_string()),
             Some("Cm7".into())
         );
+    }
+
+    #[test]
+    fn a_named_quality_keeps_the_chords_that_extend_it() {
+        // `Cmaj` is a stop on the way to `Cmaj7`, and used to be the end of the road: an
+        // exact parse listed that one chord and hid every longer name it starts.
+        let names = |query: &str| {
+            typed(query)
+                .rows()
+                .iter()
+                .map(|chord| chord.to_string())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(names("cmaj"), ["C", "C6", "Cmaj7"]);
+        assert_eq!(names("cdim"), ["Cdim", "Cdim7"]);
+        assert_eq!(names("cm"), ["Cm", "Cm6", "Cm7", "CmMaj7"]);
+        // The chord named outright still leads, so `Enter` picks what was typed.
+        assert_eq!(
+            typed("cm").selected_chord().map(|c| c.to_string()),
+            Some("Cm".into())
+        );
+    }
+
+    #[test]
+    fn a_quality_alone_extends_on_every_root() {
+        // The same widening one level up: `dim` alone must not hide the twelve `dim7`s.
+        let rows = typed("dim").rows();
+
+        assert_eq!(rows.len(), 24);
+        assert_eq!(rows[0].to_string(), "Cdim");
+        assert_eq!(rows[1].to_string(), "Cdim7");
     }
 
     #[test]

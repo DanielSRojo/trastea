@@ -204,13 +204,46 @@ impl ChordQuality {
             ChordQuality::Major6 => &["maj6", "M6", "6"],
             ChordQuality::Minor6 => &["min6", "m6", "-6"],
             ChordQuality::Dominant7 => &["dom7", "7"],
-            ChordQuality::Major7 => &["major7", "maj7", "M7", "Δ7", "Δ"],
+            ChordQuality::Major7 => &["major7", "maj7", "M7", "Δ7", "△7", "Δ", "△"],
             ChordQuality::Minor7 => &["min7", "m7", "-7"],
-            ChordQuality::MinorMajor7 => &["minMaj7", "mMaj7", "mM7", "-Maj7"],
+            ChordQuality::MinorMajor7 => {
+                &["minMaj7", "mMaj7", "mM7", "-Maj7", "mΔ7", "m△7", "mΔ", "m△"]
+            }
             ChordQuality::HalfDiminished7 => &["min7b5", "m7b5", "-7b5", "ø7", "ø"],
             ChordQuality::Diminished7 => &["dim7", "°7", "o7"],
             ChordQuality::Augmented7 => &["aug7", "7#5", "+7"],
         }
+    }
+
+    /// The qualities that extend this one: written as a longer form of one of its own, and
+    /// containing every degree it contains.
+    ///
+    /// Both halves do work the other cannot. By name alone a major seventh extends a minor
+    /// triad, because `major7` starts with `m`; by degrees alone a dominant seventh extends
+    /// a major triad, because it contains one.
+    pub fn extensions(self) -> impl Iterator<Item = ChordQuality> {
+        let written_longer = move |longer: ChordQuality| {
+            longer.forms().iter().any(|form| {
+                self.forms()
+                    .iter()
+                    .any(|own| form.len() > own.len() && form.starts_with(own))
+            })
+        };
+        let contains_every_degree = move |longer: ChordQuality| {
+            self.intervals()
+                .iter()
+                .all(|degree| longer.intervals().contains(degree))
+        };
+
+        ChordQuality::ALL.iter().copied().filter(move |&longer| {
+            longer != self && written_longer(longer) && contains_every_degree(longer)
+        })
+    }
+
+    /// Whether naming this quality should also offer `other` — itself, or one of its
+    /// `extensions`. What a search does with a query that already reads as a chord.
+    pub fn covers(self, other: ChordQuality) -> bool {
+        self == other || self.extensions().any(|kind| kind == other)
     }
 }
 
@@ -778,6 +811,57 @@ mod tests {
         // Nothing may be left over: a prefix that reads is not a parse.
         assert_eq!(Query::parse("cmaj7z"), None);
         assert_eq!(Query::parse("c###"), None);
+    }
+
+    #[test]
+    fn the_triangle_names_a_major_seventh() {
+        // Charts write both: U+0394 GREEK CAPITAL DELTA, and U+25B3 WHITE UP-POINTING
+        // TRIANGLE, which is the one a character picker hands you. The screen draws its own
+        // SMuFL glyph, so neither is what a learner sees — only what they can type.
+        let cmaj7 = Query::parse("Cmaj7");
+
+        assert_eq!(Query::parse("CΔ"), cmaj7);
+        assert_eq!(Query::parse("C△"), cmaj7);
+        assert_eq!(Query::parse("C△7"), cmaj7);
+        assert_eq!(Query::parse("Cm△"), Query::parse("CmMaj7"));
+    }
+
+    #[test]
+    fn a_quality_extends_into_the_longer_names_that_contain_it() {
+        let extensions = |kind: ChordQuality| kind.extensions().collect::<Vec<_>>();
+
+        assert_eq!(
+            extensions(ChordQuality::Major),
+            [ChordQuality::Major6, ChordQuality::Major7]
+        );
+        assert_eq!(
+            extensions(ChordQuality::Minor),
+            [
+                ChordQuality::Minor6,
+                ChordQuality::Minor7,
+                ChordQuality::MinorMajor7
+            ]
+        );
+        assert_eq!(
+            extensions(ChordQuality::Diminished),
+            [ChordQuality::Diminished7]
+        );
+        // A form that extends one of its own — `Δ7` over `Δ` — is not an extension of
+        // itself, or every seventh would list twice.
+        assert!(extensions(ChordQuality::Major7).is_empty());
+    }
+
+    #[test]
+    fn an_extension_needs_both_the_name_and_the_degrees() {
+        assert!(
+            !ChordQuality::Minor.covers(ChordQuality::Major7),
+            "`major7` starts with `m`, which the name test alone would accept"
+        );
+        assert!(
+            !ChordQuality::Major.covers(ChordQuality::Dominant7),
+            "a dominant seventh contains a major triad, which the degree test alone would accept"
+        );
+        assert!(ChordQuality::Minor.covers(ChordQuality::Minor));
     }
 
     #[test]
