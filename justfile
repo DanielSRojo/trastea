@@ -35,6 +35,17 @@ build-release:
 run:
     cargo run
 
+# Six glyphs out of a 990 KiB font, so what is committed under assets/ is the subset rather
+# than the original and this recipe is how anyone reproduces it. The range is the one
+# `every_keycap_is_one_the_embedded_subset_carries` checks the table against. The family name survives
+# the subset, which is what `KEYCAP_FONT` matches on.
+#
+# rebuild the keycap subset from the system Noto Sans Math — needs fonttools installed
+fonts:
+    pyftsubset /usr/share/fonts/noto/NotoSansMath-Regular.ttf \
+        --unicodes="U+2190-2193,U+21E4,U+21E5" \
+        --output-file=assets/fonts/NotoSansMath-Keycaps.ttf
+
 # the third-party notices the release stages beside LICENSE — needs cargo-about installed
 notices:
     cargo about generate about.hbs -o THIRD-PARTY-NOTICES.txt

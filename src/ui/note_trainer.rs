@@ -16,7 +16,7 @@ use super::{
     ANSWER_ROW_WIDTH, BODY, CANVAS, CONTROL_SIZE, CURSOR_HOME, DANGER, Direction, Drill,
     FocusTarget, INK, LINK, MUTE, Message, NECK_FRETS, NECK_STRINGS, ROOT_BUTTON_SIZE,
     SELECTOR_CARD_HEIGHT, SMUFL_FLAT, SMUFL_SHARP, SUCCESS, SUMMARY_CARD_HEIGHT, card_container,
-    control_accidental, control_button, control_glyph, control_label, correct_answer_button,
+    control_accidental, control_button, control_label, control_shuffle, correct_answer_button,
     focus_ring, ghost_button, note_label, pitch_class_at, streak_readout, wrong_answer_button,
 };
 use crate::music::notes::{PitchClass, Spelling};
@@ -563,7 +563,7 @@ fn note_trainer_controls(trainer: &NoteTrainer, focused: FocusTarget) -> Element
             focused == FocusTarget::NoteSpellingToggle,
         ),
         control_button(
-            control_glyph(control_label(text("R"), CONTROL_SIZE)),
+            control_shuffle(),
             Message::SkipPrompt,
             focused == FocusTarget::SkipPrompt,
         ),

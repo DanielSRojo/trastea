@@ -12,6 +12,7 @@ use note_trainer::{NoteTrainer, ui_note_trainer};
 
 use chord_library::{ChordLibrary, KeyOutcome, ui_chord_library};
 
+use iced::widget::canvas;
 use iced::{
     Background, Border, Color, Element, Padding, Pixels, Shadow, Subscription, Task, Vector, font,
     keyboard,
@@ -84,12 +85,30 @@ const SMUFL_CSYM_DIMINISHED: char = '\u{E870}';
 const SMUFL_CSYM_HALF_DIMINISHED: char = '\u{E871}';
 const SMUFL_CSYM_AUGMENTED: char = '\u{E872}';
 const SMUFL_CSYM_MAJOR_SEVENTH: char = '\u{E873}';
+/// Every arrow the chrome draws, U+2190–2193 and U+21E4–21E5, out of one embedded face.
+///
+/// The tab pair is in almost no text face, so what the fallback found for them differed per
+/// machine and drew at that stranger's metrics. The four plain arrows are in nearly every
+/// face and so always drew *something*, but a body font sets them as hairlines against its
+/// own optical size — beside a keycap they read as a lighter mark rather than the same one.
+/// Taking all six from the same place is what makes the overlay one row of keys.
+///
+/// Back-tab is the one glyph rather than ⇧ and ⇥ together: ⇧ is UPWARDS WHITE ARROW, drawn
+/// hollow wherever it is drawn at all, and beside a line arrow the pair reads as two marks
+/// from different families rather than as one shortcut.
+const KEYCAP_TAB: &str = "⇥";
+const KEYCAP_BACKTAB: &str = "⇤";
+const KEYCAP_ARROWS: &str = "↑ ↓ ← →";
+const KEYCAP_BACK: &str = "←";
 const FEEL_FONT: iced::Font = iced::Font {
     family: font::Family::Name("Dancing Script"),
     weight: font::Weight::Bold,
     ..iced::Font::DEFAULT
 };
 const MUSIC_FONT: iced::Font = iced::Font::with_name("Leland Text");
+/// Noto Sans Math, subset to the arrows above by `just fonts`. The family name survives the
+/// subset, which is what `with_name` matches on.
+const KEYCAP_FONT: iced::Font = iced::Font::with_name("Noto Sans Math");
 
 const STANDARD_TUNING: [PitchClass; 6] = [
     PitchClass::new(4),  // E
@@ -1305,6 +1324,11 @@ fn accelerators_for(screen: &Screen, notation: Notation) -> Vec<Accelerator> {
     }
 }
 
+/// The back arrow's size. Larger than the 18 the body font wore, because the maths face
+/// draws an arrow against its own optical size rather than a cap height — at 18 the mark
+/// came out as a rule with a nick in it.
+const BACK_ARROW_SIZE: f32 = 22.0;
+
 fn with_top_bar(
     label: &'static str,
     content: Element<'static, Message>,
@@ -1315,7 +1339,7 @@ fn with_top_bar(
     use iced::widget::{button, column, container, row, text};
 
     let back_button = focus_ring(
-        button(text("←").size(18))
+        button(text(KEYCAP_BACK).font(KEYCAP_FONT).size(BACK_ARROW_SIZE))
             .style(ghost_button)
             .padding([6, 12])
             .on_press(Message::GoBack),
@@ -1446,6 +1470,104 @@ fn control_accidental(glyph: char) -> Element<'static, Message> {
     .into()
 }
 
+/// The reroll control's mark: the crossing arrows a shuffle is drawn with.
+///
+/// Drawn rather than set. Unicode's only shuffle is U+1F500, an emoji-block codepoint that
+/// exists on most systems in a colour font and on the rest in none — neither of which a
+/// `text` widget can turn into a stroke that follows the pill's label colour.
+///
+/// Drawn in `INK` rather than taking a colour, the way `SearchIcon` is: `ghost_button` sets
+/// `text_color` to `INK` in every status, so the mark matches the lettered pills beside it
+/// hovered or not.
+struct Shuffle;
+
+/// The mark's box and the weight it is stroked at. Wider than it is tall, because the
+/// horizontal tails are what separate a shuffle from a ✗ and a square box leaves no room
+/// for them — in one the arrows cross almost as soon as they start. Shorter than
+/// `CONTROL_LINE_HEIGHT` so it reads as a mark set in the row rather than as art filling
+/// the pill.
+const SHUFFLE_WIDTH: f32 = 20.0;
+const SHUFFLE_HEIGHT: f32 = 13.0;
+const SHUFFLE_STROKE: f32 = 1.6;
+
+impl canvas::Program<Message> for Shuffle {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &iced::Renderer,
+        _theme: &iced::Theme,
+        bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        use iced::widget::canvas::{Fill, Frame, LineCap, LineJoin, Path, Stroke};
+
+        let mut frame = Frame::new(renderer, bounds.size());
+
+        // Laid out in fractions of the box so the mark is resolution-independent: at
+        // `SHUFFLE_SIZE` there are fifteen pixels to place a whole icon in, and rounding
+        // any of these to whole pixels first is what makes it lopsided.
+        let point = |tx: f32, ty: f32| iced::Point::new(tx * bounds.width, ty * bounds.height);
+
+        // Each arrow leaves flat, crosses, and arrives flat — the horizontal tails are what
+        // separate a shuffle from a plain ✗, and the flat arrival is what lets the head
+        // point along the line rather than across it.
+        let arrow = |from: f32, to: f32| {
+            Path::new(|path| {
+                path.move_to(point(0.00, from));
+                path.line_to(point(0.28, from));
+                path.line_to(point(0.58, to));
+                path.line_to(point(0.72, to));
+            })
+        };
+
+        // Longer than it is wide. The first pass had it the other way round, and at this
+        // size a head taller than its own length reads as a spike crossing the line.
+        let head = |at: f32| {
+            Path::new(|path| {
+                path.move_to(point(1.00, at));
+                path.line_to(point(0.68, at - 0.22));
+                path.line_to(point(0.68, at + 0.22));
+                path.close();
+            })
+        };
+
+        let stroke = Stroke::default()
+            .with_color(INK)
+            .with_width(SHUFFLE_STROKE)
+            .with_line_cap(LineCap::Round)
+            .with_line_join(LineJoin::Round);
+
+        for (from, to) in [(0.18, 0.82), (0.82, 0.18)] {
+            frame.stroke(&arrow(from, to), stroke);
+            frame.fill(&head(to), Fill::from(INK));
+        }
+
+        vec![frame.into_geometry()]
+    }
+}
+
+/// The reroll control's label, in the line box the pills' words sit in.
+///
+/// A canvas has no line box of its own, so without the fixed height here the reroll pill
+/// would come out shorter than the lettered ones beside it — the same mismatch
+/// `control_label` exists to prevent between `MUSIC_FONT` and the body font.
+fn control_shuffle() -> Element<'static, Message> {
+    use iced::Length;
+    use iced::widget::canvas::Canvas;
+    use iced::widget::container;
+
+    container(
+        Canvas::new(Shuffle)
+            .width(Length::Fixed(SHUFFLE_WIDTH))
+            .height(Length::Fixed(SHUFFLE_HEIGHT)),
+    )
+    .center_x(Length::Fixed(CONTROL_GLYPH_WIDTH))
+    .center_y(Length::Fixed(CONTROL_LINE_HEIGHT))
+    .into()
+}
+
 fn ui_home(focused: FocusTarget) -> Element<'static, Message> {
     use iced::Length;
     use iced::widget::{column, container, row, text};
@@ -1522,7 +1644,7 @@ fn ui_scale_trainer(
                     focused == FocusTarget::NotationToggle,
                 ),
                 control_button(
-                    control_glyph(control_label(text("R"), CONTROL_SIZE)),
+                    control_shuffle(),
                     Message::RerollScale,
                     focused == FocusTarget::RerollScale,
                 ),
@@ -1841,23 +1963,71 @@ fn scale_markers(scale: Scale, notation: Notation) -> Vec<NoteMarker> {
     markers
 }
 
+/// One piece of a key hint: a word in the body font, or a keycap in `KEYCAP_FONT`.
+///
+/// Two fonts, so one `text` widget cannot carry both — the same split `chord_symbol` and
+/// `interval_label` already make for accidentals, applied here to the modifier keys.
+enum KeyPart {
+    Word(&'static str),
+    /// A run of keycaps rather than one, because `↑ ↓ ← →` is written as a single mark in
+    /// the row and splitting it into four parts would put the row's spacing between them.
+    Cap(&'static str),
+    /// The space between the two ways of doing one thing, on one row.
+    Gap,
+}
+
 /// The keys that mean the same thing on every screen.
 ///
-/// Named in words rather than in the keycap glyphs — `⇧`, `⌫` — a keyboard shortcut is
-/// usually written with: nothing embedded here draws them, and what the system falls back
-/// to renders them as a sliver.
+/// Every arrow is a keycap; the rest stay words because a keycap glyph for them is either
+/// unavailable — there is no Esc key in Unicode outside the symbol fonts — or no clearer
+/// than the word, and every glyph here has to be paid for in the embedded subset.
 ///
 /// Written out rather than derived from `translate_key`. These are structural and will not
 /// move, so the cost of them drifting is near zero — unlike the per-screen accelerators
 /// beneath them in the overlay, which grow with every feature and so are read from the same
 /// declaration that dispatches them.
-const NAVIGATION_KEYS: [(&str, &str); 5] = [
-    ("Tab   Shift+Tab", "next / previous"),
-    ("↑ ↓ ← →   k j h l", "move the focus ring"),
-    ("Enter   Space", "activate"),
-    ("Esc   Backspace", "back"),
-    ("?", "this list"),
-];
+const NAVIGATION_KEYS: [(&[KeyPart], &str); 5] = {
+    use KeyPart::{Cap, Gap, Word};
+
+    [
+        (
+            &[Cap(KEYCAP_TAB), Gap, Cap(KEYCAP_BACKTAB)],
+            "next / previous",
+        ),
+        (
+            &[Cap(KEYCAP_ARROWS), Gap, Word("k j h l")],
+            "move the focus ring",
+        ),
+        (&[Word("Enter"), Gap, Word("Space")], "activate"),
+        (&[Word("Esc"), Gap, Word("Backspace")], "back"),
+        (&[Word("?")], "this list"),
+    ]
+};
+
+/// The help overlay's key column. A keycap is set larger than the words beside it, for the
+/// reason `control_label` documents: the arrows are drawn against a maths font's optical
+/// size rather than a text face's cap height.
+const HELP_KEY_SIZE: f32 = 15.0;
+const HELP_KEYCAP_SIZE: f32 = 17.0;
+const HELP_KEY_GAP: f32 = 12.0;
+
+/// A key hint as a row: keycaps in `KEYCAP_FONT`, everything else in the body font.
+fn key_hint(parts: &'static [KeyPart]) -> Element<'static, Message> {
+    use iced::widget::{Space, row, text};
+
+    row(parts.iter().map(|part| match part {
+        KeyPart::Word(word) => text(*word).size(HELP_KEY_SIZE).color(INK).into(),
+        KeyPart::Cap(run) => text(*run)
+            .font(KEYCAP_FONT)
+            .size(HELP_KEYCAP_SIZE)
+            .color(INK)
+            .into(),
+        KeyPart::Gap => Space::new().width(HELP_KEY_GAP).into(),
+    }))
+    .spacing(3)
+    .align_y(iced::Alignment::Center)
+    .into()
+}
 
 /// The `?` overlay: a scrim over the live screen and a card of the keys that work on it.
 ///
@@ -1870,12 +2040,17 @@ fn ui_help_overlay(claimed: Vec<Accelerator>) -> Element<'static, Message> {
 
     let navigation = NAVIGATION_KEYS
         .into_iter()
-        .map(|(keys, description)| (keys.to_string(), description));
+        .map(|(parts, description)| (key_hint(parts), description));
 
     let has_accelerators = !claimed.is_empty();
-    let screen_keys = claimed
-        .into_iter()
-        .map(|(key, _, label)| (key.to_string(), label));
+    // Accelerators are single characters typed as themselves, so no row of them ever needs
+    // a keycap — `key_hint` would be a `Word` of one letter.
+    let screen_keys = claimed.into_iter().map(|(key, _, label)| {
+        (
+            text(key.to_string()).size(HELP_KEY_SIZE).color(INK).into(),
+            label,
+        )
+    });
 
     let mut card = column![
         text("Keys").size(26).color(INK),
@@ -1909,14 +2084,14 @@ fn ui_help_overlay(claimed: Vec<Accelerator>) -> Element<'static, Message> {
 /// One labelled group of key rows in the help overlay.
 fn help_section(
     title: &'static str,
-    rows: impl Iterator<Item = (String, &'static str)>,
+    rows: impl Iterator<Item = (Element<'static, Message>, &'static str)>,
 ) -> Element<'static, Message> {
     use iced::widget::{column, container, row, text};
 
     let entries = column(rows.map(|(keys, description)| {
         row![
-            container(text(keys).size(15).color(INK)).width(150),
-            text(description).size(15).color(BODY),
+            container(keys).width(150),
+            text(description).size(HELP_KEY_SIZE).color(BODY),
         ]
         .spacing(14)
         .into()
@@ -3335,6 +3510,36 @@ mod tests {
 
         assert!(!app.help_open);
         assert_eq!(app.focused, FocusTarget::Root(4));
+    }
+
+    /// A keycap outside the two ranges `just fonts` passes to `--unicodes` falls through to
+    /// whatever the system happens to have — the failure the subset exists to prevent, and
+    /// one that shows up as a glyph at the wrong weight rather than as anything that fails.
+    /// Nothing at runtime can read the font, so the ranges are written out here and the
+    /// table is checked against them.
+    #[test]
+    fn every_keycap_is_one_the_embedded_subset_carries() {
+        let carried =
+            |glyph: char| matches!(glyph, '\u{2190}'..='\u{2193}' | '\u{21E4}'..='\u{21E5}');
+
+        let caps = NAVIGATION_KEYS
+            .into_iter()
+            .flat_map(|(parts, description)| parts.iter().map(move |part| (part, description)));
+
+        for (part, description) in caps {
+            let KeyPart::Cap(run) = part else { continue };
+
+            for glyph in run.chars().filter(|glyph| !glyph.is_whitespace()) {
+                assert!(
+                    carried(glyph),
+                    "{glyph:?} on the {description:?} row is not in the subset"
+                );
+            }
+        }
+
+        for glyph in KEYCAP_BACK.chars() {
+            assert!(carried(glyph), "the back arrow is not in the subset");
+        }
     }
 
     #[test]

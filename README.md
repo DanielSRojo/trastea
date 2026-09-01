@@ -135,12 +135,23 @@ The focus ring is a 2-D grid rather than a flat tab order, so `↑ ↓ ← →` 
 
 | Key | Action |
 | --- | --- |
-| `Tab` / `Shift+Tab` | next / previous |
+| `⇥` / `⇤` | next / previous |
 | `↑ ↓ ← →`, `k j h l` | move the focus ring |
 | `Enter`, `Space` | activate |
 | `Esc`, `Backspace` | back |
 | `?` | list the keys that work on this screen |
 | `1`–`9` | jump straight to a Home menu entry |
+
+Every arrow the chrome draws — the overlay's two rows and the back button in each screen's
+top bar — comes from one subset embedded like the other fonts; see `just fonts`. The tab
+pair is in almost no text face, so what the fallback found for it differed per machine; the
+four plain arrows are in nearly every face but a body font sets them as hairlines against
+its own optical size, which is why the back arrow read as a rule with a nick in it. Taking
+all six from the same place is what makes them one set of marks. Everything else stays a
+word, because a keycap glyph for it is either unavailable — there is no Esc key in Unicode
+outside the symbol fonts — or no clearer than the word. Back-tab is ⇤ rather than ⇧⇥ because
+⇧ is a white arrow, drawn hollow wherever it is drawn at all, and beside a line arrow the
+two read as marks from different families.
 
 Per-screen accelerators are declared in one table alongside the label the `?` overlay shows
 for them, so a new accelerator documents itself. A key not claimed by the current screen is
@@ -235,10 +246,13 @@ those same terms, source included.
 
 The fonts are a separate matter. They are compiled into the binary but licensed under the
 [SIL Open Font License 1.1](assets/fonts/OFL.txt) rather than the GPL — Leland Text ©
-MuseScore BVBA, Dancing Script © the Dancing Script Project Authors, both embedded
-unmodified. The OFL says plainly that a font may be bundled with software under any license,
-so the two sit beside each other without either reaching into the other. Both texts ship
-inside the release archives, since the binary redistributes the fonts by carrying them.
+MuseScore BVBA and Dancing Script © the Dancing Script Project Authors, both embedded
+unmodified, and Noto Sans Math © Google LLC, subset by `just fonts` to the six arrows the
+chrome draws. The licence permits that subset and asks only that the result stay
+under it, which it does; Noto reserves no font name, so the family keeps its own. It also
+says plainly that a font may be bundled with software under any licence, so the three sit
+beside the GPL without either side reaching into the other. Both texts ship inside the
+release archives, since the binary redistributes the fonts by carrying them.
 
 The crates are the same argument at a larger scale. Rust links them statically, so the
 binary carries their code too, and MIT and Apache-2.0 both ask for their notice to travel

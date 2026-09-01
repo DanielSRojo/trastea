@@ -11,6 +11,7 @@
 //! entry, no per-root entry, and no per-position entry anywhere below.
 
 use iced::keyboard;
+use iced::widget::canvas;
 
 use crate::music::chords::{Chord, ChordQuality, Query};
 use crate::music::notes::{PitchClass, Spelling};
@@ -1517,6 +1518,54 @@ fn root_header(root: PitchClass, after_a_group: bool) -> iced::Element<'static, 
     .into()
 }
 
+/// The magnifier in the search box, drawn rather than set.
+///
+/// `⌕` is not a character a text face is expected to carry and nothing embedded here has a
+/// magnifier in it, so the glyph the system found for it came out as a stray `o` sitting
+/// under the baseline. Two strokes depend on nothing.
+struct SearchIcon;
+
+/// The side of the square the icon is drawn in.
+const SEARCH_ICON: f32 = 14.0;
+
+impl canvas::Program<Message> for SearchIcon {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &iced::Renderer,
+        _theme: &iced::Theme,
+        bounds: iced::Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        use iced::Point;
+        use iced::widget::canvas::{Frame, Path, Stroke};
+
+        let mut frame = Frame::new(renderer, bounds.size());
+        let side = bounds.width.min(bounds.height);
+        let stroke = Stroke::default().with_color(MUTE).with_width(1.4);
+
+        // The lens up in the corner and the handle out of it down the diagonal, which is the
+        // whole drawing: the handle leaves the rim at 45°, so it starts a radius away on
+        // both axes.
+        let centre = Point::new(side * 0.4, side * 0.4);
+        let radius = side * 0.3;
+        let grip = radius * std::f32::consts::FRAC_1_SQRT_2;
+
+        frame.stroke(&Path::circle(centre, radius), stroke);
+        frame.stroke(
+            &Path::line(
+                Point::new(centre.x + grip, centre.y + grip),
+                Point::new(side * 0.92, side * 0.92),
+            ),
+            stroke,
+        );
+
+        vec![frame.into_geometry()]
+    }
+}
+
 pub(super) fn ui_chord_library(
     library: &ChordLibrary,
     focused: FocusTarget,
@@ -1542,12 +1591,15 @@ pub(super) fn ui_chord_library(
     let search_box = focus_ring(
         button(
             row![
-                text("⌕").size(16).color(MUTE),
+                canvas(SearchIcon)
+                    .width(Length::Fixed(SEARCH_ICON))
+                    .height(Length::Fixed(SEARCH_ICON)),
                 box_text,
                 Space::new().width(Length::Fill),
                 caret
             ]
-            .spacing(8),
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
         )
         .padding([10, 14])
         .width(Length::Fill)

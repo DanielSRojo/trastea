@@ -20,7 +20,7 @@ use super::{
     ANSWER_ROW_WIDTH, BODY, CANVAS, CONTROL_SIZE, CURSOR_HOME, DANGER, Direction, Drill,
     FocusTarget, INK, LINK, MUSIC_FONT, MUTE, Message, NECK_FRETS, NECK_STRINGS, Position,
     ROOT_BUTTON_SIZE, ROOT_MARKER, SELECTOR_CARD_HEIGHT, SUCCESS, SUMMARY_CARD_HEIGHT,
-    card_container, control_button, control_glyph, control_label, correct_answer_button,
+    card_container, control_button, control_label, control_shuffle, correct_answer_button,
     focus_ring, ghost_button, interval_token, streak_readout, wrong_answer_button,
 };
 use crate::music::intervals::Interval;
@@ -644,7 +644,7 @@ fn interval_trainer_controls(
             focused == FocusTarget::IntervalDirectionToggle,
         ),
         control_button(
-            control_glyph(control_label(text("R"), CONTROL_SIZE)),
+            control_shuffle(),
             Message::SkipIntervalPrompt,
             focused == FocusTarget::SkipIntervalPrompt,
         ),

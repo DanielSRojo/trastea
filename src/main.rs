@@ -28,6 +28,7 @@ fn main() -> iced::Result {
         .font(include_bytes!("../assets/fonts/DancingScript-Regular.ttf").as_slice())
         .font(include_bytes!("../assets/fonts/DancingScript-Bold.ttf").as_slice())
         .font(include_bytes!("../assets/fonts/LelandText.otf").as_slice())
+        .font(include_bytes!("../assets/fonts/NotoSansMath-Keycaps.ttf").as_slice())
         .theme(theme)
         .subscription(App::subscription)
         .run()
