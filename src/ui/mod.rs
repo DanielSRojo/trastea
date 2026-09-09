@@ -3,6 +3,7 @@ mod chord_library;
 mod fretboard;
 mod interval_trainer;
 mod note_trainer;
+mod shapes;
 use std::ops::Range;
 use std::time::Duration;
 

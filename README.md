@@ -190,7 +190,9 @@ src/
                          and hit-testing, held together by a round-trip test
     chord_diagram.rs     one voicing as a canvas: a fret window, mutes, barres — its own
                          Layout and its own round-trip test, for the same reason
-    chord_library.rs     the movable shapes, the voicings they place, and the screen
+    shapes.rs            the movable shapes and the voicings they place — instrument
+                         knowledge, belonging to no one screen
+    chord_library.rs     the Chord Library: looking a chord up, and drawing the ways to play it
 ```
 
 The split is load-bearing: `music/` never imports iced, and the UI holds no music theory of
@@ -203,7 +205,14 @@ same rule, which is why a group in the library can hold both spellings of one pi
 `D♭ F A♭` costs two flats where `C♯ E♯ G♯` costs three sharps, so pitch class 1 is a `D♭`
 major triad and a `C♯` minor one.
 
-The line the chord library draws is one step further out. A shape on the neck is instrument
+The shapes sit in `shapes.rs` rather than inside the screen that used to hold them. A movable
+shape is instrument knowledge, like the tuning and the neck itself, and it lived in a screen
+only because there was one caller. A shape names the CAGED letter it derives from and,
+separately, how it is reduced from the full one; the printed name is built from those two
+rather than stored beside them, so a letter and its name cannot drift apart — and asking for
+the five full shapes is a field rather than a search for a comma in a string.
+
+The line the shapes draw is one step further out. A shape on the neck is instrument
 knowledge rather than theory — no arithmetic produces the fact that guitarists play an E
 major on those strings, with the third where it is — so the shapes are a table and everything
 downstream of them is not. There is no per-chord entry, no per-root entry and no per-position
