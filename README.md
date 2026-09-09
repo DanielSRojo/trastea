@@ -8,14 +8,17 @@
 
 A keyboard-driven guitar trainer for the desktop, written in Rust with [iced](https://iced.rs) 0.14.
 
-Trastea draws a twelve-fret neck in standard tuning and drills three things against it: the
-shape of a scale, the name of a note under your finger, and the distance between two
-positions. A fourth screen answers rather than asks — a chord library you look things up in.
-Everything is reachable from the keyboard — the mouse is optional.
+Trastea draws a neck in standard tuning and drills three things against it: the shape of a
+scale, the name of a note under your finger, and the distance between two positions. Two more
+screens answer rather than ask — a chord library you look things up in, and a CAGED window
+showing one chord in all five places it sits. Everything is reachable from the keyboard — the
+mouse is optional.
 
-> **Status: early.** The three trainers and the chord library work. The library's shape
-> table is the part still worth growing: five CAGED shapes and a handful of reduced ones
-> cover the fifteen qualities, and every chord it offers is one a hand can hold.
+> **Status: early.** The three trainers, the chord library and the CAGED window all work. The
+> library's shape table is the part still worth growing: five CAGED shapes and a handful of
+> reduced ones cover the fifteen qualities, and every chord it offers is one a hand can hold.
+> The CAGED window is a major-triad screen for the same reason — E and A are the only letters
+> the table carries for the sevenths.
 
 ## Screens
 
@@ -60,6 +63,27 @@ and which degree each carries; placing one is addition, and changing a chord's q
 only the strings whose degrees that quality alters — so an open E and a barred B♭m7 come out
 of the same entry. A placement that would fall below the nut, outrun a hand, run off the neck
 or need a fifth finger is refused rather than shown.
+
+**CAGED** — one root's five shapes tiled along a single neck, rather than five separate
+diagrams. Pick a root and the screen places every CAGED shape of its major triad, orders them
+up the neck, and draws them together: the selected one in blue, its neighbours grey, and the
+frets where two of them meet in orange, because a note that belongs to both shapes is the
+thing worth seeing. Roots are filled and thirds and fifths ringed, since finding the root
+inside a shape is the skill the system is for. `← →` walk the cycle, `r` picks another root and
+`i` switches the dots between note names and degrees.
+
+Nothing here is tabulated. The screen asks the same placement arithmetic the chord library
+asks, keeps the lowest placement of each shape, and orders them by fret — and the letters come
+out as a rotation of C-A-G-E-D at every root without anything having said so. C major begins
+with the C shape, A major with the A shape, and a test walks all twelve to prove it.
+
+The neck is fifteen frets here rather than the twelve the other screens draw. Twelve truncates
+the cycle: eight of the twelve roots lose a shape off the end, and C major loses its D shape
+outright, which needs the thirteenth fret. Fourteen is the shortest neck that holds every
+shape at every root; fifteen is what it draws, because the inlays fall on 3-5-7-9-12-15 and a
+neck that ends on a marked fret looks deliberate. The screen states how many shapes it found
+rather than promising five — five is what a major triad yields, and a minor one yields the
+three a guitarist is actually taught.
 
 ## Installing
 
@@ -156,7 +180,13 @@ two read as marks from different families.
 Per-screen accelerators are declared in one table alongside the label the `?` overlay shows
 for them, so a new accelerator documents itself. A key not claimed by the current screen is
 inert there — and one claimed by two screens is free to mean different things on each: `d`
-swaps a trainer's direction and picks the library's degrees.
+swaps a trainer's direction and picks the library's degrees. `r` is the one key that means the
+same thing everywhere it is bound — replace what is on screen.
+
+Two widgets claim the motion keys rather than letting them move the focus ring: a trainer's
+neck, which walks its cursor, and the CAGED window's shape row, where `← →` change the
+selection outright so walking the cycle is one gesture rather than focus-then-activate. Tab is
+the way out of both.
 
 The Chord Library adds the one modal thing in the app: a search box, opened with `/` or
 `Ctrl+K` and focused already when the screen opens, since looking something up starts with
@@ -182,7 +212,7 @@ src/
     chords.rs            ChordQuality and Chord — degrees stacked over a root, spelled the
                          way scales are; the symbol grammar, read in both directions
   ui/
-    mod.rs               App, Screen, Message, the focus grid, Neck and the neck the
+    mod.rs               App, Screen, Message, the focus grid, Neck and the two necks the
                          screens draw, the Home and Scale Trainer views
     note_trainer.rs      the Note Trainer's state machine and the screen that draws it
     interval_trainer.rs  the Interval Trainer's, on the same terms
@@ -191,8 +221,9 @@ src/
     chord_diagram.rs     one voicing as a canvas: a fret window, mutes, barres — its own
                          Layout and its own round-trip test, for the same reason
     shapes.rs            the movable shapes and the voicings they place — instrument
-                         knowledge, belonging to no one screen
+                         knowledge, belonging to neither screen that asks for it
     chord_library.rs     the Chord Library: looking a chord up, and drawing the ways to play it
+    caged.rs             the CAGED window's state and the screen that draws it
 ```
 
 The split is load-bearing: `music/` never imports iced, and the UI holds no music theory of
@@ -205,18 +236,20 @@ same rule, which is why a group in the library can hold both spellings of one pi
 `D♭ F A♭` costs two flats where `C♯ E♯ G♯` costs three sharps, so pitch class 1 is a `D♭`
 major triad and a `C♯` minor one.
 
-The shapes sit in `shapes.rs` rather than inside the screen that used to hold them. A movable
-shape is instrument knowledge, like the tuning and the neck itself, and it lived in a screen
-only because there was one caller. A shape names the CAGED letter it derives from and,
-separately, how it is reduced from the full one; the printed name is built from those two
-rather than stored beside them, so a letter and its name cannot drift apart — and asking for
-the five full shapes is a field rather than a search for a comma in a string.
+The shapes sit in `shapes.rs` rather than inside a screen because two screens place them. A
+movable shape is instrument knowledge, like the tuning and the neck itself, and a screen
+importing another screen is the arrangement that keeping each screen's state and views in one
+module exists to prevent — so the table moved out rather than the new screen reaching across.
+A shape names the CAGED letter it derives from and, separately, how it is reduced from the full
+one; the printed name is built from those two rather than stored beside them. That split is
+what lets the CAGED window ask for the five without parsing a string, since the reduced entries
+are also E and A shapes and also place.
 
-How long a neck is stopped being a constant read from inside the placement arithmetic. A
-`Neck` carries its tuning and its fret count, and the one the screens draw is passed in — so a
-screen that wants a different length asks for one rather than editing what every screen shares.
-A bare `usize` parameter would have done the same work and let a call site pass the wrong
-number without anything failing to compile.
+How long a neck is stopped being one number when a second screen disagreed about it. A `Neck`
+carries its tuning and its fret count, and the two named ones — twelve frets for the drills and
+the library, fifteen for the CAGED window — are passed to the placement arithmetic rather than
+read from a constant inside it. A bare `usize` parameter would have done the same work and let
+a call site pass the wrong number without anything failing to compile.
 
 The line the shapes draw is one step further out. A shape on the neck is instrument
 knowledge rather than theory — no arithmetic produces the fact that guitarists play an E
@@ -227,11 +260,13 @@ stopped is a barre chord: the first finger holds the index fret and the offsets 
 the rest in order. Every placement is that, less the strings that sound open — which is why E
 minor comes out fingered like E major with the third lifted, rather than renumbered from one.
 
-`note_trainer.rs`, `interval_trainer.rs` and `chord_library.rs` each keep their state and
-their views together so the state can keep its fields private — they are read all over those
-views and nowhere else. `App` drives all three through the methods they mark `pub(super)` and
-never reaches past them; what the neck *is* stays in `mod.rs`, since that is the instrument
-rather than the drill, and they all want it on the same terms.
+`note_trainer.rs`, `interval_trainer.rs`, `chord_library.rs` and `caged.rs` each keep their
+state and their views together so the state can keep its fields private — they are read all
+over those views and nowhere else. `App` drives all four through the methods they mark
+`pub(super)` and never reaches past them; what the neck *is* stays in `mod.rs`, since that is
+the instrument rather than the drill, and they all want it on the same terms. The CAGED window
+keeps only a root and an index into the shapes that root produced: the cycle itself is derived
+wherever it is wanted, since a cached list is a field free to disagree with the root beside it.
 
 Key translation is the one thing that moved out of the subscription. It was a stateless
 function of a key press until the library gained a text box, and iced hashes a subscription
@@ -249,9 +284,11 @@ without rendering anything.
 The ones worth knowing about are exhaustive rather than illustrative, because the domain is
 small enough to walk. Every chord on every root is spelled and checked for a repeated letter;
 every voicing the library offers is checked to sound only that chord's notes, to stay within
-a hand, to name a finger for every string it stops and never to cross those fingers. The two canvases each hold a
-round-trip test — every position drawn resolves back to itself when pressed — which is what
-keeps drawing and hit-testing from being edited apart.
+a hand, to name a finger for every string it stops and never to cross those fingers. Every
+root's CAGED cycle is walked and checked to spell a rotation of C-A-G-E-D, which is the claim
+the window rests on and the one thing that would break silently if a shape's offsets were
+edited. The two canvases each hold a round-trip test — every position drawn resolves back to
+itself when pressed — which is what keeps drawing and hit-testing from being edited apart.
 
 ## License
 

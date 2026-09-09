@@ -1,3 +1,4 @@
+mod caged;
 mod chord_diagram;
 mod chord_library;
 mod fretboard;
@@ -7,6 +8,7 @@ mod shapes;
 use std::ops::Range;
 use std::time::Duration;
 
+use caged::{Caged, ui_caged};
 use fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use interval_trainer::{IntervalTrainer, ui_interval_trainer};
 use note_trainer::{NoteTrainer, ui_note_trainer};
@@ -147,6 +149,8 @@ pub struct App {
     /// The Chord Library's query and selections. Its own struct for the reason the two
     /// drills have one: the fields are read all over its views and nowhere else.
     chord_library: ChordLibrary,
+    /// The CAGED window's root and selection, on the same terms.
+    caged: Caged,
 }
 
 /// What the fretboard's markers are labelled with: the notes' names, or the degrees
@@ -178,6 +182,7 @@ pub enum Screen {
     NoteTrainer,
     IntervalTrainer,
     ChordLibrary,
+    Caged,
 }
 
 /// Where the keyboard cursor starts: the open low E, the neck's top-left corner.
@@ -187,23 +192,32 @@ const NECK_STRINGS: usize = STANDARD_TUNING.len();
 /// A neck: what its strings are tuned to, and how many frets it has.
 ///
 /// A named value rather than a `frets: usize` parameter threaded through the placement
-/// arithmetic. `place(.., 12)` and `place(.., 15)` are both well-typed and swapping them
-/// silently lengthens or shortens a neck with nothing failing to compile; a named neck is
-/// chosen once, where the screen that draws it says so.
+/// arithmetic, because the screens no longer agree on the answer. `place(.., 12)` and
+/// `place(.., 15)` are both well-typed and swapping them silently lengthens or shortens a
+/// neck; `DRILL_NECK` and `CAGED_NECK` are named once where they are chosen.
 ///
 /// The tuning travels with the fret count because [`Neck::pitch_class_at`] needs both, and
 /// taking the bound from `self` while reaching for a global for the notes is the worse of the
-/// two. This is not groundwork for alternate tunings — there is one tuning.
+/// two. There is one tuning, and both consts name it.
 struct Neck {
     tuning: [PitchClass; NECK_STRINGS],
     frets: usize,
 }
 
-/// The neck every screen draws. Twelve frets covers every pitch class on every string, which
-/// is all a drill or a chord diagram needs.
+/// The neck the three drills and the Chord Library draw. Twelve frets covers every pitch class
+/// on every string, which is all a drill needs.
 const DRILL_NECK: Neck = Neck {
     tuning: STANDARD_TUNING,
     frets: 12,
+};
+
+/// The neck the CAGED window draws. Fifteen because twelve truncates the cycle — eight of the
+/// twelve roots lose a shape to the neck's end, and C major loses its D shape, which reaches the
+/// thirteenth fret. Fourteen is the shortest that holds every shape; fifteen is taken because
+/// the inlays fall on 3-5-7-9-12-15, so the neck ends on a marked fret.
+const CAGED_NECK: Neck = Neck {
+    tuning: STANDARD_TUNING,
+    frets: 15,
 };
 
 impl Neck {
@@ -245,7 +259,7 @@ impl Position {
     /// `Option` and its reasoning, reached through the named fields.
     ///
     /// Bound to `DRILL_NECK` because only the Interval Trainer holds a `Position`. A neck
-    /// parameter here would thread through a dozen call sites to vary nothing.
+    /// parameter here would be threaded through a dozen call sites to vary nothing.
     fn pitch_class(self) -> Option<PitchClass> {
         DRILL_NECK.pitch_class_at(self.string, self.fret)
     }
@@ -317,6 +331,13 @@ pub enum Message {
     /// Distinct from `ToggleNotation`, which advances: the library shows all three options
     /// at once, and a press on one of them means that one rather than the next.
     SetNotation(usize),
+    /// Picks the root the CAGED window shows.
+    SelectCagedRoot(PitchClass),
+    /// Picks one shape of the CAGED cycle, by its place in the derived order.
+    SelectCagedShape(usize),
+    /// A different root for the CAGED window. Its own variant rather than `RerollScale`,
+    /// which would replace the Scale Trainer's scale from another screen.
+    RerollCagedRoot,
     /// A key press, straight from the subscription and not yet meaning anything.
     ///
     /// The subscription used to translate keys inside its own closure, which worked only
@@ -391,6 +412,16 @@ pub enum FocusTarget {
     /// whenever the box is unfocused, and a third stop in the ring would instead make them
     /// reachable only after tabbing past the list.
     ChordList,
+    /// The CAGED window's root grid, indexed like the Scale Trainer's.
+    CagedRoot(usize),
+    /// The CAGED window's shuffle button: a new root, not a new scale.
+    RerollCagedRoot,
+    /// One shape pill in the CAGED window.
+    ///
+    /// Claims the horizontal motions while focused, as the Chord Library's list does for its
+    /// voicings: the arrows change the selection rather than moving the ring along the row,
+    /// so walking the cycle is one gesture.
+    CagedShape(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -417,7 +448,7 @@ struct MenuItem {
 /// The buttons, the focus grid's item count, and the digit accelerators are all built from
 /// this, so a trainer added here gains all three at once and cannot end up with a button
 /// but no key, or a key labelled with the wrong name.
-const HOME_MENU: [MenuItem; 4] = [
+const HOME_MENU: [MenuItem; 5] = [
     MenuItem {
         label: "Scale Trainer",
         caption: "Explore and learn guitar scales",
@@ -437,6 +468,11 @@ const HOME_MENU: [MenuItem; 4] = [
         label: "Chord Library",
         caption: "Look up a chord and see where it sits",
         screen: Screen::ChordLibrary,
+    },
+    MenuItem {
+        label: "CAGED",
+        caption: "See one chord in all five places on the neck",
+        screen: Screen::Caged,
     },
 ];
 
@@ -476,6 +512,7 @@ impl App {
             note_trainer,
             interval_trainer,
             chord_library: ChordLibrary::new(),
+            caged: Caged::new(),
         };
 
         (app, Task::none())
@@ -593,6 +630,9 @@ impl App {
             Message::SelectChordRow(index) => self.chord_library.select_row(index),
             Message::SelectVoicing(index) => self.chord_library.select_voicing(index),
             Message::SetNotation(index) => self.activate(FocusTarget::NotationChoice(index)),
+            Message::SelectCagedRoot(root) => self.caged.select_root(root),
+            Message::SelectCagedShape(index) => self.caged.select_shape(index),
+            Message::RerollCagedRoot => self.reroll_caged_root(),
             Message::Accelerate(c) => self.accelerate(c),
             // Scoped to the one screen with a box, the way an accelerator a screen does
             // not claim is inert there. `Ctrl+K` reaches here from anywhere, so the guard
@@ -624,6 +664,7 @@ impl App {
         let wants_fresh_prompt = screen == Screen::NoteTrainer;
         let wants_fresh_interval = screen == Screen::IntervalTrainer;
         let wants_the_search_box = screen == Screen::ChordLibrary;
+        let wants_the_caged_window = screen == Screen::Caged;
 
         self.navigate_to(screen);
 
@@ -649,6 +690,13 @@ impl App {
         if wants_the_search_box {
             self.chord_library.enter();
             self.focused = FocusTarget::SearchBox;
+        }
+
+        // Unlike the trainers, this screen reopens on what it last showed: it is a reference
+        // rather than a run, so the root a learner was working on is what they came back for.
+        // `enter` only re-establishes the selection's invariant.
+        if wants_the_caged_window {
+            self.caged.enter();
         }
     }
 
@@ -680,6 +728,21 @@ impl App {
 
             if (root, kind) != current {
                 self.set_scale(root, kind);
+                return;
+            }
+        }
+    }
+
+    /// A different root than the one on show, so a press always changes the neck — the rule
+    /// `reroll_scale` follows, with one field to draw instead of two.
+    fn reroll_caged_root(&mut self) {
+        let current = self.caged.root();
+
+        loop {
+            let root = PitchClass::ALL[self.rng.below(PitchClass::ALL.len())];
+
+            if root != current {
+                self.caged.select_root(root);
                 return;
             }
         }
@@ -747,6 +810,23 @@ impl App {
             return;
         }
 
+        // The pills claim the horizontal pair only, as the library's list claims all four:
+        // walking the cycle is one gesture rather than focus-then-activate. Up and down still
+        // leave the row, since there is nowhere further along it to go.
+        if let FocusTarget::CagedShape(_) = self.focused {
+            let delta = match direction {
+                Direction::Left => Some(-1),
+                Direction::Right => Some(1),
+                Direction::Up | Direction::Down => None,
+            };
+
+            if let Some(delta) = delta {
+                self.caged.move_selection(delta);
+                self.focused = FocusTarget::CagedShape(self.caged.selected());
+                return;
+            }
+        }
+
         let grid = self.focus_grid();
         self.focused = step_focus_2d(&grid, self.focused, direction);
     }
@@ -788,6 +868,13 @@ impl App {
                 }
             }
             FocusTarget::Back => self.go_back(),
+            FocusTarget::CagedRoot(index) => {
+                if let Some(&pitch_class) = PitchClass::ALL.get(index) {
+                    self.caged.select_root(pitch_class);
+                }
+            }
+            FocusTarget::CagedShape(index) => self.caged.select_shape(index),
+            FocusTarget::RerollCagedRoot => self.reroll_caged_root(),
             FocusTarget::NotationToggle => self.toggle_notation(),
             FocusTarget::RerollScale => self.reroll_scale(),
             FocusTarget::Root(index) => {
@@ -854,6 +941,12 @@ impl App {
             Screen::ChordLibrary => with_top_bar(
                 "Chord Library",
                 ui_chord_library(&self.chord_library, self.focused),
+                true,
+                self.focused,
+            ),
+            Screen::Caged => with_top_bar(
+                "CAGED",
+                ui_caged(&self.caged, self.notation, self.focused),
                 true,
                 self.focused,
             ),
@@ -948,6 +1041,43 @@ impl App {
             Screen::Home => (0..HOME_MENU_ITEMS)
                 .map(|i| vec![Some(FocusTarget::HomeMenuItem(i))])
                 .collect(),
+            Screen::Caged => {
+                // Back on a row of its own, as on the two trainers and for the same reason:
+                // the summary card's own controls already fill the row below it.
+                let mut back_row: FocusRow = vec![None; ROOT_ROW_WIDTH];
+                back_row[0] = Some(FocusTarget::Back);
+
+                let mut controls: FocusRow = vec![None; ROOT_ROW_WIDTH];
+                for (cell, target) in controls
+                    .iter_mut()
+                    .zip([FocusTarget::NotationToggle, FocusTarget::RerollCagedRoot])
+                {
+                    *cell = Some(target);
+                }
+
+                let mut grid = vec![back_row, controls];
+
+                // As wide as the cycle turned out to be, which is the same number the caption
+                // states — so a quality yielding three shapes gets three stops, not five.
+                let shapes = self.caged.shapes().len();
+                if shapes > 0 {
+                    grid.push(
+                        (0..shapes)
+                            .map(|i| Some(FocusTarget::CagedShape(i)))
+                            .collect(),
+                    );
+                }
+
+                for (start, len) in root_row_spans() {
+                    grid.push(
+                        (0..len)
+                            .map(|i| Some(FocusTarget::CagedRoot(start + i)))
+                            .collect(),
+                    );
+                }
+
+                grid
+            }
             Screen::ScaleTrainer => {
                 // Two header rows. The summary card's buttons — notation, reroll — sit
                 // along its right edge, and the card is as wide as the root card below
@@ -1113,9 +1243,11 @@ impl App {
         match &self.screen {
             Screen::ScaleTrainer => vec![0..ROOT_ROW_WIDTH, ROOT_ROW_WIDTH..width],
             // These screens have a single card, so one band spans the whole width.
-            Screen::Home | Screen::NoteTrainer | Screen::IntervalTrainer | Screen::ChordLibrary => {
-                vec![0..width]
-            }
+            Screen::Home
+            | Screen::NoteTrainer
+            | Screen::IntervalTrainer
+            | Screen::ChordLibrary
+            | Screen::Caged => vec![0..width],
         }
     }
 
@@ -1352,6 +1484,13 @@ fn accelerators_for(screen: &Screen, notation: Notation) -> Vec<Accelerator> {
                 ('G', FocusTarget::ChordList, "last chord, gg for the first"),
             ]
         }
+        // `r` and `i` mean here what they mean on the Scale Trainer — replace what is on
+        // screen, and switch what the dots say. There is no `d`: this screen has no direction
+        // to swap, and the library's `d` is a notation it does not offer.
+        Screen::Caged => vec![
+            ('r', FocusTarget::RerollCagedRoot, "new root"),
+            ('i', FocusTarget::NotationToggle, "interval notation"),
+        ],
     }
 }
 
@@ -1800,8 +1939,7 @@ fn root_note_row(
     start_index: usize,
     focused: FocusTarget,
 ) -> iced::widget::Row<'static, Message> {
-    use iced::Length;
-    use iced::widget::{button, container, row};
+    use iced::widget::row;
 
     pitch_classes
         .iter()
@@ -1810,36 +1948,57 @@ fn root_note_row(
             let is_selected = *pitch_class == scale.root();
             let color = if is_selected { CANVAS } else { INK };
 
-            let root_button = button(
-                container(note_label(
+            row.push(root_square(
+                note_label(
                     Scale::new(*pitch_class, scale.kind()).root_note(),
                     24,
                     color,
-                ))
-                .width(Length::Fill)
-                .height(Length::Fill)
-                .center_x(Length::Fill)
-                .center_y(Length::Fill),
-            )
-            .width(Length::Fixed(ROOT_BUTTON_SIZE))
-            .height(Length::Fixed(ROOT_BUTTON_SIZE))
-            .padding(0)
-            .style(if is_selected {
-                selected_root_button
-            } else {
-                ghost_button
-            })
-            .on_press(Message::SelectRoot(*pitch_class));
-
-            row.push(focus_ring(
-                container(root_button)
-                    .width(Length::Fixed(ROOT_BUTTON_SIZE))
-                    .height(Length::Fixed(ROOT_BUTTON_SIZE))
-                    .center_x(Length::Fixed(ROOT_BUTTON_SIZE))
-                    .center_y(Length::Fixed(ROOT_BUTTON_SIZE)),
+                ),
+                is_selected,
                 focused == FocusTarget::Root(start_index + i),
+                Message::SelectRoot(*pitch_class),
             ))
         })
+}
+
+/// One square root button, wrapped in its focus ring.
+///
+/// Shared by the Scale Trainer and the CAGED window. The two differ only in what names a root
+/// and what a press on one means, so both are parameters and the geometry is not.
+fn root_square(
+    label: iced::widget::Row<'static, Message>,
+    is_selected: bool,
+    is_focused: bool,
+    message: Message,
+) -> Element<'static, Message> {
+    use iced::Length;
+    use iced::widget::{button, container};
+
+    let square = button(
+        container(label)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    )
+    .width(Length::Fixed(ROOT_BUTTON_SIZE))
+    .height(Length::Fixed(ROOT_BUTTON_SIZE))
+    .padding(0)
+    .style(if is_selected {
+        selected_root_button
+    } else {
+        ghost_button
+    })
+    .on_press(message);
+
+    focus_ring(
+        container(square)
+            .width(Length::Fixed(ROOT_BUTTON_SIZE))
+            .height(Length::Fixed(ROOT_BUTTON_SIZE))
+            .center_x(Length::Fixed(ROOT_BUTTON_SIZE))
+            .center_y(Length::Fixed(ROOT_BUTTON_SIZE)),
+        is_focused,
+    )
 }
 
 fn note_label(
@@ -2822,13 +2981,14 @@ mod tests {
     }
 
     /// Every screen, so a new one cannot quietly escape the checks that sweep them all.
-    pub(super) fn every_screen() -> [Screen; 5] {
+    pub(super) fn every_screen() -> [Screen; 6] {
         [
             Screen::Home,
             Screen::ScaleTrainer,
             Screen::NoteTrainer,
             Screen::IntervalTrainer,
             Screen::ChordLibrary,
+            Screen::Caged,
         ]
     }
 
@@ -2864,7 +3024,109 @@ mod tests {
         let _ = app.update(Message::Key(keyboard::Key::Character(c.into()), modifiers));
     }
 
-    /// Shift+h delivers the capital, not the lowercase letter with a flag set. An earlier
+    #[test]
+    fn the_fifth_digit_opens_the_caged_window() {
+        let mut app = app_with_seed(0xca6);
+        press_into(&mut app, "5", keyboard::Modifiers::empty());
+
+        assert_eq!(app.screen, Screen::Caged);
+        assert!(!app.caged.shapes().is_empty());
+    }
+
+    #[test]
+    fn the_caged_window_reopens_on_the_root_it_was_left_on() {
+        let mut app = app_with_seed(0xca6);
+        app.open(Screen::Caged);
+
+        app.caged.select_root(PitchClass::new(9));
+        app.caged.move_selection(2);
+        let (root, selected) = (app.caged.root(), app.caged.selected());
+
+        app.go_back();
+        app.open(Screen::Caged);
+
+        // A reference rather than a run: unlike the trainers, it comes back to what was on it.
+        assert_eq!(app.caged.root(), root);
+        assert_eq!(app.caged.selected(), selected);
+    }
+
+    #[test]
+    fn the_arrows_walk_the_caged_cycle_without_a_second_press() {
+        let mut app = app_with_seed(0xca6);
+        app.open(Screen::Caged);
+        app.focused = FocusTarget::CagedShape(0);
+
+        app.move_focus(Direction::Right);
+
+        assert_eq!(app.caged.selected(), 1, "the selection did not follow");
+        assert_eq!(
+            app.focused,
+            FocusTarget::CagedShape(1),
+            "the ring did not follow the selection"
+        );
+
+        // Stops at the ends rather than wrapping, as every other row does.
+        app.move_focus(Direction::Left);
+        app.move_focus(Direction::Left);
+        assert_eq!(app.caged.selected(), 0);
+        assert_eq!(app.focused, FocusTarget::CagedShape(0));
+    }
+
+    #[test]
+    fn tab_still_escapes_the_caged_pills() {
+        let mut app = app_with_seed(0xca6);
+        app.open(Screen::Caged);
+        app.focused = FocusTarget::CagedShape(0);
+
+        app.cycle_focus(1);
+
+        assert_ne!(app.focused, FocusTarget::CagedShape(0));
+        assert!(matches!(
+            app.focused,
+            FocusTarget::CagedShape(_) | FocusTarget::CagedRoot(_)
+        ));
+    }
+
+    #[test]
+    fn the_caged_accelerators_act_without_moving_the_ring() {
+        let mut app = app_with_seed(0xca6);
+        app.open(Screen::Caged);
+        app.focused = FocusTarget::Back;
+
+        let root = app.caged.root();
+        press_into(&mut app, "r", keyboard::Modifiers::empty());
+        assert_ne!(app.caged.root(), root, "r left the root alone");
+        assert_eq!(app.focused, FocusTarget::Back);
+
+        assert_eq!(app.notation, Notation::Notes);
+        press_into(&mut app, "i", keyboard::Modifiers::empty());
+        assert_eq!(app.notation, Notation::Intervals);
+        assert_eq!(app.focused, FocusTarget::Back);
+    }
+
+    #[test]
+    fn the_caged_window_claims_neither_a_direction_nor_a_pool() {
+        let mut app = app_with_seed(0xca6);
+        app.open(Screen::Caged);
+
+        let keys: Vec<char> = accelerators_for(&Screen::Caged, app.chord_library.notation())
+            .into_iter()
+            .map(|(key, ..)| key)
+            .collect();
+
+        assert_eq!(keys, ['r', 'i']);
+        for inert in ["d", "a"] {
+            let before = (app.caged.root(), app.caged.selected(), app.notation);
+            press_into(&mut app, inert, keyboard::Modifiers::empty());
+            assert_eq!(
+                (app.caged.root(), app.caged.selected(), app.notation),
+                before,
+                "{inert} did something here"
+            );
+        }
+    }
+
+    /// Shift+h delivers the capital, not the lowercase letter with a flag set. An earlier    /// Shift+h delivers the capital, not the lowercase letter with a flag set. An earlier
     /// version of this test pressed `"h"` with SHIFT — which no keyboard produces — and
     /// passed only because the guard rejected every modifier, Shift included.
     #[test]
@@ -3881,20 +4143,29 @@ mod tests {
     }
 
     #[test]
-    fn a_neck_answers_only_for_its_own_frets() {
-        for fret in 0..=DRILL_NECK.frets() {
+    fn each_neck_answers_only_for_its_own_frets() {
+        // The same string and the same fret, answered differently by the two necks — which is
+        // the whole reason the fret count travels in a value rather than a constant.
+        for fret in 13..=CAGED_NECK.frets() {
+            assert_eq!(
+                CAGED_NECK.pitch_class_at(0, fret),
+                Some(PitchClass::new(4).transpose(fret as u8)),
+                "the CAGED neck is short at fret {fret}"
+            );
             assert_eq!(
                 DRILL_NECK.pitch_class_at(0, fret),
-                Some(PitchClass::new(4).transpose(fret as u8)),
-                "the neck is short at fret {fret}"
+                None,
+                "the drills' neck reaches fret {fret}"
             );
         }
 
-        // The bound is the neck's own, which is what makes a second neck of a different
-        // length a value to pass rather than a constant to edit.
-        assert_eq!(DRILL_NECK.pitch_class_at(0, DRILL_NECK.frets() + 1), None);
-        // Off the fretboard sideways.
-        assert_eq!(DRILL_NECK.pitch_class_at(NECK_STRINGS, 0), None);
+        assert_eq!(CAGED_NECK.pitch_class_at(0, CAGED_NECK.frets() + 1), None);
+        assert_eq!(
+            DRILL_NECK.pitch_class_at(0, DRILL_NECK.frets()),
+            Some(PitchClass::new(4))
+        );
+        // Off the fretboard sideways, on either neck.
+        assert_eq!(CAGED_NECK.pitch_class_at(NECK_STRINGS, 0), None);
     }
 
     #[test]

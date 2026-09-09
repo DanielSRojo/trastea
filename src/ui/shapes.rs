@@ -2,9 +2,8 @@
 //!
 //! A shape is instrument knowledge rather than theory, which is why it lives here and not
 //! in `music/` — the same reason `STANDARD_TUNING` and `pitch_class_at` sit in `ui`. It is
-//! not a screen's either: a shape belongs to the instrument, not to whichever screen asks
-//! about it, and a screen importing another screen is what keeping each screen's state and
-//! views in one module exists to prevent.
+//! not a screen's either: two screens place these shapes, and a screen importing another
+//! screen is what keeping each screen's state and views in one module exists to prevent.
 //!
 //! The curation stops at [`SHAPES`]. Which strings sound and which degree each carries is
 //! a thing guitarists know and no arithmetic produces; everything downstream of that table
@@ -49,11 +48,11 @@ enum StringRole {
 /// Which of the five open major shapes a shape derives from — the letters CAGED is named for.
 ///
 /// An enum rather than the letter inside a name string, because the reduced entries are also
-/// CAGED shapes: `"E shape"` and `"E shape, four strings"` are the same letter to a guitarist
-/// and different values to `==`. `match`ing it is exhaustive on purpose — a sixth shape would
+/// CAGED shapes: `voicings` for a major triad returns seven, and a caller wanting the five has
+/// no predicate without this. `match`ing it is exhaustive on purpose — a sixth shape would
 /// make the compiler name every place that has to decide about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CagedShape {
+pub(super) enum CagedShape {
     C,
     A,
     G,
@@ -696,6 +695,19 @@ impl Voicing {
         self.caged.name(self.reduction)
     }
 
+    pub(super) fn caged(self) -> CagedShape {
+        self.caged
+    }
+
+    /// Whether this is one of the five, rather than a reduction of one.
+    ///
+    /// A field rather than a parse of the name: both reduced Major entries place for a major
+    /// triad, so `voicings` returns seven shapes and a caller wanting the five has nothing else
+    /// to ask.
+    pub(super) fn is_caged(self) -> bool {
+        self.reduction.is_none()
+    }
+
     /// The frets that a finger has to stop. Open strings are sounded by nobody.
     fn stopped(self) -> impl Iterator<Item = u8> {
         self.strings.into_iter().flatten().filter(|&fret| fret > 0)
@@ -1019,7 +1031,7 @@ pub(super) fn position_label(voicing: Voicing) -> String {
 mod tests {
     use super::*;
 
-    use crate::ui::DRILL_NECK;
+    use crate::ui::{CAGED_NECK, DRILL_NECK};
 
     fn pc(semitone: u8) -> PitchClass {
         PitchClass::new(semitone)
@@ -1039,6 +1051,44 @@ mod tests {
     /// The names the entries carried when they were stored strings rather than a letter and a
     /// reduction. Listed rather than derived, so this is a check on the derivation and not a
     /// restatement of it.
+    /// Why `CAGED_NECK` is fifteen frets rather than twelve. The five shapes are the whole
+    /// cycle, and on a twelve-fret neck two thirds of the roots cannot complete it.
+    #[test]
+    fn the_cycle_completes_on_the_caged_neck_and_not_on_the_drills() {
+        let letters = |root: PitchClass, neck: &Neck| {
+            let mut found: Vec<CagedShape> = voicings(Chord::new(root, ChordQuality::Major), neck)
+                .into_iter()
+                .filter(|voicing| voicing.is_caged())
+                .map(Voicing::caged)
+                .collect();
+            found.sort_by_key(|shape| shape.letter());
+            found.dedup();
+            found
+        };
+
+        let truncated: Vec<PitchClass> = PitchClass::ALL
+            .into_iter()
+            .filter(|&root| letters(root, &DRILL_NECK).len() < 5)
+            .collect();
+
+        for root in PitchClass::ALL {
+            assert_eq!(
+                letters(root, &CAGED_NECK).len(),
+                5,
+                "{root:?} is short a shape on a fifteen-fret neck"
+            );
+        }
+
+        // The four that survive twelve frets are the roots of the open shapes themselves.
+        assert_eq!(truncated.len(), 8, "{truncated:?}");
+        let survives: Vec<u8> = PitchClass::ALL
+            .iter()
+            .filter(|root| !truncated.contains(root))
+            .map(|root| root.semitone())
+            .collect();
+        assert_eq!(survives, [2, 4, 7, 9]);
+    }
+
     #[test]
     fn every_shape_is_named_what_it_was_named_before() {
         let expected = [
@@ -1069,6 +1119,48 @@ mod tests {
             .collect();
 
         assert_eq!(names, expected);
+    }
+
+    #[test]
+    fn a_major_triad_offers_the_five_shapes_among_the_reductions() {
+        let c_major = Chord::new(pc(0), ChordQuality::Major);
+        let offered = voicings(c_major, &DRILL_NECK);
+
+        let shapes: Vec<CagedShape> = SHAPES
+            .iter()
+            .filter(|shape| shape.base == ChordQuality::Major)
+            .map(|shape| shape.caged)
+            .collect();
+        assert_eq!(shapes.len(), 7, "{shapes:?}");
+
+        let five: Vec<CagedShape> = SHAPES
+            .iter()
+            .filter(|shape| shape.base == ChordQuality::Major && shape.reduction.is_none())
+            .map(|shape| shape.caged)
+            .collect();
+        assert_eq!(
+            five,
+            [
+                CagedShape::E,
+                CagedShape::A,
+                CagedShape::D,
+                CagedShape::C,
+                CagedShape::G
+            ]
+        );
+
+        // The predicate has to survive placement, not just the table: a reduction that places
+        // is what a screen wanting the five would otherwise have to filter out by name.
+        assert!(offered.iter().any(|voicing| !voicing.is_caged()));
+        assert!(
+            offered
+                .iter()
+                .filter(|voicing| voicing.is_caged())
+                .all(|voicing| matches!(
+                    voicing.caged(),
+                    CagedShape::C | CagedShape::A | CagedShape::G | CagedShape::E | CagedShape::D
+                ))
+        );
     }
 
     #[test]

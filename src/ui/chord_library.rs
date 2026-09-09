@@ -1,7 +1,7 @@
 //! The Chord Library: looking a chord up, and drawing the ways to play it.
 //!
 //! The shapes those ways come from live in [`super::shapes`], not here. They are
-//! instrument knowledge rather than one screen's.
+//! instrument knowledge rather than one screen's, and two screens place them.
 
 use iced::keyboard;
 use iced::widget::canvas;
