@@ -12,10 +12,10 @@ use crate::music::notes::{PitchClass, Spelling};
 use super::chord_diagram::{ChordDiagram, FEATURE, STRIP, StringMark, chord_diagram};
 use super::shapes::{Voicing, position_label, voicings};
 use super::{
-    BODY, FocusTarget, HAIRLINE_INK, INK, MUSIC_FONT, MUTE, Message, Notation,
+    BODY, DRILL_NECK, FocusTarget, HAIRLINE_INK, INK, MUSIC_FONT, MUTE, Message, Notation,
     SMUFL_CSYM_AUGMENTED, SMUFL_CSYM_DIMINISHED, SMUFL_CSYM_HALF_DIMINISHED,
     SMUFL_CSYM_MAJOR_SEVENTH, SMUFL_SHARP, SUCCESS, card_container, focus_ring, ghost_button,
-    hairline_rule, intervalic_text, note_label, pitch_class_at,
+    hairline_rule, intervalic_text, note_label,
 };
 
 /// The library's state: what has been typed, which root it settled on, and what is picked.
@@ -192,7 +192,7 @@ impl ChordLibrary {
     pub(super) fn select_voicing(&mut self, index: usize) {
         let count = self
             .selected_chord()
-            .map_or(0, |chord| voicings(chord).len());
+            .map_or(0, |chord| voicings(chord, &DRILL_NECK).len());
 
         if index < count {
             self.selected_voicing = index;
@@ -214,7 +214,7 @@ impl ChordLibrary {
     pub(super) fn move_voicing(&mut self, delta: isize) {
         let count = self
             .selected_chord()
-            .map_or(0, |chord| voicings(chord).len());
+            .map_or(0, |chord| voicings(chord, &DRILL_NECK).len());
         if count == 0 {
             return;
         }
@@ -496,7 +496,7 @@ fn mark_label(
     string: usize,
     fret: u8,
 ) -> String {
-    let Some(sounding) = pitch_class_at(string, usize::from(fret)) else {
+    let Some(sounding) = DRILL_NECK.pitch_class_at(string, usize::from(fret)) else {
         return String::new();
     };
 
@@ -525,7 +525,8 @@ fn diagram_for(chord: Chord, voicing: Voicing, notation: Notation) -> ChordDiagr
     ChordDiagram {
         strings: std::array::from_fn(|string| {
             let fret = frets[string];
-            let sounding = fret.and_then(|fret| pitch_class_at(string, usize::from(fret)));
+            let sounding =
+                fret.and_then(|fret| DRILL_NECK.pitch_class_at(string, usize::from(fret)));
 
             StringMark {
                 fret,
@@ -827,7 +828,7 @@ fn detail_pane(
     .padding(24)
     .style(card_container);
 
-    let shapes = voicings(chord);
+    let shapes = voicings(chord, &DRILL_NECK);
     let strip: iced::Element<'static, Message> = if shapes.is_empty() {
         // Specified rather than hidden: the chord keeps its notes and degrees, and the
         // screen says why there is nothing to look at.
@@ -1197,7 +1198,11 @@ mod tests {
         let mut library = typed("e");
         library.select_row(0);
 
-        let count = voicings(library.selected_chord().expect("E major is listed")).len();
+        let count = voicings(
+            library.selected_chord().expect("E major is listed"),
+            &DRILL_NECK,
+        )
+        .len();
         assert!(count > 1, "E major should offer more than one shape");
 
         library.move_voicing(1);
@@ -1227,7 +1232,10 @@ mod tests {
             for &kind in ChordQuality::ALL {
                 let chord = Chord::new(root, kind);
 
-                assert!(!voicings(chord).is_empty(), "{chord} cannot be played");
+                assert!(
+                    !voicings(chord, &DRILL_NECK).is_empty(),
+                    "{chord} cannot be played"
+                );
             }
         }
     }

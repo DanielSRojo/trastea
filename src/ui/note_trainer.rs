@@ -13,11 +13,11 @@ use iced::{Color, Element, Padding};
 
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::{
-    ANSWER_ROW_WIDTH, BODY, CANVAS, CONTROL_SIZE, CURSOR_HOME, DANGER, Direction, Drill,
-    FocusTarget, INK, LINK, MUTE, Message, NECK_FRETS, NECK_STRINGS, ROOT_BUTTON_SIZE,
+    ANSWER_ROW_WIDTH, BODY, CANVAS, CONTROL_SIZE, CURSOR_HOME, DANGER, DRILL_NECK, Direction,
+    Drill, FocusTarget, INK, LINK, MUTE, Message, NECK_STRINGS, ROOT_BUTTON_SIZE,
     SELECTOR_CARD_HEIGHT, SMUFL_FLAT, SMUFL_SHARP, SUCCESS, SUMMARY_CARD_HEIGHT, card_container,
     control_accidental, control_button, control_label, control_shuffle, correct_answer_button,
-    focus_ring, ghost_button, note_label, pitch_class_at, streak_readout, wrong_answer_button,
+    focus_ring, ghost_button, note_label, streak_readout, wrong_answer_button,
 };
 use crate::music::notes::{PitchClass, Spelling};
 use crate::rng::Rng;
@@ -146,8 +146,11 @@ impl NoteTrainer {
         let mut positions = Vec::new();
 
         for string in 0..NECK_STRINGS {
-            for fret in 0..=NECK_FRETS {
-                if pitch_class_at(string, fret).is_some_and(|pc| self.pool.contains(pc)) {
+            for fret in 0..=DRILL_NECK.frets() {
+                if DRILL_NECK
+                    .pitch_class_at(string, fret)
+                    .is_some_and(|pc| self.pool.contains(pc))
+                {
                     positions.push((string, fret));
                 }
             }
@@ -206,12 +209,12 @@ impl NoteTrainer {
     fn judge(&self, answer: Answer) -> bool {
         match (self.prompt, answer) {
             (Prompt::NameIt { string, fret }, Answer::Name(named)) => {
-                pitch_class_at(string, fret) == Some(named)
+                DRILL_NECK.pitch_class_at(string, fret) == Some(named)
             }
             // Any position carrying the note counts: a note really is in seven places
             // within twelve frets, and none of them is more correct than another.
             (Prompt::FindIt(target), Answer::Position { string, fret }) => {
-                pitch_class_at(string, fret) == Some(target)
+                DRILL_NECK.pitch_class_at(string, fret) == Some(target)
             }
             // A mismatched pair is a wiring bug, not something a user can produce — the
             // view only draws the surface the current prompt accepts. `false` rather than
@@ -366,7 +369,7 @@ impl NoteTrainer {
             Direction::Left => (string.saturating_sub(1), fret),
             Direction::Right => ((string + 1).min(NECK_STRINGS - 1), fret),
             Direction::Up => (string, fret.saturating_sub(1)),
-            Direction::Down => (string, (fret + 1).min(NECK_FRETS)),
+            Direction::Down => (string, (fret + 1).min(DRILL_NECK.frets())),
         };
     }
 }
@@ -385,14 +388,14 @@ pub(super) fn ui_note_trainer(
     let neck = match trainer.prompt {
         // The prompt itself: one ring — see `prompt_marker`.
         Prompt::NameIt { .. } => Fretboard {
-            num_frets: NECK_FRETS,
+            num_frets: DRILL_NECK.frets(),
             highlighted: prompt_marker(trainer),
             ..Fretboard::default()
         },
         // Here the neck is the answer surface, so it takes a press handler and shows the
         // cursor. Guesses stay marked on it until the prompt advances.
         Prompt::FindIt(_) => Fretboard {
-            num_frets: NECK_FRETS,
+            num_frets: DRILL_NECK.frets(),
             highlighted: position_markers(trainer),
             cursor: Some(trainer.cursor),
             on_press: Some(Message::ChooseNotePosition),
@@ -678,13 +681,13 @@ mod tests {
 
     /// Every position on the neck, in the order the drill enumerates them.
     fn all_positions() -> impl Iterator<Item = (usize, usize)> {
-        (0..NECK_STRINGS).flat_map(|s| (0..=NECK_FRETS).map(move |f| (s, f)))
+        (0..NECK_STRINGS).flat_map(|s| (0..=DRILL_NECK.frets()).map(move |f| (s, f)))
     }
 
     /// The pitch class the current prompt is about, whichever direction it runs.
     fn prompt_pitch_class(trainer: &NoteTrainer) -> PitchClass {
         match trainer.prompt {
-            Prompt::NameIt { string, fret } => pitch_class_at(string, fret).unwrap(),
+            Prompt::NameIt { string, fret } => DRILL_NECK.pitch_class_at(string, fret).unwrap(),
             Prompt::FindIt(target) => target,
         }
     }
@@ -692,10 +695,12 @@ mod tests {
     /// An answer that satisfies the current prompt.
     fn correct_answer(trainer: &NoteTrainer) -> Answer {
         match trainer.prompt {
-            Prompt::NameIt { string, fret } => Answer::Name(pitch_class_at(string, fret).unwrap()),
+            Prompt::NameIt { string, fret } => {
+                Answer::Name(DRILL_NECK.pitch_class_at(string, fret).unwrap())
+            }
             Prompt::FindIt(target) => {
                 let (string, fret) = all_positions()
-                    .find(|&(s, f)| pitch_class_at(s, f) == Some(target))
+                    .find(|&(s, f)| DRILL_NECK.pitch_class_at(s, f) == Some(target))
                     .expect("every pitch class appears within twelve frets");
                 Answer::Position { string, fret }
             }
@@ -706,7 +711,7 @@ mod tests {
     fn wrong_answer(trainer: &NoteTrainer) -> Answer {
         match trainer.prompt {
             Prompt::NameIt { string, fret } => {
-                let actual = pitch_class_at(string, fret).unwrap();
+                let actual = DRILL_NECK.pitch_class_at(string, fret).unwrap();
                 let other = PitchClass::ALL
                     .into_iter()
                     .find(|&pc| pc != actual)
@@ -715,7 +720,7 @@ mod tests {
             }
             Prompt::FindIt(target) => {
                 let (string, fret) = all_positions()
-                    .find(|&(s, f)| pitch_class_at(s, f) != Some(target))
+                    .find(|&(s, f)| DRILL_NECK.pitch_class_at(s, f) != Some(target))
                     .unwrap();
                 Answer::Position { string, fret }
             }
@@ -857,7 +862,7 @@ mod tests {
         let (mut trainer, mut rng) = trainer_with_seed(0x5eed);
         trainer.prompt = Prompt::NameIt { string: 0, fret: 0 };
 
-        let actual = pitch_class_at(0, 0).unwrap();
+        let actual = DRILL_NECK.pitch_class_at(0, 0).unwrap();
         let wrongs: Vec<Answer> = PitchClass::ALL
             .into_iter()
             .filter(|&pc| pc != actual)
@@ -921,7 +926,7 @@ mod tests {
         // Open low E plus two semitones — F sharp, or G flat.
         trainer.prompt = Prompt::NameIt { string: 0, fret: 2 };
 
-        let pitch_class = pitch_class_at(0, 2).unwrap();
+        let pitch_class = DRILL_NECK.pitch_class_at(0, 2).unwrap();
         assert_eq!(Spelling::Sharps.spell(pitch_class).to_string(), "F#");
         assert_eq!(Spelling::Flats.spell(pitch_class).to_string(), "Gb");
 
@@ -987,7 +992,7 @@ mod tests {
         let mut accepted = 0;
         for (string, fret) in all_positions() {
             let answer = Answer::Position { string, fret };
-            let carries_it = pitch_class_at(string, fret) == Some(target);
+            let carries_it = DRILL_NECK.pitch_class_at(string, fret) == Some(target);
 
             assert_eq!(trainer.judge(answer), carries_it, "({string}, {fret})");
             accepted += usize::from(carries_it);
@@ -1005,8 +1010,8 @@ mod tests {
         trainer.prompt = Prompt::NameIt { string: 0, fret: 0 };
         assert!(!trainer.judge(Answer::Position { string: 0, fret: 0 }));
 
-        trainer.prompt = Prompt::FindIt(pitch_class_at(0, 0).unwrap());
-        assert!(!trainer.judge(Answer::Name(pitch_class_at(0, 0).unwrap())));
+        trainer.prompt = Prompt::FindIt(DRILL_NECK.pitch_class_at(0, 0).unwrap());
+        assert!(!trainer.judge(Answer::Name(DRILL_NECK.pitch_class_at(0, 0).unwrap())));
     }
 
     #[test]
@@ -1065,17 +1070,17 @@ mod tests {
         trainer.move_cursor(Direction::Up);
         assert_eq!(trainer.cursor, (0, 0), "walked off the nut");
 
-        trainer.cursor = (NECK_STRINGS - 1, NECK_FRETS);
+        trainer.cursor = (NECK_STRINGS - 1, DRILL_NECK.frets());
         trainer.move_cursor(Direction::Right);
         assert_eq!(
             trainer.cursor,
-            (NECK_STRINGS - 1, NECK_FRETS),
+            (NECK_STRINGS - 1, DRILL_NECK.frets()),
             "walked off the high e"
         );
         trainer.move_cursor(Direction::Down);
         assert_eq!(
             trainer.cursor,
-            (NECK_STRINGS - 1, NECK_FRETS),
+            (NECK_STRINGS - 1, DRILL_NECK.frets()),
             "walked off the last fret"
         );
     }
@@ -1103,8 +1108,8 @@ mod tests {
             trainer.pool = pool;
 
             for (string, fret) in trainer.positions() {
-                assert!(string < NECK_STRINGS && fret <= NECK_FRETS);
-                assert!(pool.contains(pitch_class_at(string, fret).unwrap()));
+                assert!(string < NECK_STRINGS && fret <= DRILL_NECK.frets());
+                assert!(pool.contains(DRILL_NECK.pitch_class_at(string, fret).unwrap()));
             }
         }
     }
@@ -1272,9 +1277,9 @@ mod tests {
     fn tab_always_escapes_the_neck() {
         for cursor in [
             (0, 0),
-            (0, NECK_FRETS),
+            (0, DRILL_NECK.frets()),
             (NECK_STRINGS - 1, 0),
-            (NECK_STRINGS - 1, NECK_FRETS),
+            (NECK_STRINGS - 1, DRILL_NECK.frets()),
             (3, 6),
         ] {
             let mut app = find_it_app(9);
@@ -1314,7 +1319,7 @@ mod tests {
 
         // Park the cursor on a position that plays the prompted note, then press Enter.
         let (string, fret) = all_positions()
-            .find(|&(s, f)| pitch_class_at(s, f) == Some(target))
+            .find(|&(s, f)| DRILL_NECK.pitch_class_at(s, f) == Some(target))
             .unwrap();
         app.note_trainer.cursor = (string, fret);
 
@@ -1334,7 +1339,7 @@ mod tests {
         };
 
         let (string, fret) = all_positions()
-            .find(|&(s, f)| pitch_class_at(s, f) != Some(target))
+            .find(|&(s, f)| DRILL_NECK.pitch_class_at(s, f) != Some(target))
             .unwrap();
         app.note_trainer.cursor = (string, fret);
 
@@ -1464,7 +1469,7 @@ mod tests {
             unreachable!()
         };
         let (string, fret) = all_positions()
-            .find(|&(s, f)| pitch_class_at(s, f) == Some(target))
+            .find(|&(s, f)| DRILL_NECK.pitch_class_at(s, f) == Some(target))
             .unwrap();
 
         let _ = app.update(Message::ChooseNotePosition(string, fret));

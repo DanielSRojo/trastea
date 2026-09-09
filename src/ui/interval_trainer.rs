@@ -17,8 +17,8 @@ use iced::{Color, Element, Padding};
 
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::{
-    ANSWER_ROW_WIDTH, BODY, CANVAS, CONTROL_SIZE, CURSOR_HOME, DANGER, Direction, Drill,
-    FocusTarget, INK, LINK, MUSIC_FONT, MUTE, Message, NECK_FRETS, NECK_STRINGS, Position,
+    ANSWER_ROW_WIDTH, BODY, CANVAS, CONTROL_SIZE, CURSOR_HOME, DANGER, DRILL_NECK, Direction,
+    Drill, FocusTarget, INK, LINK, MUSIC_FONT, MUTE, Message, NECK_STRINGS, Position,
     ROOT_BUTTON_SIZE, ROOT_MARKER, SELECTOR_CARD_HEIGHT, SUCCESS, SUMMARY_CARD_HEIGHT,
     card_container, control_button, control_label, control_shuffle, correct_answer_button,
     focus_ring, ghost_button, interval_token, streak_readout, wrong_answer_button,
@@ -167,7 +167,7 @@ impl Prompt {
 /// list, so everything downstream has one in hand.
 fn neck() -> Vec<(Position, PitchClass)> {
     (0..NECK_STRINGS)
-        .flat_map(|string| (0..=NECK_FRETS).map(move |fret| Position { string, fret }))
+        .flat_map(|string| (0..=DRILL_NECK.frets()).map(move |fret| Position { string, fret }))
         .filter_map(|position| position.pitch_class().map(|pitch| (position, pitch)))
         .collect()
 }
@@ -432,7 +432,7 @@ impl IntervalTrainer {
             },
             Direction::Down => Position {
                 string,
-                fret: (fret + 1).min(NECK_FRETS),
+                fret: (fret + 1).min(DRILL_NECK.frets()),
             },
         };
     }
@@ -459,7 +459,7 @@ pub(super) fn ui_interval_trainer(
     let neck = match trainer.prompt {
         // Two rings and nothing else — see `prompt_markers`.
         Prompt::NameIt { .. } => Fretboard {
-            num_frets: NECK_FRETS,
+            num_frets: DRILL_NECK.frets(),
             highlighted: prompt_markers(trainer),
             ..Fretboard::default()
         },
@@ -467,7 +467,7 @@ pub(super) fn ui_interval_trainer(
         // cursor. The root ring stays on it: it is the thing the interval is measured from,
         // and hiding it would leave the prompt with no anchor.
         Prompt::FindIt { .. } => Fretboard {
-            num_frets: NECK_FRETS,
+            num_frets: DRILL_NECK.frets(),
             highlighted: prompt_markers(trainer)
                 .into_iter()
                 .chain(position_markers(trainer))
@@ -880,10 +880,10 @@ mod tests {
     fn the_neck_is_every_position_and_nothing_off_it() {
         let neck = neck();
 
-        assert_eq!(neck.len(), NECK_STRINGS * (NECK_FRETS + 1));
+        assert_eq!(neck.len(), NECK_STRINGS * (DRILL_NECK.frets() + 1));
         for (position, pitch) in &neck {
             assert!(position.string < NECK_STRINGS);
-            assert!(position.fret <= NECK_FRETS);
+            assert!(position.fret <= DRILL_NECK.frets());
             assert_eq!(position.pitch_class(), Some(*pitch));
         }
     }
@@ -953,7 +953,7 @@ mod tests {
                 root,
                 Position {
                     string: 0,
-                    fret: NECK_FRETS + 1
+                    fret: DRILL_NECK.frets() + 1
                 }
             ),
             None
@@ -1172,7 +1172,7 @@ mod tests {
 
         assert!(!trainer.judge(Answer::Position(Position {
             string: 0,
-            fret: NECK_FRETS + 1
+            fret: DRILL_NECK.frets() + 1
         })));
     }
 
@@ -1321,7 +1321,7 @@ mod tests {
         }
         assert_eq!(trainer.cursor, Position { string: 0, fret: 0 });
 
-        for _ in 0..NECK_STRINGS + NECK_FRETS + 4 {
+        for _ in 0..NECK_STRINGS + DRILL_NECK.frets() + 4 {
             trainer.move_cursor(Direction::Right);
             trainer.move_cursor(Direction::Down);
         }
@@ -1329,7 +1329,7 @@ mod tests {
             trainer.cursor,
             Position {
                 string: NECK_STRINGS - 1,
-                fret: NECK_FRETS
+                fret: DRILL_NECK.frets()
             }
         );
     }

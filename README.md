@@ -182,8 +182,8 @@ src/
     chords.rs            ChordQuality and Chord — degrees stacked over a root, spelled the
                          way scales are; the symbol grammar, read in both directions
   ui/
-    mod.rs               App, Screen, Message, the focus grid, the neck's geometry, the
-                         Home and Scale Trainer views
+    mod.rs               App, Screen, Message, the focus grid, Neck and the neck the
+                         screens draw, the Home and Scale Trainer views
     note_trainer.rs      the Note Trainer's state machine and the screen that draws it
     interval_trainer.rs  the Interval Trainer's, on the same terms
     fretboard.rs         the neck as an iced canvas widget: one Layout drives both drawing
@@ -211,6 +211,12 @@ only because there was one caller. A shape names the CAGED letter it derives fro
 separately, how it is reduced from the full one; the printed name is built from those two
 rather than stored beside them, so a letter and its name cannot drift apart — and asking for
 the five full shapes is a field rather than a search for a comma in a string.
+
+How long a neck is stopped being a constant read from inside the placement arithmetic. A
+`Neck` carries its tuning and its fret count, and the one the screens draw is passed in — so a
+screen that wants a different length asks for one rather than editing what every screen shares.
+A bare `usize` parameter would have done the same work and let a call site pass the wrong
+number without anything failing to compile.
 
 The line the shapes draw is one step further out. A shape on the neck is instrument
 knowledge rather than theory — no arithmetic produces the fact that guitarists play an E

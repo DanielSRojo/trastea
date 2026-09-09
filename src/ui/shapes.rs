@@ -16,7 +16,7 @@ use crate::music::chords::{Chord, ChordQuality};
 use crate::music::notes::PitchClass;
 
 use super::chord_diagram::window_for;
-use super::{NECK_FRETS, STANDARD_TUNING};
+use super::{Neck, STANDARD_TUNING};
 
 /// How many frets apart a shape's stopped notes may sit.
 ///
@@ -871,7 +871,13 @@ impl Shape {
     /// a stopped fret below the nut, a stretch beyond `REACH`, or a fret past the neck.
     /// A refusal is ordinary — most shapes cannot be played at most positions — so it is
     /// an absent voicing rather than an error anyone reports.
-    fn place(&self, root: PitchClass, kind: ChordQuality, index_fret: u8) -> Option<Voicing> {
+    fn place(
+        &self,
+        root: PitchClass,
+        kind: ChordQuality,
+        index_fret: u8,
+        neck: &Neck,
+    ) -> Option<Voicing> {
         if !self.carries(kind) {
             return None;
         }
@@ -891,7 +897,7 @@ impl Shape {
             let fret = i16::from(index_fret) + i16::from(offset) + self.shift(degree, kind)?;
             let fret = u8::try_from(fret).ok()?;
 
-            if fret > NECK_FRETS as u8 {
+            if usize::from(fret) > neck.frets() {
                 return None;
             }
 
@@ -978,12 +984,13 @@ impl Shape {
 ///
 /// Each shape is tried at every fret it could sit at rather than only at the first: a
 /// shape repeats up the neck an octave later, and both placements are worth showing.
-pub(super) fn voicings(chord: Chord) -> Vec<Voicing> {
+pub(super) fn voicings(chord: Chord, neck: &Neck) -> Vec<Voicing> {
     let mut found: Vec<Voicing> = SHAPES
         .iter()
         .flat_map(|shape| {
-            (0..=NECK_FRETS as u8)
-                .filter_map(move |index_fret| shape.place(chord.root(), chord.kind(), index_fret))
+            (0..=neck.frets() as u8).filter_map(move |index_fret| {
+                shape.place(chord.root(), chord.kind(), index_fret, neck)
+            })
         })
         .collect();
 
@@ -1012,6 +1019,8 @@ pub(super) fn position_label(voicing: Voicing) -> String {
 mod tests {
     use super::*;
 
+    use crate::ui::DRILL_NECK;
+
     fn pc(semitone: u8) -> PitchClass {
         PitchClass::new(semitone)
     }
@@ -1021,7 +1030,7 @@ mod tests {
     }
 
     fn only(chord: Chord, name: &str, index_fret: u8) -> Voicing {
-        voicings(chord)
+        voicings(chord, &DRILL_NECK)
             .into_iter()
             .find(|v| v.shape_name() == name && v.index_fret() == index_fret)
             .unwrap_or_else(|| panic!("{name} at {index_fret} is not offered for {chord}"))
@@ -1268,7 +1277,7 @@ mod tests {
                     .map(|interval| root.transpose(interval.semitones()))
                     .collect();
 
-                for voicing in voicings(chord) {
+                for voicing in voicings(chord, &DRILL_NECK) {
                     for (string, fret) in voicing.strings().iter().enumerate() {
                         let Some(fret) = *fret else { continue };
                         let sounded = STANDARD_TUNING[string].transpose(fret % 12);
@@ -1289,12 +1298,12 @@ mod tests {
     fn a_voicing_stays_on_the_neck_and_within_a_hand() {
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
-                for voicing in voicings(Chord::new(root, kind)) {
+                for voicing in voicings(Chord::new(root, kind), &DRILL_NECK) {
                     let stopped: Vec<u8> = voicing.stopped().collect();
 
                     for fret in voicing.strings().iter().flatten() {
                         assert!(
-                            *fret <= NECK_FRETS as u8,
+                            *fret <= DRILL_NECK.frets() as u8,
                             "{root:?} {kind:?} runs off the neck"
                         );
                     }
@@ -1315,7 +1324,7 @@ mod tests {
     fn voicings_are_ordered_up_the_neck() {
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
-                let found = voicings(Chord::new(root, kind));
+                let found = voicings(Chord::new(root, kind), &DRILL_NECK);
 
                 for pair in found.windows(2) {
                     assert!(pair[0].index_fret() <= pair[1].index_fret());
@@ -1341,7 +1350,7 @@ mod tests {
         // would read `3fr` over a picture of the nut.
         let c_dim7 = Chord::new(pc(0), ChordQuality::Diminished7);
 
-        for voicing in voicings(c_dim7) {
+        for voicing in voicings(c_dim7, &DRILL_NECK) {
             let window = window_for(&voicing.strings());
             let caption = position_label(voicing);
 
@@ -1357,7 +1366,7 @@ mod tests {
     fn every_caption_agrees_with_its_window() {
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
-                for voicing in voicings(Chord::new(root, kind)) {
+                for voicing in voicings(Chord::new(root, kind), &DRILL_NECK) {
                     let window = window_for(&voicing.strings());
                     let caption = position_label(voicing);
 
@@ -1379,11 +1388,11 @@ mod tests {
         let c_minor = Chord::new(pc(0), ChordQuality::Minor);
 
         assert!(
-            !voicings(c_minor)
+            !voicings(c_minor, &DRILL_NECK)
                 .iter()
                 .any(|v| v.shape_name() == "C shape" && v.index_fret() == 0)
         );
-        assert!(!voicings(c_minor).is_empty());
+        assert!(!voicings(c_minor, &DRILL_NECK).is_empty());
     }
 
     #[test]
@@ -1404,7 +1413,7 @@ mod tests {
         // stopped strings for four fingers — the fifth drew a dot with no number in it.
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
-                for voicing in voicings(Chord::new(root, kind)) {
+                for voicing in voicings(Chord::new(root, kind), &DRILL_NECK) {
                     let fingers = voicing.fingers();
 
                     for (string, fret) in voicing.strings().iter().enumerate() {
@@ -1425,7 +1434,7 @@ mod tests {
     fn a_barre_sits_on_the_lowest_stopped_fret() {
         // Not on the shape's index fret, which is what it used to read.
         let c_sharp_dim7 = Chord::new(pc(1), ChordQuality::Diminished7);
-        let voicing = voicings(c_sharp_dim7)
+        let voicing = voicings(c_sharp_dim7, &DRILL_NECK)
             .into_iter()
             .find(|v| v.shape_name() == "A shape")
             .expect("the A shape carries a diminished seventh");
@@ -1452,7 +1461,7 @@ mod tests {
     fn a_barre_takes_the_first_finger_and_nothing_exceeds_the_fourth() {
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
-                for voicing in voicings(Chord::new(root, kind)) {
+                for voicing in voicings(Chord::new(root, kind), &DRILL_NECK) {
                     let fingers = voicing.fingers();
 
                     for (string, finger) in fingers.iter().enumerate() {
@@ -1705,7 +1714,7 @@ mod tests {
     fn no_voicing_in_the_library_crosses_its_fingers() {
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
-                for voicing in voicings(Chord::new(root, kind)) {
+                for voicing in voicings(Chord::new(root, kind), &DRILL_NECK) {
                     let fingers = voicing.fingers();
                     let mut assigned: Vec<(u8, u8)> = (0..6)
                         .filter_map(|string| Some((fingers[string]?, voicing.strings()[string]?)))
@@ -1736,7 +1745,7 @@ mod tests {
         // where the two can differ.
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
-                for voicing in voicings(Chord::new(root, kind)) {
+                for voicing in voicings(Chord::new(root, kind), &DRILL_NECK) {
                     if voicing.fingers() == voicing.ordered_fingering() {
                         continue;
                     }
@@ -1759,7 +1768,7 @@ mod tests {
         let total: usize = PitchClass::ALL
             .iter()
             .flat_map(|&root| ChordQuality::ALL.iter().map(move |&kind| (root, kind)))
-            .map(|(root, kind)| voicings(Chord::new(root, kind)).len())
+            .map(|(root, kind)| voicings(Chord::new(root, kind), &DRILL_NECK).len())
             .sum();
 
         assert_eq!(total, 592);
@@ -1770,7 +1779,7 @@ mod tests {
         // The property the ordering guarantees, across every chord in the roster.
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
-                for voicing in voicings(Chord::new(root, kind)) {
+                for voicing in voicings(Chord::new(root, kind), &DRILL_NECK) {
                     let fingers = voicing.fingers();
                     let barre = voicing.barre_fret();
 

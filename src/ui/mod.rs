@@ -183,17 +183,44 @@ pub enum Screen {
 /// Where the keyboard cursor starts: the open low E, the neck's top-left corner.
 const CURSOR_HOME: (usize, usize) = (0, 0);
 const NECK_STRINGS: usize = STANDARD_TUNING.len();
-const NECK_FRETS: usize = 12;
 
-/// The note at a position in standard tuning, or `None` off the neck.
+/// A neck: what its strings are tuned to, and how many frets it has.
 ///
-/// `Option` rather than an index that panics: the callers are a click and a cursor, and a
-/// bounds bug should misjudge one answer rather than take the process down.
-fn pitch_class_at(string: usize, fret: usize) -> Option<PitchClass> {
-    (fret <= NECK_FRETS)
-        .then(|| STANDARD_TUNING.get(string))
-        .flatten()
-        .map(|open| open.transpose(fret as u8))
+/// A named value rather than a `frets: usize` parameter threaded through the placement
+/// arithmetic. `place(.., 12)` and `place(.., 15)` are both well-typed and swapping them
+/// silently lengthens or shortens a neck with nothing failing to compile; a named neck is
+/// chosen once, where the screen that draws it says so.
+///
+/// The tuning travels with the fret count because [`Neck::pitch_class_at`] needs both, and
+/// taking the bound from `self` while reaching for a global for the notes is the worse of the
+/// two. This is not groundwork for alternate tunings — there is one tuning.
+struct Neck {
+    tuning: [PitchClass; NECK_STRINGS],
+    frets: usize,
+}
+
+/// The neck every screen draws. Twelve frets covers every pitch class on every string, which
+/// is all a drill or a chord diagram needs.
+const DRILL_NECK: Neck = Neck {
+    tuning: STANDARD_TUNING,
+    frets: 12,
+};
+
+impl Neck {
+    const fn frets(&self) -> usize {
+        self.frets
+    }
+
+    /// The note at a position on this neck, or `None` off it.
+    ///
+    /// `Option` rather than an index that panics: the callers are a click and a cursor, and a
+    /// bounds bug should misjudge one answer rather than take the process down.
+    fn pitch_class_at(&self, string: usize, fret: usize) -> Option<PitchClass> {
+        (fret <= self.frets)
+            .then(|| self.tuning.get(string))
+            .flatten()
+            .map(|open| open.transpose(fret as u8))
+    }
 }
 
 /// One place on the neck.
@@ -214,10 +241,13 @@ struct Position {
 }
 
 impl Position {
-    /// The pitch class sounding here, or `None` off the neck — `pitch_class_at`'s `Option`
-    /// and its reasoning, reached through the named fields.
+    /// The pitch class sounding here, or `None` off the neck — `Neck::pitch_class_at`'s
+    /// `Option` and its reasoning, reached through the named fields.
+    ///
+    /// Bound to `DRILL_NECK` because only the Interval Trainer holds a `Position`. A neck
+    /// parameter here would thread through a dozen call sites to vary nothing.
     fn pitch_class(self) -> Option<PitchClass> {
-        pitch_class_at(self.string, self.fret)
+        DRILL_NECK.pitch_class_at(self.string, self.fret)
     }
 }
 
@@ -1616,7 +1646,7 @@ fn ui_scale_trainer(
     // Display only: no press handler and no cursor, so the neck stays the picture it has
     // always been here. `Message` is inferred from the `Element` this becomes.
     let fb = Fretboard {
-        num_frets: 12,
+        num_frets: DRILL_NECK.frets(),
         highlighted: scale_markers(scale, notation),
         ..Fretboard::default()
     };
@@ -3848,6 +3878,23 @@ mod tests {
             .expect("the open low E is in E Ionian");
 
         assert_eq!(open_low_e.label, "E");
+    }
+
+    #[test]
+    fn a_neck_answers_only_for_its_own_frets() {
+        for fret in 0..=DRILL_NECK.frets() {
+            assert_eq!(
+                DRILL_NECK.pitch_class_at(0, fret),
+                Some(PitchClass::new(4).transpose(fret as u8)),
+                "the neck is short at fret {fret}"
+            );
+        }
+
+        // The bound is the neck's own, which is what makes a second neck of a different
+        // length a value to pass rather than a constant to edit.
+        assert_eq!(DRILL_NECK.pitch_class_at(0, DRILL_NECK.frets() + 1), None);
+        // Off the fretboard sideways.
+        assert_eq!(DRILL_NECK.pitch_class_at(NECK_STRINGS, 0), None);
     }
 
     #[test]
