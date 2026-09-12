@@ -986,9 +986,11 @@ impl Shape {
         let fret = i16::from(index_fret) + i16::from(offset) + self.shift(degree, kind)?;
         let fret = u8::try_from(fret).ok()?;
 
+        // `.pitch_class()` because the tuning now names absolute pitches, and a shape is
+        // the same shape wherever it sits — which of twelve is all this arithmetic wants.
         STANDARD_TUNING
             .get(index)
-            .map(|open| open.transpose(fret % 12))
+            .map(|open| open.pitch_class().transpose(fret % 12))
     }
 }
 
@@ -1372,7 +1374,7 @@ mod tests {
                 for voicing in voicings(chord, &DRILL_NECK) {
                     for (string, fret) in voicing.strings().iter().enumerate() {
                         let Some(fret) = *fret else { continue };
-                        let sounded = STANDARD_TUNING[string].transpose(fret % 12);
+                        let sounded = STANDARD_TUNING[string].pitch_class().transpose(fret % 12);
 
                         assert!(
                             tones.contains(&sounded),

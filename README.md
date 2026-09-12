@@ -207,6 +207,8 @@ src/
   rng.rs                 hand-rolled splitmix64 — seedable, so drills are reproducible
   music/                 pure theory; no iced imports
     notes.rs             PitchClass, Letter, Accidental, Note, Spelling
+    pitch.rs             Pitch and Cents — one sounding note, and the arithmetic to and
+                         from hertz; the only part of music/ that holds an octave
     intervals.rs         Interval as a degree number + quality, not just a semitone count
     scales.rs            ScaleKind and Scale::spell — degrees derived, not looked up
     chords.rs            ChordQuality and Chord — degrees stacked over a root, spelled the
@@ -250,6 +252,22 @@ carries its tuning and its fret count, and the two named ones — twelve frets f
 the library, fifteen for the CAGED window — are passed to the placement arithmetic rather than
 read from a constant inside it. A bare `usize` parameter would have done the same work and let
 a call site pass the wrong number without anything failing to compile.
+
+A pitch class says which of twelve and deliberately says nothing else, which is what every
+screen wants — a scale has no octave, a chord quality has no octave, and a CAGED shape is the
+same shape wherever it sits. The neck has always known more than it said. `pitch.rs` is the
+other half: a `Pitch` is one sounding note, carried as a MIDI number so that its pitch class
+and its octave both fall out by division and cannot disagree, converting to and from hertz by
+arithmetic over A440 rather than by a table of frequencies. The tuning is stated in those —
+`E2 A2 D3 G3 B3 E4` — and `pitch_class_at` is derived from `pitch_at` rather than computed
+beside it, since two parallel computations would only be unlikely to disagree. Those are
+concert pitch rather than the written pitch a guitarist reads, which sits an octave above; a
+tuning an octave out would spell every scale identically and tune correctly against itself, so
+the test that catches it has to pin a frequency rather than a name.
+
+Nothing above the neck holds an octave. Scales, chords, intervals and the shapes stay in pitch
+classes, because none of them has a question a pitch answers, and letting one in would buy a
+second description of something that already has one.
 
 The line the shapes draw is one step further out. A shape on the neck is instrument
 knowledge rather than theory — no arithmetic produces the fact that guitarists play an E

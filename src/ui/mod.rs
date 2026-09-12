@@ -25,6 +25,7 @@ use keyboard::key::Named;
 use crate::music::{
     intervals::Interval,
     notes::{Accidental, Note, PitchClass},
+    pitch::Pitch,
     scales::Scale,
     scales::ScaleKind,
 };
@@ -113,14 +114,30 @@ const MUSIC_FONT: iced::Font = iced::Font::with_name("Leland Text");
 /// subset, which is what `with_name` matches on.
 const KEYCAP_FONT: iced::Font = iced::Font::with_name("Noto Sans Math");
 
-const STANDARD_TUNING: [PitchClass; 6] = [
-    PitchClass::new(4),  // E
-    PitchClass::new(9),  // A
-    PitchClass::new(2),  // D
-    PitchClass::new(7),  // G
-    PitchClass::new(11), // B
-    PitchClass::new(4),  // e
+/// Concert pitch — what the strings sound, not what a guitarist reads. Guitar is a
+/// transposing instrument: its music is written an octave above where it sounds, so the
+/// low E is written E3 and sounds the E2 named here. Getting this wrong is silent, because
+/// everything an octave out still tunes correctly against itself; only a frequency catches
+/// it, which is what `the_low_string_sounds_the_frequency_a_tuner_expects` is for.
+const STANDARD_TUNING: [Pitch; 6] = [
+    midi(40), // E2
+    midi(45), // A2
+    midi(50), // D3
+    midi(55), // G3
+    midi(59), // B3
+    midi(64), // E4
 ];
+
+/// `Pitch::from_midi` in const position, for the tuning above.
+///
+/// The panic is the point: it fires at compile time, so a typo in the tuning is a build
+/// failure rather than a `None` the neck would have to answer for at runtime.
+const fn midi(number: u8) -> Pitch {
+    match Pitch::from_midi(number) {
+        Some(pitch) => pitch,
+        None => panic!("the standard tuning names only representable pitches"),
+    }
+}
 
 pub struct App {
     screen: Screen,
@@ -200,7 +217,7 @@ const NECK_STRINGS: usize = STANDARD_TUNING.len();
 /// taking the bound from `self` while reaching for a global for the notes is the worse of the
 /// two. There is one tuning, and both consts name it.
 struct Neck {
-    tuning: [PitchClass; NECK_STRINGS],
+    tuning: [Pitch; NECK_STRINGS],
     frets: usize,
 }
 
@@ -225,15 +242,27 @@ impl Neck {
         self.frets
     }
 
-    /// The note at a position on this neck, or `None` off it.
+    /// The pitch sounding at a position on this neck, or `None` off it.
     ///
     /// `Option` rather than an index that panics: the callers are a click and a cursor, and a
-    /// bounds bug should misjudge one answer rather than take the process down.
-    fn pitch_class_at(&self, string: usize, fret: usize) -> Option<PitchClass> {
+    /// bounds bug should misjudge one answer rather than take the process down. The fret is
+    /// bounded by `self.frets`, so the `i8` conversion cannot fail for any neck this app
+    /// draws — but it is fallible all the same, on the same reasoning.
+    fn pitch_at(&self, string: usize, fret: usize) -> Option<Pitch> {
         (fret <= self.frets)
             .then(|| self.tuning.get(string))
             .flatten()
-            .map(|open| open.transpose(fret as u8))
+            .and_then(|open| open.transpose(i8::try_from(fret).ok()?))
+    }
+
+    /// The note at a position on this neck, or `None` off it.
+    ///
+    /// Derived from [`Neck::pitch_at`] rather than computed beside it. Two parallel
+    /// computations would only be unlikely to disagree; this one cannot, which is what the
+    /// spec asks for. `the_two_readings_of_a_position_agree_everywhere` guards against
+    /// someone un-deriving it.
+    fn pitch_class_at(&self, string: usize, fret: usize) -> Option<PitchClass> {
+        self.pitch_at(string, fret).map(Pitch::pitch_class)
     }
 }
 
@@ -2122,7 +2151,8 @@ fn scale_markers(scale: Scale, notation: Notation) -> Vec<NoteMarker> {
 
     for (string, open) in STANDARD_TUNING.iter().enumerate() {
         for fret in 0_u8..=12 {
-            let pitch_class = open.transpose(fret);
+            // Which of twelve is all a scale marker wants: a scale has no octave.
+            let pitch_class = open.pitch_class().transpose(fret);
 
             // `spell` stays the membership test, so the set of markers is the same
             // in both modes and the mode cannot make a dot disappear. The degree is
@@ -3961,7 +3991,9 @@ mod tests {
     /// does, kept separate here so a test failure means the marker disagrees
     /// with the tuning, not with itself.
     fn marker_pitch_class(marker: &NoteMarker) -> PitchClass {
-        STANDARD_TUNING[marker.string].transpose(marker.fret as u8)
+        STANDARD_TUNING[marker.string]
+            .pitch_class()
+            .transpose(marker.fret as u8)
     }
 
     /// Every marker's position, for comparing two labellings of one neck.
@@ -4140,6 +4172,111 @@ mod tests {
             .expect("the open low E is in E Ionian");
 
         assert_eq!(open_low_e.label, "E");
+    }
+
+    /// Pins the octave convention, which the pitch-class test above cannot: a tuning an
+    /// octave out spells every scale identically and tunes correctly against itself. Only
+    /// a frequency catches it. A guitarist's written low E is E3 and sounds the E2 here.
+    #[test]
+    fn the_open_strings_sound_the_frequencies_a_tuner_expects() {
+        for (string, expected) in [
+            (0, 82.41),
+            (1, 110.00),
+            (2, 146.83),
+            (3, 196.00),
+            (4, 246.94),
+            (5, 329.63),
+        ] {
+            let hz = STANDARD_TUNING[string].frequency();
+            assert!(
+                (hz - expected).abs() < 0.01,
+                "string {string} sounds {hz} Hz, expected {expected}"
+            );
+        }
+
+        assert_eq!(STANDARD_TUNING[0].octave(), 2, "the low E is E2, not E3");
+    }
+
+    #[test]
+    fn the_tuning_spans_two_octaves_and_a_fourth() {
+        let low = STANDARD_TUNING[0];
+        let high = STANDARD_TUNING[NECK_STRINGS - 1];
+
+        let span = (0..=24).find(|&semitones| low.transpose(semitones) == Some(high));
+
+        assert_eq!(span, Some(24));
+    }
+
+    #[test]
+    fn a_fretted_position_sounds_what_the_open_string_above_it_does() {
+        // The fifth fret of the low E is the open A — the thing every guitarist tunes by.
+        assert_eq!(
+            DRILL_NECK.pitch_at(0, 5),
+            Some(STANDARD_TUNING[1]),
+            "the fifth fret of the low E is not the open A"
+        );
+    }
+
+    /// The claim `pitch_class_at` rests on now that it is a derivation of `pitch_at`. It
+    /// would pass trivially today; it exists to fail the day someone computes the two
+    /// separately again.
+    #[test]
+    fn the_two_readings_of_a_position_agree_everywhere() {
+        for neck in [&DRILL_NECK, &CAGED_NECK] {
+            for string in 0..NECK_STRINGS {
+                for fret in 0..=neck.frets() {
+                    assert_eq!(
+                        neck.pitch_at(string, fret).map(Pitch::pitch_class),
+                        neck.pitch_class_at(string, fret),
+                        "string {string} fret {fret} reads two ways"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_drawn_necks_span_the_range_they_claim() {
+        let pitches = |neck: &Neck| -> Vec<Pitch> {
+            (0..NECK_STRINGS)
+                .flat_map(|string| {
+                    (0..=neck.frets()).filter_map(move |fret| neck.pitch_at(string, fret))
+                })
+                .collect()
+        };
+
+        let drill = pitches(&DRILL_NECK);
+        assert_eq!(
+            drill.iter().min().copied(),
+            STANDARD_TUNING.first().copied(),
+            "the drills' neck should bottom out at the open low E, E2"
+        );
+        assert_eq!(
+            drill.iter().max().copied(),
+            STANDARD_TUNING[5].transpose(12),
+            "the drills' neck should top out at E5"
+        );
+
+        let caged = pitches(&CAGED_NECK);
+        assert_eq!(
+            caged.iter().max().copied(),
+            STANDARD_TUNING[5].transpose(15),
+            "the CAGED neck should top out at G5"
+        );
+    }
+
+    #[test]
+    fn pitch_at_stops_where_the_neck_does() {
+        // Off the end and off the side, on both necks, matching `pitch_class_at`.
+        for neck in [&DRILL_NECK, &CAGED_NECK] {
+            assert_eq!(neck.pitch_at(0, neck.frets() + 1), None);
+            assert_eq!(neck.pitch_class_at(0, neck.frets() + 1), None);
+            assert_eq!(neck.pitch_at(NECK_STRINGS, 0), None);
+            assert_eq!(neck.pitch_class_at(NECK_STRINGS, 0), None);
+        }
+
+        assert_eq!(DRILL_NECK.pitch_at(0, 13), None);
+        assert!(CAGED_NECK.pitch_at(0, 13).is_some());
     }
 
     #[test]
