@@ -3,7 +3,9 @@ mod chord_diagram;
 mod chord_library;
 mod fretboard;
 mod interval_trainer;
+mod listener;
 mod note_trainer;
+mod play_the_interval;
 mod shapes;
 mod tuner;
 use std::ops::Range;
@@ -12,7 +14,9 @@ use std::time::Duration;
 use caged::{Caged, ui_caged};
 use fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use interval_trainer::{IntervalTrainer, ui_interval_trainer};
+use listener::Listener;
 use note_trainer::{NoteTrainer, ui_note_trainer};
+use play_the_interval::{PlayTheInterval, ui_play_the_interval};
 use tuner::{Tuner, ui_tuner};
 
 use chord_library::{ChordLibrary, KeyOutcome, ui_chord_library};
@@ -167,6 +171,8 @@ pub struct App {
     note_trainer: NoteTrainer,
     /// The Interval Trainer's drill, on the same terms and for the same reasons.
     interval_trainer: IntervalTrainer,
+    /// The played drill: its prompt, its streak, and the device it listens to.
+    play_the_interval: PlayTheInterval,
     /// The Chord Library's query and selections. Its own struct for the reason the two
     /// drills have one: the fields are read all over its views and nowhere else.
     chord_library: ChordLibrary,
@@ -208,6 +214,7 @@ pub enum Screen {
     ScaleTrainer,
     NoteTrainer,
     IntervalTrainer,
+    PlayTheInterval,
     ChordLibrary,
     Caged,
     Tuner,
@@ -305,6 +312,171 @@ impl Position {
     }
 }
 
+/// One entry of the answer vocabulary shared by the two interval drills.
+///
+/// Here rather than in either screen for the reason [`Drill`] is here: both mean the same
+/// twelve distances by it. That the twelve also divide evenly into `ANSWER_ROW_WIDTH` is a
+/// fact the Interval Trainer's grid uses and the played drill does not — this is a
+/// vocabulary of nameable distances, not a grid layout.
+///
+/// Not `music/intervals.rs`: collapsing a tritone's two spellings into one entry is a
+/// statement about what a fretboard can distinguish with no key established, and `music/`
+/// holds no instrument.
+///
+/// `twin` is the other spelling of the same distance, where the neck cannot tell the two
+/// apart — the tritone, and the two chord degrees the library added to `Interval`. Carrying
+/// the twin as an `Interval` rather than as a written
+/// label is what stops the button's text from drifting away from the interval it stands
+/// for — the label is rendered from these two, never stored beside them.
+struct AnswerChoice {
+    interval: Interval,
+    twin: Option<Interval>,
+}
+
+/// The twelve answers, in the order the grid draws them.
+///
+/// One table, and the grid, the focus rows, and the pool prompts are drawn from all read
+/// it — the way `HOME_MENU` is the single source of the menu's buttons, focus cells, and
+/// digit keys. `Interval::ALL` is fifteen; this is that list with each distance written two
+/// ways collapsed into one entry, which is what makes the count divide evenly into
+/// `ANSWER_ROW_WIDTH` and leaves no ragged final row.
+const ANSWERS: [AnswerChoice; 12] = [
+    AnswerChoice {
+        interval: Interval::Unison,
+        twin: None,
+    },
+    AnswerChoice {
+        interval: Interval::MinorSecond,
+        twin: None,
+    },
+    AnswerChoice {
+        interval: Interval::MajorSecond,
+        twin: None,
+    },
+    AnswerChoice {
+        interval: Interval::MinorThird,
+        twin: None,
+    },
+    AnswerChoice {
+        interval: Interval::MajorThird,
+        twin: None,
+    },
+    AnswerChoice {
+        interval: Interval::PerfectFourth,
+        twin: None,
+    },
+    AnswerChoice {
+        interval: Interval::AugmentedFourth,
+        twin: Some(Interval::DiminishedFifth),
+    },
+    AnswerChoice {
+        interval: Interval::PerfectFifth,
+        twin: None,
+    },
+    AnswerChoice {
+        interval: Interval::MinorSixth,
+        twin: Some(Interval::AugmentedFifth),
+    },
+    AnswerChoice {
+        interval: Interval::MajorSixth,
+        twin: Some(Interval::DiminishedSeventh),
+    },
+    AnswerChoice {
+        interval: Interval::MinorSeventh,
+        twin: None,
+    },
+    AnswerChoice {
+        interval: Interval::MajorSeventh,
+        twin: None,
+    },
+];
+
+/// How many answers the grid offers. The focus grid reads this so the cells and the
+/// buttons are built from one count and cannot drift apart.
+const ANSWER_COUNT: usize = ANSWERS.len();
+
+/// The interval the grid's `index`-th button stands for, or `None` past the end.
+///
+/// `App` reaches the vocabulary through this rather than through the table itself, which
+/// is what keeps `AnswerChoice` and its twin field private to this module — the parent
+/// needs an interval to hand back, not the shape it was stored in.
+fn answer_at(index: usize) -> Option<Interval> {
+    ANSWERS.get(index).map(|choice| choice.interval)
+}
+
+/// Every position on the neck, paired with the pitch class sounding there.
+///
+/// The pitch class is carried along rather than asked for again later, which is what keeps
+/// an `expect` out of the drawing code: a position that yielded `None` never enters the
+/// list, so everything downstream has one in hand.
+fn neck() -> Vec<(Position, PitchClass)> {
+    (0..NECK_STRINGS)
+        .flat_map(|string| (0..=DRILL_NECK.frets()).map(move |fret| Position { string, fret }))
+        .filter_map(|position| position.pitch_class().map(|pitch| (position, pitch)))
+        .collect()
+}
+
+/// The vocabulary entry for an interval — the one the grid would draw for it.
+///
+/// Two spellings of one distance share an entry, so `DiminishedFifth` resolves to the
+/// `AugmentedFourth` entry that names them both. Falls back to a twinless entry for an
+/// interval outside the vocabulary, which neither drill can produce but which spares this
+/// from being fallible for a case no caller could act on.
+fn choice_for(interval: Interval) -> AnswerChoice {
+    ANSWERS
+        .iter()
+        .find(|choice| {
+            choice.interval == interval || choice.twin.is_some_and(|twin| twin == interval)
+        })
+        .map_or(
+            AnswerChoice {
+                interval,
+                twin: None,
+            },
+            |choice| AnswerChoice {
+                interval: choice.interval,
+                twin: choice.twin,
+            },
+        )
+}
+
+/// One answer's label: its degree formula, and the twin spelling after a slash where there
+/// is one.
+///
+/// Built the way `intervalic_text` builds the scale trainer's formula row, and for the same
+/// reason: the accidental glyph renders in `MUSIC_FONT` and the degree digit in the body
+/// font, and one `text` widget cannot carry both. The twinned entries run this twice.
+fn interval_label(
+    choice: &AnswerChoice,
+    size: u32,
+    color: Color,
+) -> iced::widget::Row<'static, Message> {
+    use iced::widget::{row, text};
+
+    let token = |tokens: iced::widget::Row<'static, Message>, interval: Interval| {
+        let (glyph, digit) = interval_token(interval);
+        let mut tokens = tokens;
+
+        if let Some(glyph) = glyph {
+            tokens = tokens.push(
+                text(glyph.to_string())
+                    .size(size)
+                    .font(MUSIC_FONT)
+                    .color(color),
+            );
+        }
+
+        tokens.push(text(digit.to_string()).size(size).color(color))
+    };
+
+    let label = token(row![].spacing(0), choice.interval);
+
+    match choice.twin {
+        Some(twin) => token(label.push(text("/").size(size).color(color)), twin),
+        None => label,
+    }
+}
+
 /// Which way a drill is running. Transient only — passed to `draw_prompt` to say which
 /// kind of prompt to make, never stored. The stored direction is `Prompt`'s variant.
 ///
@@ -378,21 +550,31 @@ pub enum Message {
     /// A different root for the CAGED window. Its own variant rather than `RerollScale`,
     /// which would replace the Scale Trainer's scale from another screen.
     RerollCagedRoot,
-    /// One tick of the Tuner's audio poll: take whatever has arrived, analyse it, and fold
-    /// the result into the screen. Sent by the timer in `App::subscription` while the Tuner
-    /// is showing and a device is open, and never by a widget.
-    TunerPoll,
+    /// One tick of the audio poll: take whatever has arrived, analyse it, and fold the
+    /// result into the screen listening. Sent by the timer in `App::subscription` while a
+    /// listening screen is showing and a device is open, and never by a widget.
+    ///
+    /// Named for what it carries rather than for the screen that wanted it, because two
+    /// screens listen now. `App::listener` is what routes it, and the reason routing by
+    /// the screen on show is sound is that only one of them can hold the device.
+    AudioPoll,
     /// A released reading, applied directly.
     ///
-    /// `cfg(test)`: the running app reaches the same state through `TunerPoll`, which
-    /// analyses real audio. This is the seam the screen's tests drive instead, so a screen
+    /// `cfg(test)`: the running app reaches the same state through `AudioPoll`, which
+    /// analyses real audio. This is the seam the screens' tests drive instead, so a screen
     /// assertion needs no device — the same arrangement the trainers use for a neck press.
     #[cfg(test)]
-    TunerHeard(Heard),
+    Heard(Heard),
     /// Opens the input device list.
-    TunerOpenDevices,
+    OpenDevices,
     /// Chooses a device by its place in the offered list.
-    TunerChooseDevice(usize),
+    ChooseDevice(usize),
+    /// Skips the played drill's prompt. Its own variant rather than `SkipIntervalPrompt`,
+    /// which would replace the Interval Trainer's prompt from another screen.
+    SkipPlayPrompt,
+    /// The played drill's flash timer. Its own variant for the reason the other two have
+    /// theirs: a tick left behind on one screen must not retire another screen's prompt.
+    AdvancePlayPrompt,
     /// A key press, straight from the subscription and not yet meaning anything.
     ///
     /// The subscription used to translate keys inside its own closure, which worked only
@@ -451,8 +633,10 @@ pub enum FocusTarget {
     IntervalAnswer(usize),
     IntervalDirectionToggle,
     SkipIntervalPrompt,
-    /// The Tuner's device control, which opens the input list.
-    TunerDevice,
+    /// A listening screen's device control, which opens the input list.
+    InputDevice,
+    /// The played drill's skip control.
+    SkipPlayPrompt,
     /// The Chord Library's search box.
     SearchBox,
     /// One of the notation buttons, indexed into the screen's `Notation::cycle_for`.
@@ -508,7 +692,7 @@ struct MenuItem {
 /// How often the Tuner asks for audio while it is showing.
 const AUDIO_POLL: std::time::Duration = std::time::Duration::from_millis(10);
 
-const HOME_MENU: [MenuItem; 6] = [
+const HOME_MENU: [MenuItem; 7] = [
     MenuItem {
         label: "Scale Trainer",
         caption: "Explore and learn guitar scales",
@@ -523,6 +707,11 @@ const HOME_MENU: [MenuItem; 6] = [
         label: "Interval Trainer",
         caption: "Recognize distances from a tonal center",
         screen: Screen::IntervalTrainer,
+    },
+    MenuItem {
+        label: "Play the Interval",
+        caption: "Play the distance a lit position asks for",
+        screen: Screen::PlayTheInterval,
     },
     MenuItem {
         label: "Chord Library",
@@ -565,6 +754,7 @@ impl App {
         let mut rng = Rng::from_clock();
         let note_trainer = NoteTrainer::new(&mut rng);
         let interval_trainer = IntervalTrainer::new(&mut rng);
+        let play_the_interval = PlayTheInterval::new(&mut rng);
 
         let app = Self {
             screen: Screen::default(),
@@ -576,6 +766,7 @@ impl App {
             notation: Notation::Notes,
             note_trainer,
             interval_trainer,
+            play_the_interval,
             chord_library: ChordLibrary::new(),
             caged: Caged::new(),
             tuner: Tuner::new(),
@@ -643,17 +834,22 @@ impl App {
             return Task::none();
         }
 
+        if matches!(message, Message::AdvancePlayPrompt) {
+            self.play_the_interval.advance(&mut self.rng);
+            return Task::none();
+        }
+
         if matches!(message, Message::AdvanceIntervalPrompt) {
             self.interval_trainer.advance(&mut self.rng);
             return Task::none();
         }
 
-        // The Tuner's poll, for the same reason and much more urgently: it ticks every
+        // The audio poll, for the same reason and much more urgently: it ticks every
         // 10 ms, so an overlay that a tick could dismiss was on screen for one frame. The
         // reading also keeps up to date behind the panel rather than going stale and
         // having to re-confirm when it closes.
-        if matches!(message, Message::TunerPoll) {
-            self.tuner.poll();
+        if matches!(message, Message::AudioPoll) {
+            self.poll_audio();
             return Task::none();
         }
 
@@ -670,7 +866,11 @@ impl App {
             Message::Navigate(screen) => self.open(screen),
             // Esc closes the device list before it leaves the screen, the way it leaves
             // the library's search box without leaving the library.
-            Message::GoBack if self.tuner.is_picking() => self.tuner.close_picker(),
+            Message::GoBack if self.is_picking() => {
+                if let Some(listener) = self.listener() {
+                    listener.close_picker();
+                }
+            }
             Message::GoBack => self.go_back(),
             Message::SelectRoot(root) => self.set_scale(root, self.scale.kind()),
             Message::SelectScaleKind(kind) => self.set_scale(self.scale.root(), kind),
@@ -705,14 +905,24 @@ impl App {
             }
             // Handled above, before the help overlay gets a say.
             Message::AdvanceIntervalPrompt => {}
+            Message::SkipPlayPrompt => self.play_the_interval.skip(&mut self.rng),
+            Message::AdvancePlayPrompt => {}
             // Handled above too, and earliest of all: by here it has already become one of
             // the other arms, or nothing.
             // Handled above, ahead of the help overlay — see the early return there.
-            Message::TunerPoll => {}
+            Message::AudioPoll => {}
             #[cfg(test)]
-            Message::TunerHeard(heard) => self.tuner.apply(heard),
-            Message::TunerOpenDevices => self.tuner.open_picker(),
-            Message::TunerChooseDevice(index) => self.tuner.choose(index),
+            Message::Heard(heard) => self.hear(heard),
+            Message::OpenDevices => {
+                if let Some(listener) = self.listener() {
+                    listener.open_picker();
+                }
+            }
+            Message::ChooseDevice(index) => {
+                if let Some(listener) = self.listener() {
+                    listener.choose(index);
+                }
+            }
             Message::Key(..) => {}
             Message::SelectChordRow(index) => self.chord_library.select_row(index),
             Message::SelectVoicing(index) => self.chord_library.select_voicing(index),
@@ -740,8 +950,12 @@ impl App {
                 // While the list is up, Enter means "this one" rather than "fire whatever
                 // the ring is on" — the ring is behind a modal and pressing it would
                 // reopen the list that is already open.
-                match self.tuner.picking() {
-                    Some(index) => self.tuner.choose(index),
+                match self.listener().and_then(|listener| listener.picking()) {
+                    Some(index) => {
+                        if let Some(listener) = self.listener() {
+                            listener.choose(index);
+                        }
+                    }
                     None => self.activate_focused(),
                 }
             }
@@ -760,15 +974,16 @@ impl App {
         let wants_fresh_interval = screen == Screen::IntervalTrainer;
         let wants_the_search_box = screen == Screen::ChordLibrary;
         let wants_the_caged_window = screen == Screen::Caged;
-        let wants_to_listen = screen == Screen::Tuner;
+        let wants_fresh_play = screen == Screen::PlayTheInterval;
+        let wants_to_listen = matches!(screen, Screen::Tuner | Screen::PlayTheInterval);
 
         self.navigate_to(screen);
 
         // The device opens on entering rather than on a press: a tuner that has to be
         // started is a tuner that looks broken for as long as it takes to notice. Failing
         // is a state the screen draws, so a machine with no input still gets a screen.
-        if wants_to_listen {
-            self.tuner.listen();
+        if wants_to_listen && let Some(listener) = self.listener() {
+            listener.listen();
         }
 
         if wants_fresh_scale {
@@ -783,6 +998,10 @@ impl App {
 
         if wants_fresh_interval {
             self.interval_trainer.enter(&mut self.rng);
+        }
+
+        if wants_fresh_play {
+            self.play_the_interval.enter(&mut self.rng);
         }
 
         // The library opens ready to be typed into: it is a thing you come to in order to
@@ -824,8 +1043,83 @@ impl App {
     /// interface is a device other programs want. Both navigation paths call this, which
     /// is what stops the two from disagreeing about it.
     fn leaving_for(&mut self, next: &Screen) {
-        if self.screen == Screen::Tuner && *next != Screen::Tuner {
-            self.tuner.stop();
+        if self.screen == *next {
+            return;
+        }
+
+        // Asked of the screen being left rather than of the one being entered, and before
+        // `self.screen` moves — which is what makes moving between the two listening
+        // screens close one stream before the other opens, rather than holding both.
+        if let Some(listener) = self.listener() {
+            listener.stop();
+        }
+    }
+
+    /// The device of whichever screen is listening, or `None` on the screens that do not.
+    ///
+    /// Routing by the screen on show is sound here, and would not be for the trainers'
+    /// flash timers: both trainers can genuinely be mid-flash at once, while only one
+    /// screen can hold the device — `leaving_for` closes it on the way out, so a reading
+    /// arriving for a screen that is not showing has no screen it could have come from.
+    /// That invariant is what this helper rests on, and what the test asserting one stream
+    /// at a time exists to protect.
+    fn listener(&mut self) -> Option<&mut Listener> {
+        match self.screen {
+            Screen::Tuner => Some(self.tuner.listener_mut()),
+            Screen::PlayTheInterval => Some(self.play_the_interval.listener_mut()),
+            _ => None,
+        }
+    }
+
+    fn listener_ref(&self) -> Option<&Listener> {
+        match self.screen {
+            Screen::Tuner => Some(self.tuner.listener()),
+            Screen::PlayTheInterval => Some(self.play_the_interval.listener()),
+            _ => None,
+        }
+    }
+
+    fn is_picking(&self) -> bool {
+        self.listener_ref().is_some_and(Listener::is_picking)
+    }
+
+    fn is_listening(&self) -> bool {
+        self.listener_ref().is_some_and(Listener::is_listening)
+    }
+
+    /// One tick of audio, folded into the screen that asked for it.
+    ///
+    /// Not `listener().poll()` alone: a drill has to see the reading to judge it, so the
+    /// screen is given what was released rather than left to read it back off the device
+    /// afterwards. The Tuner wants nothing beyond the fold, and says so by doing nothing.
+    fn poll_audio(&mut self) {
+        match self.screen {
+            Screen::Tuner => {
+                self.tuner.listener_mut().poll();
+            }
+            // The drill has to see the reading to judge it, so the fold and the judging
+            // happen in one call rather than the screen reading it back off the device
+            // afterwards — two readers of one reading are two readers free to disagree.
+            Screen::PlayTheInterval => {
+                if let Some(heard) = self.play_the_interval.listener_mut().poll() {
+                    self.play_the_interval.apply(heard);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A released reading, handed to the screen listening. The seam the screens' tests
+    /// drive in place of a device.
+    #[cfg(test)]
+    fn hear(&mut self, heard: Heard) {
+        match self.screen {
+            Screen::Tuner => self.tuner.listener_mut().apply(heard),
+            Screen::PlayTheInterval => {
+                self.play_the_interval.listener_mut().apply(heard);
+                self.play_the_interval.apply(heard);
+            }
+            _ => {}
         }
     }
 
@@ -907,11 +1201,14 @@ impl App {
         // The device list claims the vertical pair outright while it is open, the way the
         // CAGED pills claim the horizontal one: choosing is one gesture rather than
         // focus-then-activate. It is modal, so this comes before every other claim.
-        if self.tuner.is_picking() {
-            match direction {
-                Direction::Up => self.tuner.move_pick(-1),
-                Direction::Down => self.tuner.move_pick(1),
-                Direction::Left | Direction::Right => {}
+        if self.is_picking() {
+            let delta = match direction {
+                Direction::Up => -1,
+                Direction::Down => 1,
+                Direction::Left | Direction::Right => 0,
+            };
+            if let Some(listener) = self.listener() {
+                listener.move_pick(delta);
             }
             return;
         }
@@ -996,7 +1293,12 @@ impl App {
                 }
             }
             FocusTarget::Back => self.go_back(),
-            FocusTarget::TunerDevice => self.tuner.open_picker(),
+            FocusTarget::SkipPlayPrompt => self.play_the_interval.skip(&mut self.rng),
+            FocusTarget::InputDevice => {
+                if let Some(listener) = self.listener() {
+                    listener.open_picker();
+                }
+            }
             FocusTarget::CagedRoot(index) => {
                 if let Some(&pitch_class) = PitchClass::ALL.get(index) {
                     self.caged.select_root(pitch_class);
@@ -1035,7 +1337,7 @@ impl App {
             FocusTarget::ChordList => {}
             FocusTarget::IntervalFretboard => self.interval_trainer.answer_at_cursor(),
             FocusTarget::IntervalAnswer(index) => {
-                if let Some(interval) = interval_trainer::answer_at(index) {
+                if let Some(interval) = answer_at(index) {
                     self.interval_trainer.answer_interval(interval);
                 }
             }
@@ -1076,6 +1378,12 @@ impl App {
             Screen::Caged => with_top_bar(
                 "CAGED",
                 ui_caged(&self.caged, self.notation, self.focused),
+                true,
+                self.focused,
+            ),
+            Screen::PlayTheInterval => with_top_bar(
+                "Play the Interval",
+                ui_play_the_interval(&self.play_the_interval, self.focused),
                 true,
                 self.focused,
             ),
@@ -1133,6 +1441,10 @@ impl App {
             streams.push(iced::time::every(ANSWER_FLASH).map(|_| Message::AdvanceIntervalPrompt));
         }
 
+        if self.play_the_interval.is_flashing() {
+            streams.push(iced::time::every(ANSWER_FLASH).map(|_| Message::AdvancePlayPrompt));
+        }
+
         // Only while the Tuner is showing and a device is open, so nothing ticks on any
         // other screen. Ten milliseconds is a little under the hop the detector wants, so
         // a window is picked up in the tick after it completes rather than one later.
@@ -1140,8 +1452,8 @@ impl App {
         // Note what does *not* travel in this closure: the stream lives on `App`, because
         // iced hashes a subscription recipe rather than its captured values and would
         // otherwise drop and rebuild the device whenever that hash changed.
-        if self.screen == Screen::Tuner && self.tuner.is_listening() {
-            streams.push(iced::time::every(AUDIO_POLL).map(|_| Message::TunerPoll));
+        if self.is_listening() {
+            streams.push(iced::time::every(AUDIO_POLL).map(|_| Message::AudioPoll));
         }
 
         Subscription::batch(streams)
@@ -1189,7 +1501,14 @@ impl App {
             // the way the CAGED shape row does, so walking it is one gesture.
             Screen::Tuner => vec![
                 vec![Some(FocusTarget::Back)],
-                vec![Some(FocusTarget::TunerDevice)],
+                vec![Some(FocusTarget::InputDevice)],
+            ],
+            // Back, the skip control, and the device control. The neck is not a focus
+            // target here: it takes no press, so there would be nothing to activate on it.
+            Screen::PlayTheInterval => vec![
+                vec![Some(FocusTarget::Back)],
+                vec![Some(FocusTarget::SkipPlayPrompt)],
+                vec![Some(FocusTarget::InputDevice)],
             ],
             Screen::Home => (0..HOME_MENU_ITEMS)
                 .map(|i| vec![Some(FocusTarget::HomeMenuItem(i))])
@@ -1339,7 +1658,7 @@ impl App {
 
                 match self.interval_trainer.drill() {
                     Drill::NameIt => {
-                        let total = interval_trainer::ANSWER_COUNT;
+                        let total = ANSWER_COUNT;
 
                         for start in (0..total).step_by(ANSWER_ROW_WIDTH) {
                             let len = ANSWER_ROW_WIDTH.min(total - start);
@@ -1399,6 +1718,7 @@ impl App {
             Screen::Home
             | Screen::NoteTrainer
             | Screen::IntervalTrainer
+            | Screen::PlayTheInterval
             | Screen::ChordLibrary
             | Screen::Caged
             | Screen::Tuner => vec![0..width],
@@ -1613,6 +1933,13 @@ fn accelerators_for(screen: &Screen, notation: Notation) -> Vec<Accelerator> {
             ('r', FocusTarget::SkipIntervalPrompt, "skip this interval"),
             ('d', FocusTarget::IntervalDirectionToggle, "swap direction"),
         ],
+        // `r` means what it means everywhere — replace what is on screen. `d` means what
+        // it means on the Tuner, which is the other screen that listens; there is no
+        // direction to swap here, since an interval cannot be named by playing it.
+        Screen::PlayTheInterval => vec![
+            ('r', FocusTarget::SkipPlayPrompt, "skip this interval"),
+            ('d', FocusTarget::InputDevice, "input device"),
+        ],
         // `/` is the same physical key as `?`, distinguished by shift: search, and help.
         //
         // One key per mode as well as the cycling one. With three modes visible, a learner
@@ -1650,7 +1977,7 @@ fn accelerators_for(screen: &Screen, notation: Notation) -> Vec<Accelerator> {
         // per-screen table exists to allow. `i` keeps its meaning: switch how a note is
         // written, which here is the sharp or flat name of the pitch being heard.
         Screen::Tuner => vec![
-            ('d', FocusTarget::TunerDevice, "input device"),
+            ('d', FocusTarget::InputDevice, "input device"),
             ('i', FocusTarget::NotationToggle, "flat names"),
         ],
     }
@@ -2699,6 +3026,90 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    // ---- The answer vocabulary ----
+
+    #[test]
+    fn the_vocabulary_holds_one_button_per_distance() {
+        assert_eq!(ANSWERS.len(), 12);
+        assert_eq!(ANSWER_COUNT, ANSWERS.len());
+
+        // Twelve entries and twelve distinct distances is the whole twin decision stated as
+        // an invariant: judging compares semitones, so two buttons standing for one distance
+        // would be two spellings of the same answer with no way to tell which the drill
+        // meant.
+        let mut distances: Vec<u8> = ANSWERS
+            .iter()
+            .map(|choice| choice.interval.semitones())
+            .collect();
+        distances.sort_unstable();
+        distances.dedup();
+
+        assert_eq!(distances.len(), ANSWERS.len(), "two buttons, one distance");
+    }
+
+    #[test]
+    fn the_vocabulary_covers_every_distance_in_an_octave() {
+        let mut distances: Vec<u8> = ANSWERS
+            .iter()
+            .map(|choice| choice.interval.semitones())
+            .collect();
+        distances.sort_unstable();
+
+        // 0..=11 exactly: every distance a prompt can produce has a button, so judging by
+        // semitones can never leave a prompt unanswerable.
+        assert_eq!(distances, (0..12).collect::<Vec<u8>>());
+    }
+
+    #[test]
+    fn the_vocabulary_is_interval_all_with_the_tritones_merged() {
+        let named: Vec<Interval> = ANSWERS
+            .iter()
+            .flat_map(|choice| std::iter::once(choice.interval).chain(choice.twin))
+            .collect();
+
+        // Every interval still reachable, one of them through a twin — this is the tripwire
+        // that a variant added to `Interval` is added here too.
+        assert_eq!(named.len(), Interval::ALL.len());
+        for interval in Interval::ALL {
+            assert!(named.contains(interval), "{interval} has no button");
+        }
+    }
+
+    #[test]
+    fn a_twin_is_the_same_distance_written_a_second_way() {
+        let twinned: Vec<&AnswerChoice> = ANSWERS.iter().filter(|c| c.twin.is_some()).collect();
+
+        assert_eq!(twinned.len(), 3);
+
+        for choice in twinned {
+            let twin = choice.twin.expect("filtered to the twinned entries");
+
+            // What earns an entry a twin, and the only thing that does: the neck cannot
+            // separate two spellings of one distance, so the drill offers them as one
+            // answer. A pair differing in distance would be two answers wrongly merged.
+            assert_eq!(
+                choice.interval.semitones(),
+                twin.semitones(),
+                "{} and {twin} are different distances",
+                choice.interval
+            );
+            assert_ne!(
+                choice.interval.number(),
+                twin.number(),
+                "{} and {twin} are the same degree",
+                choice.interval
+            );
+        }
+    }
+
+    #[test]
+    fn a_button_index_resolves_to_its_interval() {
+        for (index, choice) in ANSWERS.iter().enumerate() {
+            assert_eq!(answer_at(index), Some(choice.interval));
+        }
+        assert_eq!(answer_at(ANSWERS.len()), None);
+    }
+
     /// An app whose scale rolls are reproducible.
     pub(super) fn app_with_seed(seed: u64) -> App {
         let (mut app, _) = App::new();
@@ -3144,12 +3555,13 @@ mod tests {
     }
 
     /// Every screen, so a new one cannot quietly escape the checks that sweep them all.
-    pub(super) fn every_screen() -> [Screen; 6] {
+    pub(super) fn every_screen() -> [Screen; 7] {
         [
             Screen::Home,
             Screen::ScaleTrainer,
             Screen::NoteTrainer,
             Screen::IntervalTrainer,
+            Screen::PlayTheInterval,
             Screen::ChordLibrary,
             Screen::Caged,
         ]
@@ -3188,9 +3600,9 @@ mod tests {
     }
 
     #[test]
-    fn the_fifth_digit_opens_the_caged_window() {
+    fn the_sixth_digit_opens_the_caged_window() {
         let mut app = app_with_seed(0xca6);
-        press_into(&mut app, "5", keyboard::Modifiers::empty());
+        press_into(&mut app, "6", keyboard::Modifiers::empty());
 
         assert_eq!(app.screen, Screen::Caged);
         assert!(!app.caged.shapes().is_empty());
@@ -3485,9 +3897,9 @@ mod tests {
     #[test]
     fn the_chord_library_is_reachable_from_the_menu() {
         let mut app = app_with_seed(0xc40d);
-        // The library is the fourth entry, so it takes the fourth digit — both derived
-        // from `HOME_MENU`, which is why adding it needed nothing else.
-        press_into(&mut app, "4", keyboard::Modifiers::empty());
+        // The library is the fifth entry, so it takes the fifth digit — both derived
+        // from `HOME_MENU`, which is why a screen inserted above it needed nothing else.
+        press_into(&mut app, "5", keyboard::Modifiers::empty());
 
         assert_eq!(app.screen, Screen::ChordLibrary);
     }
@@ -4543,7 +4955,7 @@ mod tuner_tests {
     fn tuned_to(hz: f32) -> App {
         let (mut app, _) = App::new();
         let _ = app.update(Message::Navigate(Screen::Tuner));
-        let _ = app.update(Message::TunerHeard(heard(hz)));
+        let _ = app.update(Message::Heard(heard(hz)));
         app
     }
 
@@ -4551,7 +4963,7 @@ mod tuner_tests {
     fn the_tuner_is_reachable_and_leavable_like_every_other_screen() {
         let (mut app, _) = App::new();
 
-        // Present in the menu, and as the sixth entry it has a digit.
+        // Present in the menu, and as the seventh entry it has a digit.
         let entry = HOME_MENU
             .iter()
             .position(|item| item.screen == Screen::Tuner)
@@ -4559,7 +4971,7 @@ mod tuner_tests {
         assert!(
             accelerators_for(&Screen::Home, Notation::Notes)
                 .iter()
-                .any(|(key, target, _)| *key == '6' && *target == FocusTarget::HomeMenuItem(entry)),
+                .any(|(key, target, _)| *key == '7' && *target == FocusTarget::HomeMenuItem(entry)),
             "the Tuner has no digit on the Home menu"
         );
 
@@ -4575,7 +4987,11 @@ mod tuner_tests {
         // 82.41 Hz is the open low E. Naming it "E" would be the pitch-class answer, and
         // the whole reason this screen needed absolute pitch.
         let app = tuned_to(82.41);
-        let (pitch, cents) = app.tuner.reading().expect("a reading was applied");
+        let (pitch, cents) = app
+            .tuner
+            .listener()
+            .reading()
+            .expect("a reading was applied");
 
         assert_eq!(pitch.pitch_class(), PitchClass::new(4));
         assert_eq!(
@@ -4592,7 +5008,7 @@ mod tuner_tests {
         // A low E tuned a semitone flat sounds D#2, and the screen says so rather than
         // calling it a very flat E. The trade chromatic buys, stated in the spec.
         let app = tuned_to(77.78);
-        let (pitch, _) = app.tuner.reading().expect("a reading");
+        let (pitch, _) = app.tuner.listener().reading().expect("a reading");
 
         assert_eq!(pitch.pitch_class(), PitchClass::new(3));
         assert_eq!(pitch.octave(), 2);
@@ -4602,7 +5018,7 @@ mod tuner_tests {
     fn an_alternate_tuning_needs_no_setting() {
         // Drop D: the lowest string at D2, with nothing having been configured.
         let app = tuned_to(73.42);
-        let (pitch, cents) = app.tuner.reading().expect("a reading");
+        let (pitch, cents) = app.tuner.listener().reading().expect("a reading");
 
         assert_eq!(pitch.pitch_class(), PitchClass::new(2));
         assert_eq!(pitch.octave(), 2);
@@ -4612,10 +5028,27 @@ mod tuner_tests {
     #[test]
     fn sharp_reads_positive_and_flat_reads_negative() {
         let sharp = tuned_to(440.0 * 2.0f32.powf(10.0 / 1200.0));
-        assert!(sharp.tuner.reading().expect("a reading").1.value() > 0.0);
+        assert!(
+            sharp
+                .tuner
+                .listener()
+                .reading()
+                .expect("a reading")
+                .1
+                .value()
+                > 0.0
+        );
 
         let flat = tuned_to(440.0 * 2.0f32.powf(-10.0 / 1200.0));
-        assert!(flat.tuner.reading().expect("a reading").1.value() < 0.0);
+        assert!(
+            flat.tuner
+                .listener()
+                .reading()
+                .expect("a reading")
+                .1
+                .value()
+                < 0.0
+        );
     }
 
     #[test]
@@ -4623,41 +5056,41 @@ mod tuner_tests {
         let (mut app, _) = App::new();
 
         // Before the screen is entered, nothing is being listened to.
-        assert_eq!(app.tuner.state(), tuner::State::NotStarted);
+        assert_eq!(app.tuner.listener().state(), listener::State::NotStarted);
 
         let _ = app.update(Message::Navigate(Screen::Tuner));
         // Whether a device opened depends on the machine, so both are legitimate here —
         // what matters is that silence and a reading are distinct from each other and
         // from a failure, which the arms below assert.
-        let opened = app.tuner.error().is_none();
+        let opened = app.tuner.listener().error().is_none();
 
-        let _ = app.update(Message::TunerHeard(Heard::Silence));
+        let _ = app.update(Message::Heard(Heard::Silence));
         assert_eq!(
-            app.tuner.state(),
+            app.tuner.listener().state(),
             if opened {
-                tuner::State::Silent
+                listener::State::Silent
             } else {
-                tuner::State::NoInput
+                listener::State::NoInput
             }
         );
 
         if opened {
-            let _ = app.update(Message::TunerHeard(Heard::Unpitched));
-            assert_eq!(app.tuner.state(), tuner::State::Unnameable);
+            let _ = app.update(Message::Heard(Heard::Unpitched));
+            assert_eq!(app.tuner.listener().state(), listener::State::Unnameable);
 
-            let _ = app.update(Message::TunerHeard(heard(440.0)));
-            assert_eq!(app.tuner.state(), tuner::State::Reading);
+            let _ = app.update(Message::Heard(heard(440.0)));
+            assert_eq!(app.tuner.listener().state(), listener::State::Reading);
         }
     }
 
     #[test]
     fn a_reading_does_not_outlive_the_sound() {
         let mut app = tuned_to(440.0);
-        assert!(app.tuner.reading().is_some());
+        assert!(app.tuner.listener().reading().is_some());
 
-        let _ = app.update(Message::TunerHeard(Heard::Silence));
+        let _ = app.update(Message::Heard(Heard::Silence));
         assert!(
-            app.tuner.reading().is_none(),
+            app.tuner.listener().reading().is_none(),
             "a stale reading survived the silence after it"
         );
     }
@@ -4667,34 +5100,38 @@ mod tuner_tests {
         let mut app = tuned_to(440.0);
 
         // What the detector releases for a chord: nothing nameable, at any level.
-        let _ = app.update(Message::TunerHeard(Heard::Unpitched));
-        assert!(app.tuner.reading().is_none());
+        let _ = app.update(Message::Heard(Heard::Unpitched));
+        assert!(app.tuner.listener().reading().is_none());
     }
 
     #[test]
     fn the_device_list_opens_walks_and_closes() {
         let (mut app, _) = App::new();
         let _ = app.update(Message::Navigate(Screen::Tuner));
-        assert!(!app.tuner.is_picking());
+        assert!(!app.tuner.listener().is_picking());
 
-        let _ = app.update(Message::TunerOpenDevices);
-        assert!(app.tuner.is_picking(), "the list did not open");
+        let _ = app.update(Message::OpenDevices);
+        assert!(app.tuner.listener().is_picking(), "the list did not open");
 
         // The list claims the vertical pair while it is up, and clamps rather than wraps.
-        let offered = app.tuner.devices().len();
+        let offered = app.tuner.listener().devices().len();
         let _ = app.update(Message::FocusDown);
         let _ = app.update(Message::FocusDown);
-        let walked = app.tuner.picking().expect("still picking");
+        let walked = app.tuner.listener().picking().expect("still picking");
         assert!(walked < offered.max(1), "the highlight ran off the end");
 
         let _ = app.update(Message::FocusUp);
         let _ = app.update(Message::FocusUp);
         let _ = app.update(Message::FocusUp);
-        assert_eq!(app.tuner.picking(), Some(0), "the highlight wrapped");
+        assert_eq!(
+            app.tuner.listener().picking(),
+            Some(0),
+            "the highlight wrapped"
+        );
 
         // Esc closes the list rather than leaving the screen.
         let _ = app.update(Message::GoBack);
-        assert!(!app.tuner.is_picking());
+        assert!(!app.tuner.listener().is_picking());
         assert_eq!(app.screen, Screen::Tuner, "Esc left the screen as well");
 
         // And then Esc does leave it.
@@ -4708,13 +5145,13 @@ mod tuner_tests {
         let _ = app.update(Message::Navigate(Screen::Tuner));
 
         assert!(
-            app.focusables().contains(&FocusTarget::TunerDevice),
+            app.focusables().contains(&FocusTarget::InputDevice),
             "the device control is unreachable by keyboard"
         );
 
-        app.focused = FocusTarget::TunerDevice;
+        app.focused = FocusTarget::InputDevice;
         let _ = app.update(Message::ActivateFocused);
-        assert!(app.tuner.is_picking());
+        assert!(app.tuner.listener().is_picking());
     }
 
     #[test]
@@ -4724,7 +5161,7 @@ mod tuner_tests {
 
         let _ = app.update(Message::ToggleNotation);
 
-        let (pitch, _) = app.tuner.reading().expect("a reading");
+        let (pitch, _) = app.tuner.listener().reading().expect("a reading");
         assert_eq!(
             app.tuner.spelling().spell(pitch.pitch_class()).letter,
             Letter::B,
@@ -4762,7 +5199,10 @@ mod tuner_tests {
             ));
 
             assert_eq!(app.screen, Screen::Tuner, "`{key}` navigated");
-            assert!(!app.tuner.is_picking(), "`{key}` opened the device list");
+            assert!(
+                !app.tuner.listener().is_picking(),
+                "`{key}` opened the device list"
+            );
             assert_eq!(app.tuner.spelling(), spelling, "`{key}` renamed the pitch");
         }
     }
@@ -4770,6 +5210,7 @@ mod tuner_tests {
 
 #[cfg(test)]
 mod tuner_device_tests {
+    use super::tests::every_screen;
     use super::*;
 
     #[test]
@@ -4777,8 +5218,8 @@ mod tuner_device_tests {
         let (mut app, _) = App::new();
 
         let _ = app.update(Message::Navigate(Screen::Tuner));
-        let _ = app.update(Message::TunerOpenDevices);
-        assert!(app.tuner.is_picking());
+        let _ = app.update(Message::OpenDevices);
+        assert!(app.tuner.listener().is_picking());
 
         // Esc closes the picker, and the second one leaves.
         let _ = app.update(Message::GoBack);
@@ -4786,10 +5227,90 @@ mod tuner_device_tests {
 
         assert_eq!(app.screen, Screen::Home);
         assert!(
-            !app.tuner.is_listening(),
+            !app.tuner.listener().is_listening(),
             "the tuner kept the capture device after leaving the screen"
         );
-        assert!(!app.tuner.is_picking(), "the device list survived the exit");
+        assert!(
+            !app.tuner.listener().is_picking(),
+            "the device list survived the exit"
+        );
+    }
+
+    /// The invariant `App::listener` rests on: moving between the two listening screens
+    /// closes one stream before the other opens, so there is never a moment with both.
+    ///
+    /// `leaving_for` is what enforces it, and it is asked of the screen being left before
+    /// `self.screen` moves — which is the whole reason it is a separate method rather than
+    /// a line inside `navigate_to`.
+    #[test]
+    fn only_one_screen_holds_a_stream_at_a_time() {
+        let (mut app, _) = App::new();
+
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+        let opened = app.tuner.listener().is_listening();
+
+        let _ = app.update(Message::Navigate(Screen::PlayTheInterval));
+
+        assert!(
+            !app.tuner.listener().is_listening(),
+            "the Tuner kept its device when the drill took over"
+        );
+        assert_eq!(
+            app.play_the_interval.listener().is_listening(),
+            opened,
+            "the drill did not open the device the Tuner put down"
+        );
+
+        // ...and back the other way.
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+
+        assert!(
+            !app.play_the_interval.listener().is_listening(),
+            "the drill kept its device when the Tuner took over"
+        );
+        assert_eq!(app.tuner.listener().is_listening(), opened);
+    }
+
+    /// Both ways out of the played drill release the device, as both ways out of the Tuner
+    /// do — `Esc` and a Home navigation go through the one method that says so.
+    #[test]
+    fn leaving_the_played_drill_puts_the_device_down() {
+        for leave in [Message::GoBack, Message::Navigate(Screen::Caged)] {
+            let (mut app, _) = App::new();
+
+            let _ = app.update(Message::Navigate(Screen::PlayTheInterval));
+            let _ = app.update(leave);
+
+            assert_ne!(app.screen, Screen::PlayTheInterval);
+            assert!(
+                !app.play_the_interval.listener().is_listening(),
+                "the drill kept the capture device after leaving the screen"
+            );
+        }
+    }
+
+    /// The poll ticks on either listening screen and on none of the others, read from the
+    /// same routing the messages take — so the subscription and the routing cannot
+    /// disagree about which screen is listening.
+    #[test]
+    fn the_poll_is_live_on_the_listening_screens_and_no_others() {
+        for screen in every_screen() {
+            let (mut app, _) = App::new();
+            app.open(screen.clone());
+
+            let listens = matches!(screen, Screen::Tuner | Screen::PlayTheInterval);
+            assert_eq!(
+                app.listener_ref().is_some(),
+                listens,
+                "{screen:?} disagrees about whether it listens"
+            );
+
+            // With no device on the machine the stream never opens, and the poll correctly
+            // does not tick — the screen says "no input" instead of appearing to listen.
+            if !listens {
+                assert!(!app.is_listening(), "{screen:?} is polling for audio");
+            }
+        }
     }
 
     #[test]
@@ -4802,7 +5323,7 @@ mod tuner_device_tests {
         let _ = app.update(Message::Navigate(Screen::Caged));
 
         assert_eq!(app.screen, Screen::Caged);
-        assert!(!app.tuner.is_listening());
+        assert!(!app.tuner.listener().is_listening());
     }
 
     #[test]
@@ -4810,13 +5331,13 @@ mod tuner_device_tests {
         let (mut app, _) = App::new();
 
         let _ = app.update(Message::Navigate(Screen::Tuner));
-        let first = app.tuner.is_listening();
+        let first = app.tuner.listener().is_listening();
 
         let _ = app.update(Message::GoBack);
         let _ = app.update(Message::Navigate(Screen::Tuner));
 
         assert_eq!(
-            app.tuner.is_listening(),
+            app.tuner.listener().is_listening(),
             first,
             "re-entering did not restore whatever the machine could do the first time"
         );
@@ -4837,7 +5358,7 @@ mod help_overlay_tests {
         assert!(app.help_open);
 
         for _ in 0..5 {
-            let _ = app.update(Message::TunerPoll);
+            let _ = app.update(Message::AudioPoll);
             assert!(app.help_open, "a poll tick closed the help overlay");
         }
 
@@ -4870,7 +5391,7 @@ mod tuner_direction_tests {
     fn hearing(hz: f32) -> App {
         let (mut app, _) = App::new();
         let _ = app.update(Message::Navigate(Screen::Tuner));
-        let _ = app.update(Message::TunerHeard(Heard::Pitch(Detection::synthesized(
+        let _ = app.update(Message::Heard(Heard::Pitch(Detection::synthesized(
             hz, 0.999,
         ))));
         app
@@ -4923,10 +5444,10 @@ mod tuner_direction_tests {
         let (mut app, _) = App::new();
         let _ = app.update(Message::Navigate(Screen::Tuner));
 
-        let _ = app.update(Message::TunerHeard(Heard::Silence));
+        let _ = app.update(Message::Heard(Heard::Silence));
         assert_eq!(app.tuner.correction(), None);
 
-        let _ = app.update(Message::TunerHeard(Heard::Unpitched));
+        let _ = app.update(Message::Heard(Heard::Unpitched));
         assert_eq!(app.tuner.correction(), None);
     }
 }

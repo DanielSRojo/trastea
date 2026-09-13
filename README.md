@@ -8,14 +8,15 @@
 
 A keyboard-driven guitar trainer for the desktop, written in Rust with [iced](https://iced.rs) 0.14.
 
-Trastea draws a neck in standard tuning and drills three things against it: the shape of a
-scale, the name of a note under your finger, and the distance between two positions. Two more
-screens answer rather than ask — a chord library you look things up in, and a CAGED window
-showing one chord in all five places it sits. A sixth listens: plug a guitar into an audio
-interface and the tuner names what it hears. Everything is reachable from the keyboard — the
-mouse is optional.
+Trastea draws a neck in standard tuning and drills four things against it: the shape of a
+scale, the name of a note under your finger, the distance between two positions, and that last
+one again with the answer played on the guitar rather than clicked. Two more screens answer
+rather than ask — a chord library you look things up in, and a CAGED window showing one
+chord in all five places it sits. A seventh listens the same way the played drill does: plug
+a guitar into an audio interface and the tuner names what it hears. Everything is reachable
+from the keyboard — the mouse is optional.
 
-> **Status: early.** The three trainers, the chord library and the CAGED window all work. The
+> **Status: early.** The four trainers, the chord library and the CAGED window all work. The
 > library's shape table is the part still worth growing: five CAGED shapes and a handful of
 > reduced ones cover the fifteen qualities, and every chord it offers is one a hand can hold.
 > The CAGED window is a major-triad screen for the same reason — E and A are the only letters
@@ -45,6 +46,30 @@ names an interval, and asks you to click or walk to a position carrying it. Twel
 cover the octave rather than thirteen: with no key established, the augmented fourth and the
 diminished fifth are the same six frets, so the drill judges by semitone distance instead of
 pretending to tell them apart. `d` swaps the direction, `r` skips the current prompt.
+
+**Play the Interval** — the same prompt as the Interval Trainer's *Find it*, answered on the
+guitar instead of with a click. A lit position stands for the root, an interval is named, and
+the screen waits to hear it. Plug in, play the note, and it is judged by the pitch class it
+sounds — so the interval is correct in any octave and at any position carrying it, which is the
+rule *Find it* already applies to a press. Nothing is named here either: what it heard is drawn
+as marks on every position carrying it, never as a note name, because a screen that printed
+"you played C♯" could be answered by hunting for a name rather than by measuring a distance.
+
+A note is judged once it settles, and once only. The detector refuses to release anything until
+it is both confident and stable, so a fumbled fret on the way to the answer produces nothing to
+judge and a strum is heard as nothing rather than as wrong; a held string confirms the same
+reading every ten milliseconds and costs the streak once rather than two hundred times. A fresh
+prompt is deaf until the strings go quiet — the correct answer is still ringing when the flash
+retires the prompt a second later, and a prompt that took what was already sounding would be
+answered by the previous answer. Detecting that break costs nothing: a note stopping, a
+re-pluck, and a slide all break the detector's run before the next note confirms, so its own
+definition of "a different note" is the drill's definition of "a different answer".
+
+The one number on the screen is how far the reading sits from the pitch it was named as, in
+cents, and it names nothing. The drill judges the pitch the instrument actually sounds, so a
+guitar forty cents flat is judged on the note it has become — without the offset a learner
+whose tuning has slipped is told only that they are wrong, over and over, with nothing to say
+why. `r` skips the current prompt and `d` picks the input device.
 
 **Chord Library** — a reference rather than a drill. The list is every chord it knows, twelve
 roots by fifteen qualities, grouped under the root they are built on; typing narrows it.
@@ -214,15 +239,16 @@ two read as marks from different families.
 Per-screen accelerators are declared in one table alongside the label the `?` overlay shows
 for them, so a new accelerator documents itself. A key not claimed by the current screen is
 inert there — and one claimed by two screens is free to mean different things on each: `d`
-swaps a trainer's direction and picks the library's degrees. `r` is the one key that means the
-same thing everywhere it is bound — replace what is on screen.
+swaps a trainer's direction, picks the library's degrees, and opens the input list on both
+screens that listen. `r` is the one key that means the same thing everywhere it is bound —
+replace what is on screen.
 
 Three widgets claim the motion keys rather than letting them move the focus ring: a trainer's
 neck, which walks its cursor; the CAGED window's shape row, where `← →` change the selection
-outright so walking the cycle is one gesture rather than focus-then-activate; and the Tuner's
-input list, which claims `↑ ↓` for the same reason while it is open. Tab is the way out of the
-first two, and `Esc` closes the third without leaving the screen — the same thing it does to
-the library's search box.
+outright so walking the cycle is one gesture rather than focus-then-activate; and the input
+list, which claims `↑ ↓` for the same reason while it is open, on whichever screen opened it.
+Tab is the way out of the first two, and `Esc` closes the third without leaving the screen —
+the same thing it does to the library's search box.
 
 The Chord Library adds the one modal thing in the app: a search box, opened with `/` or
 `Ctrl+K` and focused already when the screen opens, since looking something up starts with
@@ -254,9 +280,14 @@ src/
     input.rs             the capture device, and the only untestable file in the tree
   ui/
     mod.rs               App, Screen, Message, the focus grid, Neck and the two necks the
-                         screens draw, the Home and Scale Trainer views
+                         screens draw, the twelve nameable distances both interval drills
+                         ask for, the Home and Scale Trainer views
     note_trainer.rs      the Note Trainer's state machine and the screen that draws it
     interval_trainer.rs  the Interval Trainer's, on the same terms
+    play_the_interval.rs the played drill's, with the gate that decides when a reading is
+                         an answer
+    listener.rs          the capture device as the screens hold it: what it heard, the
+                         picker, and the four states — belonging to neither screen that listens
     fretboard.rs         the neck as an iced canvas widget: one Layout drives both drawing
                          and hit-testing, held together by a round-trip test
     chord_diagram.rs     one voicing as a canvas: a fret window, mutes, barres — its own
@@ -265,7 +296,7 @@ src/
                          knowledge, belonging to neither screen that asks for it
     chord_library.rs     the Chord Library: looking a chord up, and drawing the ways to play it
     caged.rs             the CAGED window's state and the screen that draws it
-    tuner.rs             the Tuner's device and reading, and the dial as a canvas — one
+    tuner.rs             the Tuner's spelling and correction, and the dial as a canvas — one
                          Dial places the arc the canvas draws and the name stacked over it
 ```
 
@@ -326,7 +357,17 @@ stopped is a barre chord: the first finger holds the index fret and the offsets 
 the rest in order. Every placement is that, less the strings that sound open — which is why E
 minor comes out fingered like E major with the third lifted, rather than renumbered from one.
 
-`note_trainer.rs`, `interval_trainer.rs`, `chord_library.rs` and `caged.rs` each keep their
+The device took the same route the shapes did, one release later. `Listening`, the confirming
+tracker, the picker and the poll were fields of `Tuner` while the Tuner was the only screen
+that listened; the played drill wanting all four is what moved them into `listener.rs` rather
+than what made one screen import another. The two screens hold one each and only one ever has
+a stream open — `leaving_for` closes it on the way out, which is also what lets the audio
+messages be routed by the screen on show rather than carrying a screen's name. That routing
+would be wrong for the trainers' flash timers, where both can genuinely be mid-flash at once,
+and it is right here for exactly the reason it is wrong there.
+
+`note_trainer.rs`, `interval_trainer.rs`, `play_the_interval.rs`, `chord_library.rs` and
+`caged.rs` each keep their
 state and their views together so the state can keep its fields private — they are read all
 over those views and nowhere else. `App` drives all four through the methods they mark
 `pub(super)` and never reaches past them; what the neck *is* stays in `mod.rs`, since that is
