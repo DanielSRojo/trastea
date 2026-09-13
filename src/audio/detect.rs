@@ -288,7 +288,7 @@ fn refine(nsdf: &[f32], lag: usize) -> f32 {
 /// held note from a strummed chord by 0.003, which is too little. Agreement alone would
 /// pass a sustained harmonic, which is perfectly stable and perfectly wrong.
 ///
-/// What it deliberately does *not* do is average or smooth. A tuner's needle has to follow
+/// What it deliberately does *not* do is average or smooth. A tuner's reading has to follow
 /// a bend, and anything that steadies a held reading by mixing in older ones makes a moving
 /// one lag behind the sound. Agreement gates; it does not filter.
 #[derive(Debug, Default)]
@@ -558,7 +558,7 @@ mod tests {
         assert_eq!(detect(&vec![0.0; WINDOW], SR), Heard::Silence);
 
         // Just under the gate is still silence, and reports as such rather than as a
-        // frequency of zero — a needle resting at zero reads as a note in tune.
+        // frequency of zero — a reading of zero would draw as a note in tune.
         let whisper = sine(A2, WINDOW)
             .iter()
             .map(|s| s * LEVEL_GATE * 0.5)

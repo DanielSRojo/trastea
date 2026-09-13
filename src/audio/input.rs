@@ -38,7 +38,7 @@ use super::detect::WINDOW;
 /// Three cases rather than one, because a learner hearing nothing needs to tell a machine
 /// with no interface from an interface another program is holding — the first is a
 /// shopping problem and the second is a "quit your DAW" problem. A tuner that renders all
-/// of them as an empty needle is indistinguishable from a tuner that is broken.
+/// of them as an empty dial is indistinguishable from a tuner that is broken.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputError {
     /// The host reported no capture device at all.
@@ -171,7 +171,7 @@ fn is_hardware(id: &str) -> bool {
 ///
 /// A lock-free ring would avoid even that, and in a DAW it would be the right call. Here
 /// the consumer is a redraw a few times a second and the cost of a dropped window is a
-/// needle that updates a beat later, so the simpler thing is chosen deliberately rather
+/// dial that updates a beat later, so the simpler thing is chosen deliberately rather
 /// than by not thinking about it.
 #[derive(Debug)]
 struct Shared {

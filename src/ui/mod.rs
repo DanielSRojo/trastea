@@ -108,11 +108,6 @@ const KEYCAP_TAB: &str = "⇥";
 const KEYCAP_BACKTAB: &str = "⇤";
 const KEYCAP_ARROWS: &str = "↑ ↓ ← →";
 const KEYCAP_BACK: &str = "←";
-/// The Tuner's direction marks, from the same embedded subset as the arrows above. Left is
-/// "this note is sharp, come down"; right is "flat, go up" — the side names the direction
-/// the string has to move, which is also the side of centre the needle is *not* on.
-const MARK_TUNE_DOWN: &str = "◀";
-const MARK_TUNE_UP: &str = "▶";
 const FEEL_FONT: iced::Font = iced::Font {
     family: font::Family::Name("Dancing Script"),
     weight: font::Weight::Bold,
@@ -3983,16 +3978,14 @@ mod tests {
         let carried = |glyph: char| {
             matches!(
                 glyph,
-                '\u{2190}'..='\u{2193}' | '\u{21E4}'..='\u{21E5}' | '\u{25C0}' | '\u{25B6}'
+                '\u{2190}'..='\u{2193}' | '\u{21E4}'..='\u{21E5}'
             )
         };
 
-        // The Tuner's marks are drawn in the same font and so answer to the same range,
-        // even though they are not keycaps and do not appear in `NAVIGATION_KEYS`.
-        for mark in [MARK_TUNE_DOWN, MARK_TUNE_UP, KEYCAP_BACK] {
-            for glyph in mark.chars() {
-                assert!(carried(glyph), "{glyph:?} is not in the subset");
-            }
+        // The back arrow is drawn in the same font and so answers to the same range, even
+        // though it is not a keycap and does not appear in `NAVIGATION_KEYS`.
+        for glyph in KEYCAP_BACK.chars() {
+            assert!(carried(glyph), "{glyph:?} is not in the subset");
         }
 
         let caps = NAVIGATION_KEYS
@@ -4912,10 +4905,10 @@ mod tuner_direction_tests {
     }
 
     #[test]
-    fn the_mark_and_the_in_tune_colouring_agree_on_where_the_boundary_is() {
-        // Just inside and just outside, on both sides. The two must flip together — a
-        // needle that reads "in tune" beside a triangle saying "keep going" is the one
-        // failure this pairing can have.
+    fn the_correction_and_the_in_tune_colouring_agree_on_where_the_boundary_is() {
+        // Just inside and just outside, on both sides. The two must flip together — a dial
+        // that reads "in tune" beside a line saying "keep going" is the one failure this
+        // pairing can have.
         let inside = 2.9;
         let outside = 3.1;
 

@@ -93,17 +93,19 @@ hears, so a capo and an alternate tuning need nothing said about them and drop D
 The trade is that a string a full semitone flat reads as the note it has become rather than the
 one it was reaching for.
 
-The needle is the reading and the name is a label on it, because a bent note crosses a semitone
-boundary smoothly while its name changes all at once. A triangle either side of the name says
-which way to turn the peg — left to come down, right to go up — and neither is drawn while the
-string is in tune. `d` picks the input device and `i` switches the name between its sharp and
-flat spellings.
+The dial is the reading and the name is a label on it, because a bent note crosses a semitone
+boundary smoothly while its name changes all at once. A dot rides an arc from half a semitone
+flat at the ♭ to half a semitone sharp at the ♯, with a fixed mark at the top for it to arrive
+at, and it turns green where the name does. Which way to turn the peg is said in words under
+the dial — a learner reading the dot's side of centre has to hold "left means flat" as well,
+and the words are the same length either way. `d` picks the input device and `i` switches the
+name between its sharp and flat spellings.
 
 Nothing is named unless the app is sure. A reading has to clear a confidence threshold *and*
 agree with the readings before it, which is what makes a strummed chord produce no name at all
 rather than a confident wrong one — measured on a real guitar, held notes score 0.996 and above
-where the best frame of a strum reaches 0.987. Silence is drawn as silence, and not as a needle
-resting at zero, which would read as a note perfectly in tune.
+where the best frame of a strum reaches 0.987. Silence is drawn as silence, and not as a dot
+resting at the top of the arc, which would read as a note perfectly in tune.
 
 ## Installing
 
@@ -199,8 +201,7 @@ The focus ring is a 2-D grid rather than a flat tab order, so `↑ ↓ ← →` 
 | `1`–`9` | jump straight to a Home menu entry |
 
 Every arrow the chrome draws — the overlay's two rows and the back button in each screen's
-top bar — comes from one subset embedded like the other fonts, along with the Tuner's two
-triangles; see `just fonts`. The tab
+top bar — comes from one subset embedded like the other fonts; see `just fonts`. The tab
 pair is in almost no text face, so what the fallback found for it differed per machine; the
 four plain arrows are in nearly every face but a body font sets them as hairlines against
 its own optical size, which is why the back arrow read as a rule with a nick in it. Taking
@@ -264,7 +265,8 @@ src/
                          knowledge, belonging to neither screen that asks for it
     chord_library.rs     the Chord Library: looking a chord up, and drawing the ways to play it
     caged.rs             the CAGED window's state and the screen that draws it
-    tuner.rs             the Tuner's device, reading and needle, on the same terms
+    tuner.rs             the Tuner's device and reading, and the dial as a canvas — one
+                         Dial places the arc the canvas draws and the name stacked over it
 ```
 
 The split is load-bearing: `music/` never imports iced, and the UI holds no music theory of
