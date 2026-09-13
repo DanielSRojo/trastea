@@ -187,6 +187,31 @@ impl ChordQuality {
         }
     }
 
+    /// The quality said aloud: the prose counterpart of `suffix`, for a learner who can
+    /// read `Cm7♭5` off a chart and still not know what to call it.
+    pub fn spoken(self) -> &'static str {
+        match self {
+            ChordQuality::Major => "major",
+            ChordQuality::Minor => "minor",
+            ChordQuality::Diminished => "diminished",
+            ChordQuality::Augmented => "augmented",
+            ChordQuality::Sus2 => "suspended second",
+            ChordQuality::Sus4 => "suspended fourth",
+            ChordQuality::Major6 => "major sixth",
+            ChordQuality::Minor6 => "minor sixth",
+            ChordQuality::Dominant7 => "dominant seventh",
+            ChordQuality::Major7 => "major seventh",
+            ChordQuality::Minor7 => "minor seventh",
+            ChordQuality::MinorMajor7 => "minor-major seventh",
+            ChordQuality::HalfDiminished7 => "half-diminished seventh",
+            ChordQuality::Diminished7 => "diminished seventh",
+            // Said the way `7♯5` is written, for the reason it is written that way:
+            // "augmented seventh" is heard by some as a seventh that is augmented, which
+            // is a different chord.
+            ChordQuality::Augmented7 => "seventh sharp five",
+        }
+    }
+
     /// Every written form that names this quality, longest first within the entry.
     ///
     /// Data on the quality rather than a matcher's guesswork: `m7` reaching a minor
@@ -303,6 +328,14 @@ impl Chord {
 
     pub fn root_note(self) -> Note {
         self.spelling.spell(self.root)
+    }
+
+    /// The chord said aloud — `C♯m7` reads "C sharp minor seventh".
+    ///
+    /// Prose, so a plain major triad names the quality its symbol leaves silent: the point
+    /// of saying it is that `C` is called "C major" and nothing on the chart says so.
+    pub fn spoken(self) -> String {
+        format!("{} {}", self.root_note().spoken(), self.kind.spoken())
     }
 
     /// Every degree spelled: the degree number forces the letter, the accidental corrects
@@ -581,6 +614,37 @@ mod tests {
     }
 
     #[test]
+    fn no_two_qualities_are_said_the_same_way() {
+        // The same rule the written forms hold, for the same reason: a name that fits two
+        // chords teaches the learner to call them one thing.
+        for (i, &kind) in ChordQuality::ALL.iter().enumerate() {
+            for &other in &ChordQuality::ALL[i + 1..] {
+                assert_ne!(
+                    kind.spoken(),
+                    other.spoken(),
+                    "{kind:?} and {other:?} are both called {}",
+                    kind.spoken()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_spoken_name_is_prose_and_not_notation() {
+        // What separates `spoken` from `suffix`: it is meant to be read out, so a stray
+        // `7` or `b` copied over from the symbol is the failure to catch.
+        for &kind in ChordQuality::ALL {
+            assert!(
+                kind.spoken()
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c == ' ' || c == '-'),
+                "{kind:?} is said as {}",
+                kind.spoken()
+            );
+        }
+    }
+
+    #[test]
     fn case_separates_the_major_and_minor_sevenths() {
         // The pair the case-sensitive rule exists for. Folding case would make these one
         // form naming two opposite chords.
@@ -734,6 +798,21 @@ mod tests {
         );
         // The root spells itself the way the chord names it, so a flat root reads flat.
         assert_eq!(Chord::new(pc(10), ChordQuality::Minor7).to_string(), "Bbm7");
+    }
+
+    #[test]
+    fn a_chord_is_said_as_its_root_then_its_quality() {
+        assert_eq!(Chord::new(pc(0), ChordQuality::Major).spoken(), "C major");
+        assert_eq!(
+            Chord::new(pc(1), ChordQuality::Minor7).spoken(),
+            "C sharp minor seventh"
+        );
+        // The root is said the way the chord spells it, so this one is a D flat and not
+        // the C sharp the minor seventh above it was.
+        assert_eq!(
+            Chord::new(pc(1), ChordQuality::Major).spoken(),
+            "D flat major"
+        );
     }
 
     #[test]

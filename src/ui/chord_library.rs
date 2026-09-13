@@ -12,8 +12,8 @@ use crate::music::notes::{PitchClass, Spelling};
 use super::chord_diagram::{ChordDiagram, FEATURE, STRIP, StringMark, chord_diagram};
 use super::shapes::{Voicing, position_label, voicings};
 use super::{
-    BODY, DRILL_NECK, FocusTarget, HAIRLINE_INK, INK, MUSIC_FONT, MUTE, Message, Notation,
-    SMUFL_CSYM_AUGMENTED, SMUFL_CSYM_DIMINISHED, SMUFL_CSYM_HALF_DIMINISHED,
+    BODY, DRILL_NECK, FEEL_FONT, FocusTarget, HAIRLINE_INK, INK, MUSIC_FONT, MUTE, Message,
+    Notation, SMUFL_CSYM_AUGMENTED, SMUFL_CSYM_DIMINISHED, SMUFL_CSYM_HALF_DIMINISHED,
     SMUFL_CSYM_MAJOR_SEVENTH, SMUFL_SHARP, SUCCESS, card_container, focus_ring, ghost_button,
     hairline_rule, intervalic_text, note_label,
 };
@@ -819,6 +819,10 @@ fn detail_pane(
                 notation_buttons,
             ]
             .align_y(iced::Alignment::Center),
+            // The symbol above says how the chord is written and nothing about how it is
+            // said, which is the half a beginner is missing — `C` is "C major" and only
+            // somebody who already knows that can read it off the chart.
+            text(chord.spoken()).size(22).font(FEEL_FONT).color(MUTE),
             row![notes, Space::new().width(Length::Fixed(32.0)), degrees]
                 .align_y(iced::Alignment::Center),
         ]

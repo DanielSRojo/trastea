@@ -168,6 +168,18 @@ impl Accidental {
             Accidental::DoubleSharp => "##",
         }
     }
+
+    /// The accidental said aloud. `None` for a natural, which is not said at all — the
+    /// same reason `accidental_glyph` draws nothing for one.
+    pub fn spoken(self) -> Option<&'static str> {
+        match self {
+            Accidental::DoubleFlat => Some("double flat"),
+            Accidental::Flat => Some("flat"),
+            Accidental::Natural => None,
+            Accidental::Sharp => Some("sharp"),
+            Accidental::DoubleSharp => Some("double sharp"),
+        }
+    }
 }
 
 /// A note as written: a letter plus an accidental.
@@ -182,6 +194,14 @@ pub struct Note {
 }
 
 impl Note {
+    /// The note said aloud, for prose rather than for a label — `C♯` reads "C sharp".
+    pub fn spoken(self) -> String {
+        match self.accidental.spoken() {
+            Some(accidental) => format!("{} {accidental}", self.letter),
+            None => self.letter.to_string(),
+        }
+    }
+
     /// Total and infallible — the direction that needs no context.
     pub fn pitch_class(self) -> PitchClass {
         let semitone =
@@ -373,6 +393,15 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_note_is_said_as_its_letter_and_its_accidental() {
+        let said = |letter, accidental| Note { letter, accidental }.spoken();
+
+        assert_eq!(said(Letter::C, Accidental::Natural), "C");
+        assert_eq!(said(Letter::C, Accidental::Sharp), "C sharp");
+        assert_eq!(said(Letter::B, Accidental::DoubleFlat), "B double flat");
     }
 
     #[test]

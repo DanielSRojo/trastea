@@ -78,11 +78,17 @@ A typed symbol is parsed rather than fuzzy-matched, so `cm7` is a minor seventh 
 major seventh it happens to be a subsequence of; approximate matching is the fallback for
 input the grammar cannot read, where `cmj7` still finds `Cmaj7`.
 
-Picking a chord shows its notes, its degrees, and the ways to play it, drawn as chord
-diagrams — a four-fret window with a position label, muted and open strings marked above the
-nut, and a barre drawn as one bar rather than several dots. The picked shape is drawn half
-again as large as the rest. `notes`, `degrees` and `fingers` choose what the dots say, and it
-opens on fingers, which is what answers "how do I play this".
+Picking a chord shows its name said aloud, its notes, its degrees, and the ways to play it,
+drawn as chord diagrams — a four-fret window with a position label, muted and open strings
+marked above the nut, and a barre drawn as one bar rather than several dots. The picked shape
+is drawn half again as large as the rest. `notes`, `degrees` and `fingers` choose what the
+dots say, and it opens on fingers, which is what answers "how do I play this".
+
+The spoken name is there because a symbol says how a chord is written and nothing about how
+it is called. `C♯m7` is "C sharp minor seventh" and `C` is "C major" — the second is the one
+worth printing, since a plain triad is the chord whose symbol is silent about its quality.
+The names are prose, held apart by a test: two qualities that read out the same way would
+teach a learner to call two chords one thing.
 
 The shapes are derived, not tabulated. A small set of movable ones says which strings sound
 and which degree each carries; placing one is addition, and changing a chord's quality moves
