@@ -34,6 +34,16 @@ jobs:
           fi
           echo "running the pinned toolchain: ${actual}"
 
+      # cpal's Linux backend is ALSA, and alsa-sys resolves libasound through
+      # pkg-config at build time. Without this the gate fails in the build script with a
+      # pkg-config error rather than a Rust one. macOS needs no equivalent: CoreAudio is
+      # part of the SDK.
+      - name: ALSA headers for cpal
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libasound2-dev
+
       - name: Install just
         uses: extractions/setup-just@v4
 

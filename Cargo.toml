@@ -16,6 +16,7 @@ categories = ["gui"]
 publish = ["crates-io"]
 
 [dependencies]
+cpal = "0.18.2"
 iced = { version = "0.14", features = ["canvas", "smol"] }
 
 # The flags for the binary the release workflow packages, kept here rather than in

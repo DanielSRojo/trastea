@@ -11,7 +11,8 @@ A keyboard-driven guitar trainer for the desktop, written in Rust with [iced](ht
 Trastea draws a neck in standard tuning and drills three things against it: the shape of a
 scale, the name of a note under your finger, and the distance between two positions. Two more
 screens answer rather than ask — a chord library you look things up in, and a CAGED window
-showing one chord in all five places it sits. Everything is reachable from the keyboard — the
+showing one chord in all five places it sits. A sixth listens: plug a guitar into an audio
+interface and the tuner names what it hears. Everything is reachable from the keyboard — the
 mouse is optional.
 
 > **Status: early.** The three trainers, the chord library and the CAGED window all work. The
@@ -85,6 +86,25 @@ neck that ends on a marked fret looks deliberate. The screen states how many sha
 rather than promising five — five is what a major triad yields, and a minor one yields the
 three a guitarist is actually taught.
 
+**Tuner** — the one screen that listens. Plug a guitar into an audio interface, pick the
+input, and it names the pitch it hears and says how far off it is in cents. It is chromatic
+rather than six-string: it names the nearest of all twelve pitch classes in whatever octave it
+hears, so a capo and an alternate tuning need nothing said about them and drop D is just D2.
+The trade is that a string a full semitone flat reads as the note it has become rather than the
+one it was reaching for.
+
+The needle is the reading and the name is a label on it, because a bent note crosses a semitone
+boundary smoothly while its name changes all at once. A triangle either side of the name says
+which way to turn the peg — left to come down, right to go up — and neither is drawn while the
+string is in tune. `d` picks the input device and `i` switches the name between its sharp and
+flat spellings.
+
+Nothing is named unless the app is sure. A reading has to clear a confidence threshold *and*
+agree with the readings before it, which is what makes a strummed chord produce no name at all
+rather than a confident wrong one — measured on a real guitar, held notes score 0.996 and above
+where the best frame of a strum reaches 0.987. Silence is drawn as silence, and not as a needle
+resting at zero, which would read as a note perfectly in tune.
+
 ## Installing
 
 Two ways in: `cargo` builds it from source on any platform iced supports, and a tagged
@@ -102,7 +122,11 @@ build the one CI tested. `--version 0.2.0` pins an older release, and `--force` 
 one you already have.
 
 This is the route for anything the release archives do not cover — Windows, x86_64 macOS,
-a Linux that is not x86_64 — and the only one that needs a Rust toolchain. The compiler CI
+a Linux that is not x86_64 — and the only one that needs a Rust toolchain. On Linux it also
+needs ALSA development headers, since `cpal` builds against them — `libasound2-dev`,
+`alsa-lib` or `alsa-lib-devel`, depending on the distribution. Without them the build stops
+in a build script with a `pkg-config` error rather than a Rust one, which reads like a broken
+crate and is not one. The compiler CI
 uses is pinned in `rust-toolchain.toml`, but rustup reads that file from inside a checkout
 only, so `cargo install` builds on whatever toolchain you have; anything at or past the
 pinned version is fine.
@@ -145,12 +169,20 @@ cargo run          # launch the app
 cargo test         # the unit tests, no UI harness needed
 ```
 
-Rust edition 2024. The only dependency is `iced` (with the `canvas` and `smol` features,
-the latter for the timer behind the trainers' answer flash); the fonts under `assets/` are
-embedded into the binary at compile time.
+Rust edition 2024. Two dependencies: `iced` (with the `canvas` and `smol` features, the
+latter for the timer behind the trainers' answer flash) and
+[`cpal`](https://github.com/RustAudio/cpal) for audio capture. The pitch detection is not a third — it is arithmetic in
+`audio/detect.rs`, because the difference function this needs is affordable at guitar rates
+and an FFT would be the wrong tool anyway. The fonts under `assets/` are embedded into the
+binary at compile time.
+
+**On Linux, `cpal` builds against ALSA**, so the headers have to be present:
+`libasound2-dev` on Debian and Ubuntu, `alsa-lib` on Arch, `alsa-lib-devel` on Fedora. This
+is the one thing here that is not satisfied by a Rust toolchain alone, and it applies to
+`cargo install trastea` as much as to a checkout. macOS needs no equivalent.
 
 Contributors can install [`just`](https://just.systems) and run `just` to see the repo's
-recipes; `just ci` runs the same gate CI runs, and nothing else here needs it.
+recipes; `just ci` runs the same gate CI runs, and needs those ALSA headers on Linux.
 
 ## Keyboard model
 
@@ -167,7 +199,8 @@ The focus ring is a 2-D grid rather than a flat tab order, so `↑ ↓ ← →` 
 | `1`–`9` | jump straight to a Home menu entry |
 
 Every arrow the chrome draws — the overlay's two rows and the back button in each screen's
-top bar — comes from one subset embedded like the other fonts; see `just fonts`. The tab
+top bar — comes from one subset embedded like the other fonts, along with the Tuner's two
+triangles; see `just fonts`. The tab
 pair is in almost no text face, so what the fallback found for it differed per machine; the
 four plain arrows are in nearly every face but a body font sets them as hairlines against
 its own optical size, which is why the back arrow read as a rule with a nick in it. Taking
@@ -183,10 +216,12 @@ inert there — and one claimed by two screens is free to mean different things 
 swaps a trainer's direction and picks the library's degrees. `r` is the one key that means the
 same thing everywhere it is bound — replace what is on screen.
 
-Two widgets claim the motion keys rather than letting them move the focus ring: a trainer's
-neck, which walks its cursor, and the CAGED window's shape row, where `← →` change the
-selection outright so walking the cycle is one gesture rather than focus-then-activate. Tab is
-the way out of both.
+Three widgets claim the motion keys rather than letting them move the focus ring: a trainer's
+neck, which walks its cursor; the CAGED window's shape row, where `← →` change the selection
+outright so walking the cycle is one gesture rather than focus-then-activate; and the Tuner's
+input list, which claims `↑ ↓` for the same reason while it is open. Tab is the way out of the
+first two, and `Esc` closes the third without leaving the screen — the same thing it does to
+the library's search box.
 
 The Chord Library adds the one modal thing in the app: a search box, opened with `/` or
 `Ctrl+K` and focused already when the screen opens, since looking something up starts with
@@ -213,6 +248,9 @@ src/
     scales.rs            ScaleKind and Scale::spell — degrees derived, not looked up
     chords.rs            ChordQuality and Chord — degrees stacked over a root, spelled the
                          way scales are; the symbol grammar, read in both directions
+  audio/                 samples in, hertz out; imports neither iced nor music/
+    detect.rs            McLeod pitch detection — a difference function, not an FFT
+    input.rs             the capture device, and the only untestable file in the tree
   ui/
     mod.rs               App, Screen, Message, the focus grid, Neck and the two necks the
                          screens draw, the Home and Scale Trainer views
@@ -226,10 +264,18 @@ src/
                          knowledge, belonging to neither screen that asks for it
     chord_library.rs     the Chord Library: looking a chord up, and drawing the ways to play it
     caged.rs             the CAGED window's state and the screen that draws it
+    tuner.rs             the Tuner's device, reading and needle, on the same terms
 ```
 
 The split is load-bearing: `music/` never imports iced, and the UI holds no music theory of
-its own. Scale spelling is arithmetic over degree numbers rather than a table of key
+its own. `audio/` holds the same line one step further out — it reports hertz and knows nothing
+about notes, because naming a frequency is theory's job and `music/pitch.rs` already does it.
+That is also what makes the detector testable: a test asserting "82.41 Hz within a cent" needs
+a sine wave and no musical vocabulary at all, and every one of them runs with no device
+present. `input.rs` is the only file in the tree that cannot be tested, which is the whole
+reason the seam sits where it does — opening a device, de-interleaving it and handing samples
+across a thread boundary is all it is allowed to do, and every decision lives on the other
+side of it. Scale spelling is arithmetic over degree numbers rather than a table of key
 signatures, which is what lets a G♯ Locrian come out spelled correctly without a special
 case. Which of two enharmonic root names a scale gets is arithmetic too — fewest double
 accidentals, then fewest accidentals — and only the eleven scales where that comes out

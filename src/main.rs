@@ -1,6 +1,7 @@
 use iced::theme::palette::Palette;
 use iced::{Color, Size, Theme, application};
 
+mod audio;
 mod ui;
 use ui::App;
 

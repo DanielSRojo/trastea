@@ -35,15 +35,19 @@ build-release:
 run:
     cargo run
 
-# Six glyphs out of a 990 KiB font, so what is committed under assets/ is the subset rather
+# Eight glyphs out of a 990 KiB font, so what is committed under assets/ is the subset rather
 # than the original and this recipe is how anyone reproduces it. The range is the one
-# `every_keycap_is_one_the_embedded_subset_carries` checks the table against. The family name survives
-# the subset, which is what `KEYCAP_FONT` matches on.
+# `every_mark_is_one_the_embedded_subset_carries` checks the tables against. The family name
+# survives the subset, which is what `KEYCAP_FONT` matches on.
 #
-# rebuild the keycap subset from the system Noto Sans Math — needs fonttools installed
+# Six are the chrome's keycaps. The last two are the Tuner's ◀ ▶, which are marks rather than
+# keycaps but want the same treatment for the same reason: taken from one place they are one
+# set of shapes, and taken from whatever each machine falls back to they are not.
+#
+# rebuild the embedded subset from the system Noto Sans Math — needs fonttools installed
 fonts:
     pyftsubset /usr/share/fonts/noto/NotoSansMath-Regular.ttf \
-        --unicodes="U+2190-2193,U+21E4,U+21E5" \
+        --unicodes="U+2190-2193,U+21E4,U+21E5,U+25C0,U+25B6" \
         --output-file=assets/fonts/NotoSansMath-Keycaps.ttf
 
 # the third-party notices the release stages beside LICENSE — needs cargo-about installed

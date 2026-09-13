@@ -27,6 +27,16 @@ jobs:
         with:
           fetch-depth: 0
 
+      # cpal's Linux backend is ALSA, and alsa-sys resolves libasound through
+      # pkg-config at build time — see the same step in ci.yaml. Every job here that
+      # compiles needs it, `publish` included: `cargo publish` builds the packaged crate
+      # to verify it before uploading.
+      - name: ALSA headers for cpal
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libasound2-dev
+
       - name: Install just
         uses: extractions/setup-just@v4
 
@@ -93,6 +103,16 @@ jobs:
             os: macos-latest
     steps:
       - uses: actions/checkout@v7
+
+      # cpal's Linux backend is ALSA, and alsa-sys resolves libasound through
+      # pkg-config at build time — see the same step in ci.yaml. Every job here that
+      # compiles needs it, `publish` included: `cargo publish` builds the packaged crate
+      # to verify it before uploading.
+      - name: ALSA headers for cpal
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libasound2-dev
 
       - name: Install just
         uses: extractions/setup-just@v4
@@ -217,6 +237,16 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v7
+
+      # cpal's Linux backend is ALSA, and alsa-sys resolves libasound through
+      # pkg-config at build time — see the same step in ci.yaml. Every job here that
+      # compiles needs it, `publish` included: `cargo publish` builds the packaged crate
+      # to verify it before uploading.
+      - name: ALSA headers for cpal
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libasound2-dev
 
       - name: Install just
         uses: extractions/setup-just@v4
