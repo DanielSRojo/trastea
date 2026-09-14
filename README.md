@@ -66,7 +66,10 @@ one mark; and the kind grid on the right with the run's controls beneath it. The
 the glyph in the middle rather than in a grid — see above.
 
 `m` swaps between answering with a press and answering on the guitar, the second being the
-same listener the played drill and the tuner use. `t` sets a duration, after which the run
+same listener the played drill and the tuner use and the one the screen opens on — the drill is
+about finding a degree on the instrument, and the neck is what you fall back to. The device is
+claimed on entering the screen rather than at startup, so an app that never opens this screen
+never listens. `t` sets a duration, after which the run
 stops and says how many sequences it completed; `n` hides the neck outright, offered only
 while playing, since in pressing mode the neck is the surface the answer is given on. `r`
 picks another scale to drill. `t` and `n` report what they are set to in the `?` overlay

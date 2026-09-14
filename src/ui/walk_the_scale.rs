@@ -207,7 +207,11 @@ impl WalkTheScale {
     pub(super) fn new() -> WalkTheScale {
         WalkTheScale {
             scale: Scale::new(PitchClass::new(9), ScaleKind::MinorPentatonic),
-            answering: Answering::Pressing,
+            // Playing rather than pressing: the drill is about finding a degree on the
+            // instrument, and the neck is the surface you fall back to. The device is not
+            // claimed here — `enter` is what opens it, so an app that never reaches this
+            // screen never listens.
+            answering: Answering::Playing { neck_hidden: false },
             best_streak: 0,
             drag: None,
             scroll: 0.0,
@@ -1191,6 +1195,10 @@ mod tests {
     fn drill_app(root: u8, kind: ScaleKind) -> App {
         let mut app = app_with_seed(0);
         app.navigate_to(Screen::WalkTheScale);
+        // Into pressing before the run begins, so no capture device is claimed: the screen
+        // opens in playing mode, and most of what is asserted below is about a press. The
+        // tests that want playing toggle back, as they always did.
+        app.walk_the_scale.toggle_answering();
         app.walk_the_scale.enter();
         app.walk_the_scale.select_root(PitchClass::new(root));
         app.walk_the_scale.select_kind(kind);
@@ -2184,11 +2192,19 @@ mod tests {
         let focused = app.focused;
         assert!(app.walk_the_scale.is_running(), "the screen opens asking");
 
+        assert!(
+            matches!(app.walk_the_scale.answering(), Answering::Playing { .. }),
+            "the screen opens on the instrument"
+        );
+
         press_into(&mut app, "m", keyboard::Modifiers::empty());
-        assert!(matches!(
-            app.walk_the_scale.answering(),
-            Answering::Playing { .. }
-        ));
+        assert_eq!(app.walk_the_scale.answering(), Answering::Pressing);
+
+        press_into(&mut app, "m", keyboard::Modifiers::empty());
+        assert!(
+            matches!(app.walk_the_scale.answering(), Answering::Playing { .. }),
+            "not a one-way switch"
+        );
 
         press_into(&mut app, "n", keyboard::Modifiers::empty());
         assert!(app.walk_the_scale.neck_hidden());
@@ -2211,7 +2227,7 @@ mod tests {
         let mut app = app_with_seed(0);
         app.navigate_to(Screen::WalkTheScale);
         press_into(&mut app, "p", keyboard::Modifiers::empty());
-        press_into(&mut app, "m", keyboard::Modifiers::empty());
+        // No `m`: the screen already opens playing, which is what makes `n` live.
         press_into(&mut app, "t", keyboard::Modifiers::empty());
         press_into(&mut app, "n", keyboard::Modifiers::empty());
 
@@ -2372,7 +2388,6 @@ mod tests {
         let mut app = app_with_seed(0);
         app.navigate_to(Screen::WalkTheScale);
         let _ = app.update(Message::StartWalkTheScale);
-        let _ = app.update(Message::ToggleScaleAnswering);
 
         let targets: Vec<_> = app
             .focusables()
