@@ -620,6 +620,7 @@ mod tests {
     use super::super::tests::{app_with_seed, press_into};
     use super::super::{App, Notation, Screen, accelerators_for};
     use super::*;
+    use crate::ui::WalkTheScale;
     use iced::keyboard;
 
     #[test]
@@ -1385,10 +1386,14 @@ mod tests {
 
     #[test]
     fn the_help_overlay_lists_the_interval_trainers_keys() {
-        let claimed: Vec<char> = accelerators_for(&Screen::IntervalTrainer, Notation::Notes)
-            .into_iter()
-            .map(|(key, _, _)| key)
-            .collect();
+        let claimed: Vec<char> = accelerators_for(
+            &Screen::IntervalTrainer,
+            Notation::Notes,
+            &WalkTheScale::new(),
+        )
+        .into_iter()
+        .map(|(key, _, _)| key)
+        .collect();
 
         assert_eq!(claimed, vec!['r', 'd']);
         // No `a`: this screen has no pool to widen, so the key stays unclaimed here.

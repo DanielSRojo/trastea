@@ -6,18 +6,22 @@ mod interval_trainer;
 mod listener;
 mod note_trainer;
 mod play_the_interval;
+mod scale_trainer;
 mod shapes;
 mod tuner;
+mod walk_the_scale;
+use std::borrow::Cow;
 use std::ops::Range;
 use std::time::Duration;
 
 use caged::{Caged, ui_caged};
-use fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use interval_trainer::{IntervalTrainer, ui_interval_trainer};
 use listener::Listener;
 use note_trainer::{NoteTrainer, ui_note_trainer};
 use play_the_interval::{PlayTheInterval, ui_play_the_interval};
+use scale_trainer::ui_scale_trainer;
 use tuner::{Tuner, ui_tuner};
+use walk_the_scale::{WalkTheScale, ui_walk_the_scale};
 
 use chord_library::{ChordLibrary, KeyOutcome, ui_chord_library};
 
@@ -178,6 +182,9 @@ pub struct App {
     chord_library: ChordLibrary,
     /// The CAGED window's root and selection, on the same terms.
     caged: Caged,
+    /// The scale drill: its own scale, which element of the sequence it is asking for, how
+    /// it is answered, and the device it listens to when that is by playing.
+    walk_the_scale: WalkTheScale,
     /// The Tuner's device, detector state and reading. Holds the open audio stream, which
     /// is why it lives on `App` rather than inside a subscription — iced hashes a
     /// subscription recipe rather than its captured values, so a stream owned there would
@@ -218,6 +225,11 @@ pub enum Screen {
     ChordLibrary,
     Caged,
     Tuner,
+    /// The drill that walks a scale by degree. Its own screen rather than a mode of the
+    /// Scale Trainer, for the reason `PlayTheInterval` is not a mode of the Interval
+    /// Trainer: a reference and a drill are two things to look at, and one screen holding
+    /// both had two jobs and one keyboard.
+    WalkTheScale,
 }
 
 /// Where the keyboard cursor starts: the open low E, the neck's top-left corner.
@@ -575,6 +587,33 @@ pub enum Message {
     /// The played drill's flash timer. Its own variant for the reason the other two have
     /// theirs: a tick left behind on one screen must not retire another screen's prompt.
     AdvancePlayPrompt,
+    /// Starts another run after one has ended on its duration.
+    StartWalkTheScale,
+    /// Picks the root and the kind the drill walks. Its own pair rather than `SelectRoot`
+    /// and `SelectScaleKind`, which would move the Scale Trainer's scale from here.
+    SelectDrillRoot(PitchClass),
+    SelectDrillKind(ScaleKind),
+    /// A different scale to drill. Its own variant rather than `RerollScale`, for the reason
+    /// `RerollCagedRoot` is one.
+    RerollDrillScale,
+    /// Swaps how the drill is answered — a press on the neck, or a note played.
+    ToggleScaleAnswering,
+    /// Cycles the run's duration: off, three, five, ten minutes.
+    CycleScaleDuration,
+    /// Hides the neck, so a degree is found from memory. Inert while pressing, where the
+    /// neck is the surface the answer is given on.
+    ToggleScaleNeck,
+    /// Answers the drill's current element with a position — what a press on the Scale
+    /// Trainer's neck sends while a run is going.
+    ///
+    /// Two loose `usize`s for the reason `ChooseNotePosition` takes them: the bare variant
+    /// constructor is handed to `Fretboard::on_press` as a `fn(usize, usize) -> Message`.
+    ChooseScalePosition(usize, usize),
+    /// The end of the drill's completed-sequence flash. Its own variant for the reason the
+    /// other three have theirs: a tick left behind on one screen must not retire another's.
+    AdvanceScaleSequence,
+    /// One second of a timed run, which is what spends its duration.
+    WalkTheScaleTick,
     /// A key press, straight from the subscription and not yet meaning anything.
     ///
     /// The subscription used to translate keys inside its own closure, which worked only
@@ -657,6 +696,20 @@ pub enum FocusTarget {
     CagedRoot(usize),
     /// The CAGED window's shuffle button: a new root, not a new scale.
     RerollCagedRoot,
+    /// The scale drill's own root and kind grids, indexed like the Scale Trainer's.
+    DrillRoot(usize),
+    DrillKind(usize),
+    /// A different scale to drill.
+    RerollDrillScale,
+    /// Starts another run, offered only once one has ended on its duration.
+    RestartDrill,
+    /// The three controls that exist only while a run is going.
+    ScaleAnswering,
+    ScaleDuration,
+    ScaleNeck,
+    /// The Scale Trainer's neck, as the drill's answer surface while pressing. Claims the
+    /// motion keys while focused, exactly as the two trainers' necks do.
+    ScaleFretboard,
     /// One shape pill in the CAGED window.
     ///
     /// Claims the horizontal motions while focused, as the Chord Library's list does for its
@@ -692,11 +745,16 @@ struct MenuItem {
 /// How often the Tuner asks for audio while it is showing.
 const AUDIO_POLL: std::time::Duration = std::time::Duration::from_millis(10);
 
-const HOME_MENU: [MenuItem; 7] = [
+const HOME_MENU: [MenuItem; 8] = [
     MenuItem {
         label: "Scale Trainer",
         caption: "Explore and learn guitar scales",
         screen: Screen::ScaleTrainer,
+    },
+    MenuItem {
+        label: "Walk the Scale",
+        caption: "Find a scale's degrees in order, by ear or by eye",
+        screen: Screen::WalkTheScale,
     },
     MenuItem {
         label: "Note Trainer",
@@ -769,6 +827,7 @@ impl App {
             play_the_interval,
             chord_library: ChordLibrary::new(),
             caged: Caged::new(),
+            walk_the_scale: WalkTheScale::new(),
             tuner: Tuner::new(),
         };
 
@@ -844,6 +903,18 @@ impl App {
             return Task::none();
         }
 
+        if matches!(message, Message::AdvanceScaleSequence) {
+            self.walk_the_scale.advance();
+            return Task::none();
+        }
+
+        // The run's clock, like the flash timers: a tick that arrived while the help panel
+        // was up must spend the duration rather than dismiss the panel.
+        if matches!(message, Message::WalkTheScaleTick) {
+            self.walk_the_scale.tick();
+            return Task::none();
+        }
+
         // The audio poll, for the same reason and much more urgently: it ticks every
         // 10 ms, so an overlay that a tick could dismiss was on screen for one frame. The
         // reading also keeps up to date behind the panel rather than going stale and
@@ -871,6 +942,14 @@ impl App {
                     listener.close_picker();
                 }
             }
+            // And leaves the drill before it leaves the screen, which is what `Esc` does to
+            // the library's search box: the run is the modal thing here, and a learner
+            // pressing Esc mid-sequence means "stop asking", not "take me Home".
+            Message::GoBack
+                if self.screen == Screen::WalkTheScale && self.walk_the_scale.is_running() =>
+            {
+                self.walk_the_scale.leave();
+            }
             Message::GoBack => self.go_back(),
             Message::SelectRoot(root) => self.set_scale(root, self.scale.kind()),
             Message::SelectScaleKind(kind) => self.set_scale(self.scale.root(), kind),
@@ -879,6 +958,20 @@ impl App {
             }
             Message::ToggleNotation => self.toggle_notation(),
             Message::RerollScale => self.reroll_scale(),
+            Message::StartWalkTheScale => self.walk_the_scale.restart(),
+            Message::SelectDrillRoot(root) => self.walk_the_scale.select_root(root),
+            Message::SelectDrillKind(kind) => self.walk_the_scale.select_kind(kind),
+            Message::RerollDrillScale => self.walk_the_scale.reroll(&mut self.rng),
+            Message::ToggleScaleAnswering => self.walk_the_scale.toggle_answering(),
+            Message::CycleScaleDuration => self.walk_the_scale.cycle_duration(),
+            Message::ToggleScaleNeck => self.walk_the_scale.toggle_neck(),
+            Message::ChooseScalePosition(string, fret) => {
+                if let Some(pitch_class) = DRILL_NECK.pitch_class_at(string, fret) {
+                    self.walk_the_scale.press(pitch_class);
+                }
+            }
+            // Both handled above, before the help overlay gets a say.
+            Message::AdvanceScaleSequence | Message::WalkTheScaleTick => {}
             // Every arm below borrows `self.note_trainer` and `self.rng` at once. That is
             // allowed because they are disjoint fields — the same reason the drill's methods
             // take the generator as a parameter instead of reaching for it.
@@ -975,6 +1068,7 @@ impl App {
         let wants_the_search_box = screen == Screen::ChordLibrary;
         let wants_the_caged_window = screen == Screen::Caged;
         let wants_fresh_play = screen == Screen::PlayTheInterval;
+        let wants_a_fresh_walk = screen == Screen::WalkTheScale;
         let wants_to_listen = matches!(screen, Screen::Tuner | Screen::PlayTheInterval);
 
         self.navigate_to(screen);
@@ -988,6 +1082,13 @@ impl App {
 
         if wants_fresh_scale {
             self.reroll_scale();
+        }
+
+        // The scale is what it was left on — a learner comes back to what they are working
+        // on, which is the CAGED window's rule rather than the Scale Trainer's — while the
+        // run itself is fresh and the best streak persists.
+        if wants_a_fresh_walk {
+            self.walk_the_scale.enter();
         }
 
         // Same rule as the scale trainer's: the screen never reopens on what it last
@@ -1047,6 +1148,13 @@ impl App {
             return;
         }
 
+        // A run does not outlive the screen it is on: its clock would go on spending a
+        // duration behind a screen nobody is looking at, and `leave` is also what puts the
+        // device down when the run was listening.
+        if self.screen == Screen::WalkTheScale {
+            self.walk_the_scale.leave();
+        }
+
         // Asked of the screen being left rather than of the one being entered, and before
         // `self.screen` moves — which is what makes moving between the two listening
         // screens close one stream before the other opens, rather than holding both.
@@ -1067,6 +1175,7 @@ impl App {
         match self.screen {
             Screen::Tuner => Some(self.tuner.listener_mut()),
             Screen::PlayTheInterval => Some(self.play_the_interval.listener_mut()),
+            Screen::WalkTheScale => self.walk_the_scale.listener_mut(),
             _ => None,
         }
     }
@@ -1075,6 +1184,7 @@ impl App {
         match self.screen {
             Screen::Tuner => Some(self.tuner.listener()),
             Screen::PlayTheInterval => Some(self.play_the_interval.listener()),
+            Screen::WalkTheScale => self.walk_the_scale.listener(),
             _ => None,
         }
     }
@@ -1105,6 +1215,12 @@ impl App {
                     self.play_the_interval.apply(heard);
                 }
             }
+            Screen::WalkTheScale => {
+                let heard = self.walk_the_scale.listener_mut().and_then(Listener::poll);
+                if let Some(heard) = heard {
+                    self.walk_the_scale.apply(heard);
+                }
+            }
             _ => {}
         }
     }
@@ -1115,6 +1231,12 @@ impl App {
     fn hear(&mut self, heard: Heard) {
         match self.screen {
             Screen::Tuner => self.tuner.listener_mut().apply(heard),
+            Screen::WalkTheScale => {
+                if let Some(listener) = self.walk_the_scale.listener_mut() {
+                    listener.apply(heard);
+                }
+                self.walk_the_scale.apply(heard);
+            }
             Screen::PlayTheInterval => {
                 self.play_the_interval.listener_mut().apply(heard);
                 self.play_the_interval.apply(heard);
@@ -1223,6 +1345,11 @@ impl App {
             return;
         }
 
+        if self.focused == FocusTarget::ScaleFretboard {
+            self.walk_the_scale.move_cursor(direction);
+            return;
+        }
+
         // The list claims all four: up and down walk the chords, left and right walk the
         // selected chord's voicings. Tab is still the way out, as it is on the two necks.
         if self.focused == FocusTarget::ChordList {
@@ -1306,6 +1433,22 @@ impl App {
             }
             FocusTarget::CagedShape(index) => self.caged.select_shape(index),
             FocusTarget::RerollCagedRoot => self.reroll_caged_root(),
+            FocusTarget::DrillRoot(index) => {
+                if let Some(&pitch_class) = PitchClass::ALL.get(index) {
+                    self.walk_the_scale.select_root(pitch_class);
+                }
+            }
+            FocusTarget::DrillKind(index) => {
+                if let Some(&kind) = ScaleKind::ALL.get(index) {
+                    self.walk_the_scale.select_kind(kind);
+                }
+            }
+            FocusTarget::RerollDrillScale => self.walk_the_scale.reroll(&mut self.rng),
+            FocusTarget::RestartDrill => self.walk_the_scale.restart(),
+            FocusTarget::ScaleAnswering => self.walk_the_scale.toggle_answering(),
+            FocusTarget::ScaleDuration => self.walk_the_scale.cycle_duration(),
+            FocusTarget::ScaleNeck => self.walk_the_scale.toggle_neck(),
+            FocusTarget::ScaleFretboard => self.walk_the_scale.answer_at_cursor(),
             FocusTarget::NotationToggle => self.toggle_notation(),
             FocusTarget::RerollScale => self.reroll_scale(),
             FocusTarget::Root(index) => {
@@ -1387,6 +1530,12 @@ impl App {
                 true,
                 self.focused,
             ),
+            Screen::WalkTheScale => with_top_bar(
+                "Walk the Scale",
+                ui_walk_the_scale(&self.walk_the_scale, self.focused),
+                true,
+                self.focused,
+            ),
             Screen::Tuner => with_top_bar(
                 "Tuner",
                 ui_tuner(&self.tuner, self.focused),
@@ -1443,6 +1592,18 @@ impl App {
 
         if self.play_the_interval.is_flashing() {
             streams.push(iced::time::every(ANSWER_FLASH).map(|_| Message::AdvancePlayPrompt));
+        }
+
+        if self.walk_the_scale.is_flashing() {
+            streams.push(iced::time::every(ANSWER_FLASH).map(|_| Message::AdvanceScaleSequence));
+        }
+
+        // One second is the resolution the readout needs — `4:59` — and anything finer would
+        // redraw for nothing. Gated on a run rather than on the screen, so an untimed run
+        // ticks no more than a timed one needs.
+        if self.screen == Screen::ScaleTrainer && self.walk_the_scale.is_running() {
+            streams
+                .push(iced::time::every(Duration::from_secs(1)).map(|_| Message::WalkTheScaleTick));
         }
 
         // Only while the Tuner is showing and a device is open, so nothing ticks on any
@@ -1594,6 +1755,57 @@ impl App {
                 }
                 grid
             }
+            // The same shape as the Scale Trainer's, because the screen is laid out the same
+            // way: Back on a row of its own, then the root and kind grids side by side. What
+            // differs is the last row, which grows with the run — a control that is not on
+            // screen is not a focus target, which is what keeps Tab from stopping on nothing.
+            Screen::WalkTheScale => {
+                let mut back_row: FocusRow = vec![None; ROOT_ROW_WIDTH];
+                back_row[0] = Some(FocusTarget::Back);
+
+                let root_rows: Vec<_> = root_row_spans().collect();
+                let kind_rows: Vec<_> = kind_row_spans().collect();
+
+                let mut grid = vec![back_row];
+                for r in 0..root_rows.len().max(kind_rows.len()) {
+                    let mut row: FocusRow = vec![None; ROOT_ROW_WIDTH];
+                    if let Some(&(start, len)) = root_rows.get(r) {
+                        for (col, cell) in row.iter_mut().enumerate().take(len) {
+                            *cell = Some(FocusTarget::DrillRoot(start + col));
+                        }
+                    }
+                    if let Some(&(start, len)) = kind_rows.get(r) {
+                        row.extend((0..len).map(|i| Some(FocusTarget::DrillKind(start + i))));
+                    }
+                    grid.push(row);
+                }
+
+                let mut drill_row: FocusRow = Vec::new();
+                let running = self.walk_the_scale.is_running();
+                let playing = matches!(
+                    self.walk_the_scale.answering(),
+                    walk_the_scale::Answering::Playing { .. }
+                );
+
+                // The neck is only an answer surface while a press means something on it.
+                if running && !playing {
+                    drill_row.push(Some(FocusTarget::ScaleFretboard));
+                }
+                drill_row.push(Some(FocusTarget::RerollDrillScale));
+                if running {
+                    drill_row.push(Some(FocusTarget::ScaleAnswering));
+                    drill_row.push(Some(FocusTarget::ScaleDuration));
+                    if playing {
+                        drill_row.push(Some(FocusTarget::ScaleNeck));
+                        drill_row.push(Some(FocusTarget::InputDevice));
+                    }
+                } else {
+                    drill_row.push(Some(FocusTarget::RestartDrill));
+                }
+                grid.push(drill_row);
+
+                grid
+            }
             Screen::NoteTrainer => {
                 // Back on a row of its own, as on the scale trainer and for the same
                 // reason: the four header controls already fill the card's own row.
@@ -1713,7 +1925,9 @@ impl App {
     )]
     fn card_bands(&self, width: usize) -> Vec<Range<usize>> {
         match &self.screen {
-            Screen::ScaleTrainer => vec![0..ROOT_ROW_WIDTH, ROOT_ROW_WIDTH..width],
+            Screen::ScaleTrainer | Screen::WalkTheScale => {
+                vec![0..ROOT_ROW_WIDTH, ROOT_ROW_WIDTH..width]
+            }
             // These screens have a single card, so one band spans the whole width.
             Screen::Home
             | Screen::NoteTrainer
@@ -1887,7 +2101,16 @@ fn vim_motion(c: &str) -> Option<Message> {
 /// A key that fires a widget's action directly, skipping the walk to it.
 ///
 /// The label is what the help overlay shows, so a new accelerator documents itself.
-type Accelerator = (char, FocusTarget, &'static str);
+/// A key, the control it fires, and how the overlay names it.
+///
+/// The label is a `Cow` rather than a `&'static str` because three of the drill's read a
+/// setting — `timer: 5:00` is no literal. It is not a `String` either: that would cost every
+/// one of the fixed labels an allocation and a `.to_owned()` to serve the three that report.
+/// And it cannot be a `&'a str` borrowed from `App`: the reported labels are built by
+/// `format!`, so a borrow would point at a temporary owned by the function returning it —
+/// `error[E0515]: cannot return value referencing temporary value`. `Cow::Borrowed` for the
+/// literals, `Cow::Owned` for the three, and one type covering both.
+type Accelerator = (char, FocusTarget, Cow<'static, str>);
 
 impl App {
     /// The accelerators the current screen claims. A key absent here is inert on that
@@ -1898,11 +2121,15 @@ impl App {
     /// `i` on the library has to name *the next* notation button, and which one that is
     /// depends on the notation now in force.
     fn accelerators(&self) -> Vec<Accelerator> {
-        accelerators_for(&self.screen, self.chord_library.notation())
+        accelerators_for(
+            &self.screen,
+            self.chord_library.notation(),
+            &self.walk_the_scale,
+        )
     }
 }
 
-fn accelerators_for(screen: &Screen, notation: Notation) -> Vec<Accelerator> {
+fn accelerators_for(screen: &Screen, notation: Notation, drill: &WalkTheScale) -> Vec<Accelerator> {
     match screen {
         // Numbered by position, so the menu order is the key order. `from_digit` runs out
         // after nine, which is the point at which a menu needs more than digits anyway.
@@ -1911,34 +2138,96 @@ fn accelerators_for(screen: &Screen, notation: Notation) -> Vec<Accelerator> {
             .enumerate()
             .filter_map(|(index, item)| {
                 let key = char::from_digit(index as u32 + 1, 10)?;
-                Some((key, FocusTarget::HomeMenuItem(index), item.label))
+                Some((key, FocusTarget::HomeMenuItem(index), item.label.into()))
             })
             .collect(),
         Screen::ScaleTrainer => vec![
-            ('r', FocusTarget::RerollScale, "new scale"),
-            ('i', FocusTarget::NotationToggle, "interval notation"),
+            ('r', FocusTarget::RerollScale, "new scale".into()),
+            ('i', FocusTarget::NotationToggle, "interval notation".into()),
         ],
+        // `r` and `i` mean here what they mean on the Scale Trainer. The rest belong to the
+        // drill, and three of them report the setting they hold rather than only naming what
+        // the key does, which is why the label is a `Cow` and this arm is built rather than
+        // listed.
+        Screen::WalkTheScale => {
+            let mut keys: Vec<Accelerator> =
+                vec![('r', FocusTarget::RerollDrillScale, "new scale".into())];
+
+            if !drill.is_running() {
+                keys.push(('p', FocusTarget::RestartDrill, "another run".into()));
+            }
+
+            if drill.is_running() {
+                keys.push((
+                    'm',
+                    FocusTarget::ScaleAnswering,
+                    match drill.answering() {
+                        walk_the_scale::Answering::Pressing => "answer: press".into(),
+                        walk_the_scale::Answering::Playing { .. } => "answer: play".into(),
+                    },
+                ));
+                keys.push((
+                    't',
+                    FocusTarget::ScaleDuration,
+                    Cow::Owned(format!("timer: {}", duration_label(drill.duration()))),
+                ));
+
+                // Offered only while playing: in pressing mode the neck is the surface the
+                // answer is given on, so a key that took it away would leave the drill with
+                // nothing to answer with.
+                if matches!(drill.answering(), walk_the_scale::Answering::Playing { .. }) {
+                    keys.push((
+                        'n',
+                        FocusTarget::ScaleNeck,
+                        if drill.neck_hidden() {
+                            "neck: hidden".into()
+                        } else {
+                            "neck: shown".into()
+                        },
+                    ));
+                    keys.push(('d', FocusTarget::InputDevice, "input device".into()));
+                }
+            }
+
+            keys
+        }
         // `r` means the same here as on the scale trainer — replace what is on screen.
         // `d` and `a` are free: `h j k l` are claimed as motions before accelerators are
         // consulted, and neither `d` nor `a` is one.
         Screen::NoteTrainer => vec![
-            ('r', FocusTarget::SkipPrompt, "skip this note"),
-            ('d', FocusTarget::DrillDirectionToggle, "swap direction"),
-            ('a', FocusTarget::PoolToggle, "include accidentals"),
+            ('r', FocusTarget::SkipPrompt, "skip this note".into()),
+            (
+                'd',
+                FocusTarget::DrillDirectionToggle,
+                "swap direction".into(),
+            ),
+            ('a', FocusTarget::PoolToggle, "include accidentals".into()),
         ],
         // `r` and `d` mean here what they mean on the Note Trainer — replace what is on
         // screen, and swap which way the drill runs. There is no `a`: this screen has no
         // pool to widen.
         Screen::IntervalTrainer => vec![
-            ('r', FocusTarget::SkipIntervalPrompt, "skip this interval"),
-            ('d', FocusTarget::IntervalDirectionToggle, "swap direction"),
+            (
+                'r',
+                FocusTarget::SkipIntervalPrompt,
+                "skip this interval".into(),
+            ),
+            (
+                'd',
+                FocusTarget::IntervalDirectionToggle,
+                "swap direction".into(),
+            ),
         ],
         // `r` means what it means everywhere — replace what is on screen. `d` means what
         // it means on the Tuner, which is the other screen that listens; there is no
         // direction to swap here, since an interval cannot be named by playing it.
         Screen::PlayTheInterval => vec![
-            ('r', FocusTarget::SkipPlayPrompt, "skip this interval"),
-            ('d', FocusTarget::InputDevice, "input device"),
+            (
+                'r',
+                FocusTarget::SkipPlayPrompt,
+                "skip this interval".into(),
+            ),
+            ('d', FocusTarget::InputDevice, "input device".into()),
         ],
         // `/` is the same physical key as `?`, distinguished by shift: search, and help.
         //
@@ -1953,33 +2242,52 @@ fn accelerators_for(screen: &Screen, notation: Notation) -> Vec<Accelerator> {
                 .map_or(0, |at| (at + 1) % chord_library::NOTATIONS.len());
 
             vec![
-                ('/', FocusTarget::SearchBox, "search"),
-                ('n', FocusTarget::NotationChoice(0), "note names"),
-                ('d', FocusTarget::NotationChoice(1), "degrees"),
-                ('f', FocusTarget::NotationChoice(2), "fingers"),
-                ('i', FocusTarget::NotationChoice(next), "cycle the three"),
+                ('/', FocusTarget::SearchBox, "search".into()),
+                ('n', FocusTarget::NotationChoice(0), "note names".into()),
+                ('d', FocusTarget::NotationChoice(1), "degrees".into()),
+                ('f', FocusTarget::NotationChoice(2), "fingers".into()),
+                (
+                    'i',
+                    FocusTarget::NotationChoice(next),
+                    "cycle the three".into(),
+                ),
                 // Here for the overlay's sake. `accelerate` takes `g` and `G` before it
                 // consults this table, because `gg` is two keys and a table entry is one —
                 // so the target is the widget they move rather than one they activate, and
                 // `gg` is named in the label because it has no row of its own.
-                ('G', FocusTarget::ChordList, "last chord, gg for the first"),
+                (
+                    'G',
+                    FocusTarget::ChordList,
+                    "last chord, gg for the first".into(),
+                ),
             ]
         }
         // `r` and `i` mean here what they mean on the Scale Trainer — replace what is on
         // screen, and switch what the dots say. There is no `d`: this screen has no direction
         // to swap, and the library's `d` is a notation it does not offer.
         Screen::Caged => vec![
-            ('r', FocusTarget::RerollCagedRoot, "new root"),
-            ('i', FocusTarget::NotationToggle, "interval notation"),
+            ('r', FocusTarget::RerollCagedRoot, "new root".into()),
+            ('i', FocusTarget::NotationToggle, "interval notation".into()),
         ],
         // `d` is the device list. It means something different again here — the library's
         // `d` picks degrees and a trainer's swaps direction — which is the arrangement a
         // per-screen table exists to allow. `i` keeps its meaning: switch how a note is
         // written, which here is the sharp or flat name of the pitch being heard.
         Screen::Tuner => vec![
-            ('d', FocusTarget::InputDevice, "input device"),
-            ('i', FocusTarget::NotationToggle, "flat names"),
+            ('d', FocusTarget::InputDevice, "input device".into()),
+            ('i', FocusTarget::NotationToggle, "flat names".into()),
         ],
+    }
+}
+
+/// A duration as the overlay says it: `off`, or minutes and seconds.
+fn duration_label(duration: Option<Duration>) -> String {
+    match duration {
+        None => "off".to_owned(),
+        Some(total) => {
+            let seconds = total.as_secs();
+            format!("{}:{:02}", seconds / 60, seconds % 60)
+        }
     }
 }
 
@@ -2263,170 +2571,22 @@ fn ui_home(focused: FocusTarget) -> Element<'static, Message> {
     with_top_bar("Trastea", content.into(), false, focused)
 }
 
-fn ui_scale_trainer(
-    scale: Scale,
-    notation: Notation,
-    focused: FocusTarget,
-) -> Element<'static, Message> {
-    use iced::Length;
-    use iced::widget::{Space, column, container, row, text};
-
-    // Display only: no press handler and no cursor, so the neck stays the picture it has
-    // always been here. `Message` is inferred from the `Element` this becomes.
-    let fb = Fretboard {
-        num_frets: DRILL_NECK.frets(),
-        highlighted: scale_markers(scale, notation),
-        ..Fretboard::default()
-    };
-
-    let current_scale_card = container(
-        column![
-            row![
-                note_label(scale.root_note(), SUMMARY_ROOT_SIZE, INK),
-                Space::new().width(Length::Fill),
-                // One degree, not a formula fragment: `1♭3` was tried first, on the
-                // grounds that it reads less like an instruction to flatten the third,
-                // and it crowded the header row — three buttons and the root label share
-                // this line. Built like the formula row it points at — the glyph in
-                // MUSIC_FONT, the digit in the body font — because one `text` cannot
-                // carry both, and both at one size because that is how the pair is
-                // written.
-                control_button(
-                    control_glyph(
-                        row![
-                            control_label(text(SMUFL_FLAT.to_string()).font(MUSIC_FONT), 20.0),
-                            control_label(text("3"), 20.0),
-                        ]
-                        .spacing(0)
-                    ),
-                    Message::ToggleNotation,
-                    focused == FocusTarget::NotationToggle,
-                ),
-                control_button(
-                    control_shuffle(),
-                    Message::RerollScale,
-                    focused == FocusTarget::RerollScale,
-                ),
-            ]
-            .spacing(8),
-            text(scale.kind().name()).size(SUMMARY_NAME_SIZE).color(INK),
-            intervalic_text(scale.kind().intervals()),
-        ]
-        .spacing(10),
-    )
-    .width(Length::Fixed(ROOT_SELECTOR_CARD_WIDTH))
-    .height(Length::Fixed(SUMMARY_CARD_HEIGHT))
-    .padding(32)
-    .style(card_container);
-
-    let root_selector_content = container(root_row_spans().fold(
-        column![].spacing(16),
-        |rows, (start, len)| {
-            rows.push(
-                container(root_note_row(
-                    &PitchClass::ALL[start..start + len],
-                    scale,
-                    start,
-                    focused,
-                ))
-                .width(Length::Fill)
-                .center_x(Length::Fill),
-            )
-        },
-    ))
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .center_x(Length::Fill)
-    .center_y(Length::Fill);
-
-    let root_selector_card = container(root_selector_content)
-        .width(Length::Fixed(ROOT_SELECTOR_CARD_WIDTH))
-        .height(Length::Fixed(SELECTOR_CARD_HEIGHT))
-        .padding(32)
-        .style(card_container);
-
-    let scale_selector_content = container(kind_row_spans().fold(
-        column![].spacing(12),
-        |rows, (start, len)| {
-            rows.push(scale_kind_row(
-                &ScaleKind::ALL[start..start + len],
-                scale.kind(),
-                start,
-                focused,
-            ))
-        },
-    ))
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .center_y(Length::Fill);
-
-    let scale_selector_card = container(scale_selector_content)
-        .width(Length::Fill)
-        .height(Length::Fixed(SELECTOR_CARD_HEIGHT))
-        .padding(32)
-        .style(card_container);
-
-    let explanation_font = iced::Font {
-        family: font::Family::Cursive,
-        style: font::Style::Italic,
-        ..iced::Font::DEFAULT
-    };
-
-    let explanation_card = container(
-        column![
-            text(scale.kind().feel())
-                .size(22)
-                .font(FEEL_FONT)
-                .color(BODY)
-                .width(Length::Fill),
-            text(scale.kind().common_usage())
-                .size(18)
-                .font(explanation_font)
-                .color(MUTE)
-                .width(Length::Fill),
-        ]
-        .spacing(12),
-    )
-    .width(Length::Fill)
-    .height(Length::Fixed(SUMMARY_CARD_HEIGHT))
-    .padding(32)
-    .style(card_container);
-
-    let summary_cards = row![current_scale_card, explanation_card]
-        .width(Length::Fill)
-        .spacing(16);
-
-    let selector_cards = row![root_selector_card, scale_selector_card]
-        .width(Length::Fill)
-        .spacing(16);
-
-    let details = column![summary_cards, selector_cards]
-        .width(Length::Fill)
-        .spacing(16);
-
-    container(row![fretboard(fb), details].spacing(32))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(Padding {
-            top: 24.0,
-            right: 64.0,
-            bottom: 48.0,
-            left: 64.0,
-        })
-        .center_y(Length::Fill)
-        .into()
-}
-
 /// Each button is named by the scale pressing it would build, so the label is a
 /// promise the press keeps. That means a label moves when the *kind* selection
 /// moves — pitch class 10 reads `A♯` under Minor Pentatonic and `B♭` under Ionian —
 /// which is the fact the whole naming rule is about: the same fret is called
 /// different things depending on what you are playing over it.
+///
+/// The message a press sends and the focus target a button answers to are both parameters,
+/// because the Scale Trainer and the scale drill each own their own scale — a shared grid
+/// that hard-coded `Message::SelectRoot` would move the trainer's scale from the drill.
 fn root_note_row(
     pitch_classes: &[PitchClass],
     scale: Scale,
     start_index: usize,
     focused: FocusTarget,
+    on_press: fn(PitchClass) -> Message,
+    target: fn(usize) -> FocusTarget,
 ) -> iced::widget::Row<'static, Message> {
     use iced::widget::row;
 
@@ -2444,8 +2604,37 @@ fn root_note_row(
                     color,
                 ),
                 is_selected,
-                focused == FocusTarget::Root(start_index + i),
-                Message::SelectRoot(*pitch_class),
+                focused == target(start_index + i),
+                on_press(*pitch_class),
+            ))
+        })
+}
+
+/// The kind pills. Parameterised like `root_note_row` and for the same reason.
+fn scale_kind_row(
+    kinds: &[ScaleKind],
+    selected: ScaleKind,
+    start_index: usize,
+    focused: FocusTarget,
+    on_press: fn(ScaleKind) -> Message,
+    target: fn(usize) -> FocusTarget,
+) -> iced::widget::Row<'static, Message> {
+    use iced::widget::{button, row, text};
+
+    kinds
+        .iter()
+        .enumerate()
+        .fold(row![].spacing(8), |row, (i, kind)| {
+            row.push(focus_ring(
+                button(text(kind.name()).size(KIND_BUTTON_SIZE))
+                    .padding([8, 12])
+                    .style(if *kind == selected {
+                        selected_root_button
+                    } else {
+                        ghost_button
+                    })
+                    .on_press(on_press(*kind)),
+                focused == target(start_index + i),
             ))
         })
 }
@@ -2565,32 +2754,6 @@ fn intervalic_text(intervals: &'static [Interval]) -> iced::widget::Row<'static,
         })
 }
 
-fn scale_kind_row(
-    kinds: &[ScaleKind],
-    selected: ScaleKind,
-    start_index: usize,
-    focused: FocusTarget,
-) -> iced::widget::Row<'static, Message> {
-    use iced::widget::{button, row, text};
-
-    kinds
-        .iter()
-        .enumerate()
-        .fold(row![].spacing(8), |row, (i, kind)| {
-            row.push(focus_ring(
-                button(text(kind.name()).size(KIND_BUTTON_SIZE))
-                    .padding([8, 12])
-                    .style(if *kind == selected {
-                        selected_root_button
-                    } else {
-                        ghost_button
-                    })
-                    .on_press(Message::SelectScaleKind(*kind)),
-                focused == FocusTarget::ScaleKind(start_index + i),
-            ))
-        })
-}
-
 /// The text inside one marker — a note's name, or the job it does in the scale.
 ///
 /// A pure decision split out of `scale_markers` for the reason `interval_token` is
@@ -2604,43 +2767,6 @@ fn marker_label(notation: Notation, note: Note, degree: Interval) -> String {
         // than to describe anything the screen can reach.
         Notation::Intervals | Notation::Fingers => degree.to_string(),
     }
-}
-
-fn scale_markers(scale: Scale, notation: Notation) -> Vec<NoteMarker> {
-    let mut markers = Vec::new();
-
-    for (string, open) in STANDARD_TUNING.iter().enumerate() {
-        for fret in 0_u8..=12 {
-            // Which of twelve is all a scale marker wants: a scale has no octave.
-            let pitch_class = open.pitch_class().transpose(fret);
-
-            // `spell` stays the membership test, so the set of markers is the same
-            // in both modes and the mode cannot make a dot disappear. The degree is
-            // then an `expect` rather than a second gate:
-            // `degree_and_spell_agree_on_membership` in scales.rs proves a spelled
-            // pitch class always has one.
-            if let Some(note) = scale.spell(pitch_class) {
-                let degree = scale
-                    .degree(pitch_class)
-                    .expect("degree_and_spell_agree_on_membership: a spelled pitch has a degree");
-
-                markers.push(NoteMarker {
-                    string,
-                    fret: fret as usize,
-                    label: marker_label(notation, note, degree),
-                    color: if pitch_class == scale.root() {
-                        Color::from_rgb8(0xff, 0x4d, 0x4d)
-                    } else {
-                        LINK
-                    },
-                    // Filled: these carry a note name or a degree, and the label needs
-                    // something to read against.
-                    style: MarkerStyle::Filled,
-                });
-            }
-        }
-    }
-    markers
 }
 
 /// One piece of a key hint: a word in the body font, or a keycap in `KEYCAP_FONT`.
@@ -2720,7 +2846,7 @@ fn ui_help_overlay(claimed: Vec<Accelerator>) -> Element<'static, Message> {
 
     let navigation = NAVIGATION_KEYS
         .into_iter()
-        .map(|(parts, description)| (key_hint(parts), description));
+        .map(|(parts, description)| (key_hint(parts), Cow::Borrowed(description)));
 
     let has_accelerators = !claimed.is_empty();
     // Accelerators are single characters typed as themselves, so no row of them ever needs
@@ -2764,14 +2890,16 @@ fn ui_help_overlay(claimed: Vec<Accelerator>) -> Element<'static, Message> {
 /// One labelled group of key rows in the help overlay.
 fn help_section(
     title: &'static str,
-    rows: impl Iterator<Item = (Element<'static, Message>, &'static str)>,
+    rows: impl Iterator<Item = (Element<'static, Message>, Cow<'static, str>)>,
 ) -> Element<'static, Message> {
     use iced::widget::{column, container, row, text};
 
     let entries = column(rows.map(|(keys, description)| {
         row![
             container(keys).width(150),
-            text(description).size(HELP_KEY_SIZE).color(BODY),
+            text(description.into_owned())
+                .size(HELP_KEY_SIZE)
+                .color(BODY),
         ]
         .spacing(14)
         .into()
@@ -3600,9 +3728,9 @@ mod tests {
     }
 
     #[test]
-    fn the_sixth_digit_opens_the_caged_window() {
+    fn the_seventh_digit_opens_the_caged_window() {
         let mut app = app_with_seed(0xca6);
-        press_into(&mut app, "6", keyboard::Modifiers::empty());
+        press_into(&mut app, "7", keyboard::Modifiers::empty());
 
         assert_eq!(app.screen, Screen::Caged);
         assert!(!app.caged.shapes().is_empty());
@@ -3684,10 +3812,14 @@ mod tests {
         let mut app = app_with_seed(0xca6);
         app.open(Screen::Caged);
 
-        let keys: Vec<char> = accelerators_for(&Screen::Caged, app.chord_library.notation())
-            .into_iter()
-            .map(|(key, ..)| key)
-            .collect();
+        let keys: Vec<char> = accelerators_for(
+            &Screen::Caged,
+            app.chord_library.notation(),
+            &WalkTheScale::new(),
+        )
+        .into_iter()
+        .map(|(key, ..)| key)
+        .collect();
 
         assert_eq!(keys, ['r', 'i']);
         for inert in ["d", "a"] {
@@ -3816,7 +3948,7 @@ mod tests {
         for screen in every_screen() {
             // Read from the table rather than listed here, so a screen that takes up `i`
             // exempts itself instead of turning this into a failure to edit by hand.
-            if accelerators_for(&screen, Notation::Notes)
+            if accelerators_for(&screen, Notation::Notes, &WalkTheScale::new())
                 .iter()
                 .any(|&(key, ..)| key == 'i')
             {
@@ -3897,9 +4029,9 @@ mod tests {
     #[test]
     fn the_chord_library_is_reachable_from_the_menu() {
         let mut app = app_with_seed(0xc40d);
-        // The library is the fifth entry, so it takes the fifth digit — both derived
+        // The library is the sixth entry, so it takes the sixth digit — both derived
         // from `HOME_MENU`, which is why a screen inserted above it needed nothing else.
-        press_into(&mut app, "5", keyboard::Modifiers::empty());
+        press_into(&mut app, "6", keyboard::Modifiers::empty());
 
         assert_eq!(app.screen, Screen::ChordLibrary);
     }
@@ -4264,7 +4396,7 @@ mod tests {
     /// this, a fourth entry would silently be the only one you cannot reach by number.
     #[test]
     fn every_home_menu_item_has_a_digit_accelerator() {
-        let bound = accelerators_for(&Screen::Home, Notation::Notes);
+        let bound = accelerators_for(&Screen::Home, Notation::Notes, &WalkTheScale::new());
 
         assert_eq!(bound.len(), HOME_MENU.len());
 
@@ -4273,7 +4405,11 @@ mod tests {
 
             assert_eq!(
                 bound[index],
-                (expected, FocusTarget::HomeMenuItem(index), item.label),
+                (
+                    expected,
+                    FocusTarget::HomeMenuItem(index),
+                    item.label.into()
+                ),
                 "menu item {index} ({}) is misnumbered or mislabelled",
                 item.label
             );
@@ -4423,10 +4559,11 @@ mod tests {
     #[test]
     fn no_screen_binds_the_same_accelerator_twice() {
         for screen in every_screen() {
-            let mut keys: Vec<char> = accelerators_for(&screen, Notation::Notes)
-                .iter()
-                .map(|(k, _, _)| *k)
-                .collect();
+            let mut keys: Vec<char> =
+                accelerators_for(&screen, Notation::Notes, &WalkTheScale::new())
+                    .iter()
+                    .map(|(k, _, _)| *k)
+                    .collect();
             let count = keys.len();
             keys.sort_unstable();
             keys.dedup();
@@ -4482,7 +4619,7 @@ mod tests {
 
             assert_eq!(
                 app.screen,
-                Screen::NoteTrainer,
+                Screen::WalkTheScale,
                 "{named:?} did not activate the focused menu item"
             );
         }
@@ -4539,194 +4676,6 @@ mod tests {
             step_focus_2d(&grid, FocusTarget::Back, Direction::Down),
             FocusTarget::HomeMenuItem(0)
         );
-    }
-
-    /// Every marker's pitch class, derived independently of `scale.spell` by
-    /// transposing the open string — the same computation `scale_markers` itself
-    /// does, kept separate here so a test failure means the marker disagrees
-    /// with the tuning, not with itself.
-    fn marker_pitch_class(marker: &NoteMarker) -> PitchClass {
-        STANDARD_TUNING[marker.string]
-            .pitch_class()
-            .transpose(marker.fret as u8)
-    }
-
-    /// Every marker's position, for comparing two labellings of one neck.
-    fn marker_positions(markers: &[NoteMarker]) -> Vec<(usize, usize)> {
-        markers.iter().map(|m| (m.string, m.fret)).collect()
-    }
-
-    #[test]
-    fn interval_notation_labels_the_markers_with_the_formula() {
-        let a_aeolian = Scale::new(PitchClass::new(9), ScaleKind::Aeolian);
-
-        let names = scale_markers(a_aeolian, Notation::Notes);
-        let degrees = scale_markers(a_aeolian, Notation::Intervals);
-
-        // The same dots, both ways round: the mode may change the text and nothing
-        // else. Membership comes from `spell`, which never sees the mode.
-        assert_eq!(
-            marker_positions(&names),
-            marker_positions(&degrees),
-            "switching notation moved or dropped a marker"
-        );
-        let colors = |markers: &[NoteMarker]| -> Vec<(f32, f32, f32, f32)> {
-            markers
-                .iter()
-                .map(|m| (m.color.r, m.color.g, m.color.b, m.color.a))
-                .collect()
-        };
-        assert_eq!(
-            colors(&names),
-            colors(&degrees),
-            "switching notation recoloured a marker"
-        );
-
-        // A minor's formula, and nothing outside it. Set equality both ways: no label
-        // may appear that is not a degree of this scale, and every degree must show up
-        // somewhere on twelve frets of six strings.
-        let labels: HashSet<&str> = degrees.iter().map(|m| m.label.as_str()).collect();
-        let expected: HashSet<&str> = ["1", "2", "b3", "4", "5", "b6", "b7"].into_iter().collect();
-        assert_eq!(labels, expected);
-
-        for marker in &degrees {
-            if marker_pitch_class(marker) == a_aeolian.root() {
-                assert_eq!(marker.label, "1", "the root is degree 1");
-            }
-        }
-    }
-
-    #[test]
-    fn spelling_does_not_reach_interval_labels() {
-        // A degree is a position in the formula, and no choice of sharps or flats
-        // moves one. This used to be asserted by toggling one root two ways; with the
-        // spelling derived there is no toggle, so it is asserted across every root
-        // instead — which sweeps roots that resolve to sharps (F♯ Ionian) and roots
-        // that resolve to flats (D♭ Ionian) alike. If spelling leaked into a degree,
-        // those two would disagree.
-        let kind = ScaleKind::Ionian;
-        let mut expected: Vec<String> = kind.intervals().iter().map(|i| i.to_string()).collect();
-        expected.sort();
-
-        for &pitch_class in &PitchClass::ALL {
-            let scale = Scale::new(pitch_class, kind);
-
-            let mut labels: Vec<String> = scale_markers(scale, Notation::Intervals)
-                .iter()
-                .map(|marker| marker.label.clone())
-                .collect();
-            labels.sort();
-            labels.dedup();
-
-            assert_eq!(labels, expected, "{:?} Ionian", scale.root_note());
-        }
-    }
-
-    #[test]
-    fn f_ionian_names_pitch_class_ten_b_flat_not_a_sharp() {
-        // The branch's headline claim, asserted where it reaches the screen:
-        // F Ionian's fourth degree is B♭, not the semitone-only A♯ the old code
-        // produced. `Spelling::Sharps` is exactly the setting that used to expose
-        // the bug, since a naive sharps-only spelling would pick A♯ here.
-        let scale = Scale::new(PitchClass::new(5), ScaleKind::Ionian);
-
-        let markers = scale_markers(scale, Notation::Notes);
-        let mut checked = 0;
-
-        for marker in &markers {
-            if marker_pitch_class(marker).semitone() == 10 {
-                // Read off the label, now that a marker carries text rather than a
-                // `Note`. That is nearer the claim in any case — `Bb` is what the
-                // neck actually shows — and the structure behind it is pinned in
-                // scales.rs, where the spelling is decided.
-                assert_eq!(
-                    marker.label, "Bb",
-                    "string {} fret {}",
-                    marker.string, marker.fret
-                );
-                checked += 1;
-            }
-        }
-
-        assert!(
-            checked > 0,
-            "F Ionian on standard tuning never reaches pitch class 10"
-        );
-    }
-
-    // `toggling_spelling_moves_no_marker_but_relabels_at_least_one` stood here,
-    // automating a manual checklist item about the ♯/♭ toggle. There is no toggle to
-    // check now. Its surviving half — that a naming choice never moves a marker — is
-    // `naming_never_moves_the_scale` in `music/scales.rs`, over all 192 combinations
-    // rather than one root two ways.
-
-    #[test]
-    fn root_highlighting_keys_on_pitch_class_not_on_note() {
-        // Pins the exact predicate `scale_markers` highlights on: pitch-class
-        // equality against `scale.root()`, independently recomputed here rather
-        // than trusted from `marker.note`. Swapping the source line to
-        // `marker.note == scale.root_note()` happens to color identically today
-        // — every note in one scale's `notes()` has a distinct pitch class, and
-        // `every_scale_spells_without_failing` now pins `notes()[0] ==
-        // root_note()` (Fix 5 in scales.rs) — but that equivalence depends on
-        // both of those holding elsewhere. Keying on `PitchClass` directly, as
-        // this test requires, stays correct even if either invariant is ever
-        // broken by an unrelated change; keying on `Note` would not.
-        let scale = Scale::new(PitchClass::new(5), ScaleKind::Ionian);
-
-        let markers = scale_markers(scale, Notation::Notes);
-        let root_color = Color::from_rgb8(0xff, 0x4d, 0x4d);
-        let (mut root_markers, mut other_markers) = (0, 0);
-
-        for marker in &markers {
-            if marker_pitch_class(marker) == scale.root() {
-                assert_eq!(marker.color, root_color, "root marker not highlighted");
-                root_markers += 1;
-            } else {
-                assert_eq!(marker.color, LINK, "non-root marker not LINK");
-                other_markers += 1;
-            }
-        }
-
-        assert!(root_markers > 0, "the root never appears on this tuning");
-        assert!(other_markers > 0, "every marker was treated as the root");
-    }
-
-    #[test]
-    fn every_scale_marker_is_filled_so_the_ring_stays_the_question() {
-        // The prompt's ring is the only outlined marker; a scale dot must not become one.
-        for root in PitchClass::ALL {
-            for &kind in ScaleKind::ALL {
-                let scale = Scale::new(root, kind);
-
-                for notation in [Notation::Notes, Notation::Intervals] {
-                    for marker in scale_markers(scale, notation) {
-                        assert_eq!(
-                            marker.style,
-                            MarkerStyle::Filled,
-                            "{scale:?} string {} fret {}",
-                            marker.string,
-                            marker.fret
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn standard_tuning_low_open_string_is_e_natural() {
-        // Pins STANDARD_TUNING itself: E A D G B E low to high, pitch classes
-        // 4 9 2 7 11 4. Nothing else asserts this constant directly.
-        let e_ionian = Scale::new(PitchClass::new(4), ScaleKind::Ionian);
-
-        let markers = scale_markers(e_ionian, Notation::Notes);
-        let open_low_e = markers
-            .iter()
-            .find(|m| m.string == 0 && m.fret == 0)
-            .expect("the open low E is in E Ionian");
-
-        assert_eq!(open_low_e.label, "E");
     }
 
     /// Pins the octave convention, which the pitch-class test above cannot: a tuning an
@@ -4963,15 +4912,15 @@ mod tuner_tests {
     fn the_tuner_is_reachable_and_leavable_like_every_other_screen() {
         let (mut app, _) = App::new();
 
-        // Present in the menu, and as the seventh entry it has a digit.
+        // Present in the menu, and as the eighth entry it has a digit.
         let entry = HOME_MENU
             .iter()
             .position(|item| item.screen == Screen::Tuner)
             .expect("the Tuner is a Home menu entry");
         assert!(
-            accelerators_for(&Screen::Home, Notation::Notes)
+            accelerators_for(&Screen::Home, Notation::Notes, &WalkTheScale::new())
                 .iter()
-                .any(|(key, target, _)| *key == '7' && *target == FocusTarget::HomeMenuItem(entry)),
+                .any(|(key, target, _)| *key == '8' && *target == FocusTarget::HomeMenuItem(entry)),
             "the Tuner has no digit on the Home menu"
         );
 
@@ -5175,10 +5124,11 @@ mod tuner_tests {
 
     #[test]
     fn the_help_overlay_lists_the_keys_the_screen_claims() {
-        let keys: Vec<char> = accelerators_for(&Screen::Tuner, Notation::Notes)
-            .iter()
-            .map(|(key, _, _)| *key)
-            .collect();
+        let keys: Vec<char> =
+            accelerators_for(&Screen::Tuner, Notation::Notes, &WalkTheScale::new())
+                .iter()
+                .map(|(key, _, _)| *key)
+                .collect();
 
         assert_eq!(keys, vec!['d', 'i']);
     }

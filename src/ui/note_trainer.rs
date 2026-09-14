@@ -668,6 +668,7 @@ mod tests {
     use super::super::tests::{app_with_seed, every_screen, press_into, press_named};
     use super::super::{App, Notation, Screen, accelerators_for, translate_key};
     use super::*;
+    use crate::ui::WalkTheScale;
     use iced::keyboard;
     use iced::keyboard::key::Named;
 
@@ -1552,7 +1553,7 @@ mod tests {
 
     #[test]
     fn the_help_overlay_lists_the_note_trainers_keys() {
-        let bound = accelerators_for(&Screen::NoteTrainer, Notation::Notes);
+        let bound = accelerators_for(&Screen::NoteTrainer, Notation::Notes, &WalkTheScale::new());
         let keys: Vec<char> = bound.iter().map(|&(key, _, _)| key).collect();
 
         assert_eq!(keys, vec!['r', 'd', 'a']);
@@ -1581,6 +1582,21 @@ mod tests {
             let _ = app.view();
             app.help_open = false;
         }
+
+        // The scale drill, in every shape it draws: pressing, playing, with the neck hidden,
+        // and with a device picker up.
+        app.open(Screen::WalkTheScale);
+        let _ = app.view();
+        let _ = app.update(Message::CycleScaleDuration);
+        let _ = app.view();
+        let _ = app.update(Message::ToggleScaleAnswering);
+        let _ = app.view();
+        let _ = app.update(Message::ToggleScaleNeck);
+        let _ = app.view();
+        let _ = app.update(Message::OpenDevices);
+        let _ = app.view();
+        let _ = app.update(Message::GoBack);
+        let _ = app.view();
 
         app.open(Screen::NoteTrainer);
 

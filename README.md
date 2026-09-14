@@ -8,15 +8,17 @@
 
 A keyboard-driven guitar trainer for the desktop, written in Rust with [iced](https://iced.rs) 0.14.
 
-Trastea draws a neck in standard tuning and drills four things against it: the shape of a
-scale, the name of a note under your finger, the distance between two positions, and that last
-one again with the answer played on the guitar rather than clicked. Two more screens answer
-rather than ask — a chord library you look things up in, and a CAGED window showing one
-chord in all five places it sits. A seventh listens the same way the played drill does: plug
-a guitar into an audio interface and the tuner names what it hears. Everything is reachable
+Trastea draws a neck in standard tuning and drills four things against it: the degrees of a
+scale in order, the name of a note under your finger, the distance between two positions, and
+that last one again with the answer played on the guitar rather than clicked. Three more
+screens answer rather than ask — a scale trainer that lights a shape, a chord library you look
+things up in, and a CAGED window showing one chord in all five places it sits. An eighth
+listens the same way two of the drills do: plug a guitar into an audio interface and the tuner
+names what it hears. Everything is reachable
 from the keyboard — the mouse is optional.
 
-> **Status: early.** The four trainers, the chord library and the CAGED window all work. The
+> **Status: early.** The four drills, the scale trainer, the chord library and the CAGED
+> window all work. The
 > library's shape table is the part still worth growing: five CAGED shapes and a handful of
 > reduced ones cover the fifteen qualities, and every chord it offers is one a hand can hold.
 > The CAGED window is a major-triad screen for the same reason — E and A are the only letters
@@ -31,6 +33,35 @@ be taught — pitch class 10 under Ionian is B♭ major, not the A♯ major that
 double sharps on the fretboard — so there is nothing to choose and no ♯/♭ setting to get
 wrong. `i` toggles the markers between note names and scale degrees; `r` rerolls a random
 scale.
+
+**Walk the Scale** — the Scale Trainer's picture, asked as a question. Pick a root and a kind
+here too, and the screen names one degree at a time and walks the scale in order, refusing to
+move on until that degree is found. Nothing is lit while it asks: a neck with every degree
+marked carries the answer to every element of the sequence. What has been found so far stays
+lit, labelled with the degree it satisfied, so the shape builds up as it is played.
+
+A screen of its own rather than a mode of the Scale Trainer, for the reason Play the Interval
+is a screen rather than a mode of the Interval Trainer — a reference and a drill are two
+things to look at, and one screen holding both has two jobs and one keyboard. It owns the
+scale it drills for the same reason the CAGED window owns its root: rerolling here would
+otherwise move a screen you are not on.
+
+Completing the last degree is what scores, and only that — a flash after every note would cost
+seven seconds to walk a seven-note scale. A degree is judged by the pitch class it sounds, so
+it is right at any position carrying it and in any octave, which is the rule both interval
+drills already apply and the reason a walked scale need not literally ascend the neck.
+
+The screen is three columns: the neck alone on the left, so nothing takes width the strings
+need; the root set large on the black ground with the sequence at its feet, the degrees already
+found lit and the one being asked for bright, which is the progress readout and the question in
+one mark; and the root and kind grids on the right with the run's controls beneath them.
+
+`m` swaps between answering with a press and answering on the guitar, the second being the
+same listener the played drill and the tuner use. `t` sets a duration, after which the run
+stops and says how many sequences it completed; `n` hides the neck outright, offered only
+while playing, since in pressing mode the neck is the surface the answer is given on. `r`
+picks another scale to drill. `t` and `n` report what they are set to in the `?` overlay
+rather than only naming what the key does.
 
 **Note Trainer** — a two-directional drill with a streak counter. *Name it* lights a
 position and asks which note it is; *Find it* names a note and asks you to click or walk
@@ -247,10 +278,14 @@ for them, so a new accelerator documents itself. A key not claimed by the curren
 inert there — and one claimed by two screens is free to mean different things on each: `d`
 swaps a trainer's direction, picks the library's degrees, and opens the input list on both
 screens that listen. `r` is the one key that means the same thing everywhere it is bound —
-replace what is on screen.
+replace what is on screen — including on Walk the Scale, where it picks another scale to
+drill. A key that holds a setting rather than firing an action says so in the overlay: that
+screen's `t` reads `timer: 5:00` and its `n` reads `neck: hidden`, which is why an
+accelerator's label is a `Cow<'static, str>` and not a `&'static str`.
 
 Three widgets claim the motion keys rather than letting them move the focus ring: a trainer's
-neck, which walks its cursor; the CAGED window's shape row, where `← →` change the selection
+neck, which walks its cursor — Walk the Scale's does too, while it is being answered by
+pressing; the CAGED window's shape row, where `← →` change the selection
 outright so walking the cycle is one gesture rather than focus-then-activate; and the input
 list, which claims `↑ ↓` for the same reason while it is open, on whichever screen opened it.
 Tab is the way out of the first two, and `Esc` closes the third without leaving the screen —
@@ -287,7 +322,12 @@ src/
   ui/
     mod.rs               App, Screen, Message, the focus grid, Neck and the two necks the
                          screens draw, the twelve nameable distances both interval drills
-                         ask for, the Home and Scale Trainer views
+                         ask for, the Home view, and the root buttons and formula tokens
+                         that three screens share
+    scale_trainer.rs     the Scale Trainer: the lit neck and the grids that choose it
+    walk_the_scale.rs    the scale drill's state machine and the screen that draws it —
+                         its own scale, its sequence, and the gate that decides when a
+                         reading is an answer
     note_trainer.rs      the Note Trainer's state machine and the screen that draws it
     interval_trainer.rs  the Interval Trainer's, on the same terms
     play_the_interval.rs the played drill's, with the gate that decides when a reading is
