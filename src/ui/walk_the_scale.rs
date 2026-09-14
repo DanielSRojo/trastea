@@ -16,15 +16,16 @@
 
 use std::time::{Duration, Instant};
 
-use iced::{Color, Element, Length, Padding};
+use iced::mouse::ScrollDelta;
+use iced::widget::canvas::{self, Canvas};
+use iced::{Color, Element, Length, Padding, Point, Rectangle, Renderer, Size, Theme};
 
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
 use super::{
     BODY, CONTROL_SIZE, CURSOR_HOME, DANGER, DRILL_NECK, Direction, FocusTarget, INK, LINK,
     MUSIC_FONT, MUTE, Message, NECK_STRINGS, SUCCESS, card_container, control_button,
-    control_label, control_shuffle, kind_row_spans, note_label, root_note_row, root_row_spans,
-    scale_kind_row,
+    control_label, control_shuffle, kind_row_spans, note_label, scale_kind_row,
 };
 use crate::audio::detect::Heard;
 use crate::music::intervals::Interval;
@@ -125,6 +126,17 @@ pub(super) struct WalkTheScale {
     /// drill, which is why the `Listener` below is *not* inside this.
     answering: Answering,
     best_streak: u32,
+    /// Where a drag of the root display was last measured from, in window coordinates.
+    ///
+    /// `Option<f32>` rather than a `bool` beside an `f32`: the anchor exists exactly when a
+    /// drag does, so "dragging, from nowhere" is a state that cannot be written down.
+    drag: Option<f32>,
+    /// What the wheel has scrolled that has not yet bought a semitone.
+    ///
+    /// Kept between gestures rather than reset: a nudge one way and a nudge back should leave
+    /// the root where it was, and resetting would make that depend on where one gesture ended
+    /// and the next began.
+    scroll: f32,
     /// The capture device, held only while a run is listening. Opened and released
     /// explicitly, the way `leaving_for` already manages the two screens that listen; a
     /// device living inside `Answering::Playing` would still be open in display mode.
@@ -197,6 +209,8 @@ impl WalkTheScale {
             scale: Scale::new(PitchClass::new(9), ScaleKind::MinorPentatonic),
             answering: Answering::Pressing,
             best_streak: 0,
+            drag: None,
+            scroll: 0.0,
             listener: None,
             mode: Mode::Running(Run::new(None, Gate::Listening)),
         }
@@ -213,6 +227,64 @@ impl WalkTheScale {
     pub(super) fn select_root(&mut self, root: PitchClass) {
         self.scale = Scale::new(root, self.scale.kind());
         self.restart_sequence();
+    }
+
+    /// Steps the root `steps` semitones, wrapping in both directions.
+    ///
+    /// `transpose` takes a `u8` and reduces mod 12, so the wrap is the type's arithmetic
+    /// rather than a branch here. `rem_euclid` and not `%`, because `%` keeps the sign of the
+    /// dividend: `(-1) % 12` is `-1`, which is not a `u8`, while `(-1).rem_euclid(12)` is 11 —
+    /// the semitone below, by the same modular add.
+    pub(super) fn step_root(&mut self, steps: i32) {
+        if steps == 0 {
+            return;
+        }
+
+        self.select_root(self.scale.root().transpose(steps.rem_euclid(12) as u8));
+    }
+
+    pub(super) fn is_dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+
+    pub(super) fn grab_root(&mut self, x: f32) {
+        self.drag = Some(x);
+    }
+
+    /// A drag that has reached `x`. Whole steps of travel are consumed off the anchor rather
+    /// than measured from the press point, so the drill never has to remember the root it
+    /// started on — and the pointer has to return to where it was to undo a step.
+    pub(super) fn drag_root(&mut self, x: f32) {
+        let Some(anchor) = self.drag else {
+            return;
+        };
+
+        let steps = ((x - anchor) / STEP_DISTANCE).trunc();
+
+        if steps != 0.0 {
+            self.drag = Some(anchor + steps * STEP_DISTANCE);
+            self.step_root(steps as i32);
+        }
+    }
+
+    pub(super) fn drop_root(&mut self) {
+        self.drag = None;
+    }
+
+    /// The wheel, in steps. Ignored while a drag is going: one gesture owns the root at a
+    /// time, which is this `if` rather than a rule about how two accumulators compose.
+    pub(super) fn scroll_root(&mut self, steps: f32) {
+        if self.drag.is_some() {
+            return;
+        }
+
+        self.scroll += steps;
+        let whole = self.scroll.trunc();
+
+        if whole != 0.0 {
+            self.scroll -= whole;
+            self.step_root(whole as i32);
+        }
     }
 
     pub(super) fn select_kind(&mut self, kind: ScaleKind) {
@@ -568,7 +640,7 @@ pub(super) fn ui_walk_the_scale(
     drill: &WalkTheScale,
     focused: FocusTarget,
 ) -> Element<'static, Message> {
-    use iced::widget::{Space, column, container, row, text};
+    use iced::widget::{Space, column, container, row, stack, text};
 
     // Modal while it is up, as it is on the two other screens that listen: what the screen
     // was showing is not drawn behind it.
@@ -623,42 +695,40 @@ pub(super) fn ui_walk_the_scale(
     // there is nothing here to bound — this is the one thing the screen is saying.
     // The root and the sequence are one mark, not two: the degrees sit at the root's feet
     // rather than at the bottom of the column, and the pair is centred together.
-    let centre = column![
-        Space::new().height(Length::Fill),
+    // The root is a canvas with the glyph stacked over it. The canvas is the surface the drag
+    // and the wheel land on, and draws the arrows that say so; the glyph stays a widget
+    // because a `Frame` cannot measure text, and an accidental has to be placed beside a
+    // letter it has measured. Both halves centre themselves, so there is no padding to keep
+    // in step — which is the whole reason the row is a fixed height.
+    let root = stack![
+        Canvas::new(RootGrip {
+            dragging: drill.is_dragging(),
+        })
+        .width(Length::Fill)
+        .height(Length::Fill),
         container(note_label(scale.root_note(), ROOT_DISPLAY_SIZE, INK))
             .width(Length::Fill)
-            .center_x(Length::Fill),
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    ];
+
+    let centre = column![
+        // Two above to three below rather than evenly: the pair sits a tenth of the column's
+        // free height above its middle, where the eye is already reading the neck. The
+        // sequence is the row under the root rather than the bottom of the column, so it
+        // moves with it.
+        Space::new().height(Length::FillPortion(2)),
+        container(root)
+            .width(Length::Fill)
+            .height(Length::Fixed(ROOT_ROW_HEIGHT)),
         container(sequence_text(drill))
             .width(Length::Fill)
             .center_x(Length::Fill),
-        Space::new().height(Length::Fill),
+        Space::new().height(Length::FillPortion(3)),
     ]
     .width(Length::Fill)
     .height(Length::Fill);
-
-    let root_card = container(
-        container(
-            root_row_spans().fold(column![].spacing(12), |rows, (start, len)| {
-                rows.push(
-                    container(root_note_row(
-                        &PitchClass::ALL[start..start + len],
-                        scale,
-                        start,
-                        focused,
-                        Message::SelectDrillRoot,
-                        FocusTarget::DrillRoot,
-                    ))
-                    .width(Length::Fill)
-                    .center_x(Length::Fill),
-                )
-            }),
-        )
-        .width(Length::Fill)
-        .center_x(Length::Fill),
-    )
-    .width(Length::Fill)
-    .padding(24)
-    .style(card_container);
 
     let kind_card = container(kind_row_spans().fold(
         column![].spacing(10),
@@ -677,10 +747,11 @@ pub(super) fn ui_walk_the_scale(
     .padding(24)
     .style(card_container);
 
-    // The selector and the run's controls share the right column: the selector says what is
-    // being drilled and the controls say how, and neither belongs beside the neck.
+    // The kind selector and the run's controls share the right column: the selector says what
+    // is being drilled and the controls say how, and neither belongs beside the neck. The root
+    // is not here — it is the glyph in the middle column, which is the one thing on the screen
+    // that both states the scale and sets it.
     let selector = column![
-        root_card,
         kind_card,
         Space::new().height(Length::Fill),
         drill_panel(drill, focused),
@@ -725,6 +796,167 @@ const NECK_COLUMN_WIDTH: f32 = 340.0;
 /// and `Diminished` together — plus the card's padding. A narrower column drew that row past the
 /// card's edge, which is what `the_widest_kind_row_fits_the_selector_column` now catches.
 const SELECTOR_COLUMN_WIDTH: f32 = 470.0;
+
+/// How far the pointer travels, or the wheel scrolls, for one semitone.
+///
+/// Wide enough that a hand that slips on the glyph does not walk the scale, narrow enough that
+/// all twelve are one gesture — 480px from a root back to itself. Nothing in the geometry below
+/// reads it, so it is one number to change if it turns out to be wrong.
+const STEP_DISTANCE: f32 = 40.0;
+
+/// How tall the row holding the root is. Fixed, because the canvas under the glyph has to be
+/// the same height whatever the window is: a canvas that filled would put the arrows wherever
+/// the column's slack happened to leave them.
+const ROOT_ROW_HEIGHT: f32 = ROOT_DISPLAY_SIZE * 1.3;
+
+/// Where the root's glyph sits, and what counts as a press on it.
+///
+/// The one `Layout` this canvas has, and the one thing it knows: three gestures read the same
+/// box — the press that begins a drag, the wheel, and the pointer shape — so the box is a
+/// struct rather than a condition written out three times.
+struct RootDisplay {
+    center: Point,
+    half_width: f32,
+    half_height: f32,
+}
+
+impl RootDisplay {
+    /// Half the width of the widest glyph drawn here: a letter and an accidental at
+    /// `ROOT_DISPLAY_SIZE`. Deliberately not measured per note — a box that changed size with
+    /// the note in it would move under the hand mid-drag.
+    const GLYPH_HALF_WIDTH: f32 = 80.0;
+
+    fn new(size: Size) -> RootDisplay {
+        RootDisplay {
+            center: Point::new(size.width / 2.0, size.height / 2.0),
+            // Never wider than the canvas: a box reaching past the edge would claim presses
+            // on whatever is drawn beside it.
+            half_width: (size.width / 2.0).min(Self::GLYPH_HALF_WIDTH),
+            half_height: size.height.min(ROOT_DISPLAY_SIZE) / 2.0,
+        }
+    }
+
+    fn grab_box(&self) -> Rectangle {
+        Rectangle {
+            x: self.center.x - self.half_width,
+            y: self.center.y - self.half_height,
+            width: 2.0 * self.half_width,
+            height: 2.0 * self.half_height,
+        }
+    }
+
+    /// Whether a point on the canvas is on the glyph — the one question all three gestures ask.
+    fn grabs(&self, point: Point) -> bool {
+        self.grab_box().contains(point)
+    }
+}
+
+/// A scroll, in steps.
+///
+/// `Lines` comes from a notched wheel and `Pixels` from a trackpad or a high-resolution one,
+/// and which arrives is the machine's choice rather than ours. A notch is one semitone,
+/// because that is what a notch means; a pixel is worth what a pixel of drag is worth, which
+/// is why the wheel needs no constant of its own and why a trackpad does not race through the
+/// twelve. Only the vertical axis is read — a notch is up or down, and counting a diagonal
+/// flick's sideways component too would step twice for one gesture.
+fn steps_from(delta: ScrollDelta) -> f32 {
+    match delta {
+        ScrollDelta::Lines { y, .. } => y,
+        ScrollDelta::Pixels { y, .. } => y / STEP_DISTANCE,
+    }
+}
+
+/// The root display as a canvas: the surface all three gestures land on, and nothing else.
+///
+/// It draws nothing. The glyph over it is a widget, because a `Frame` cannot measure text and
+/// the letter and its accidental are set in two different fonts — the same reason the Tuner's
+/// note name sits over its dial rather than in it. A canvas rather than a `mouse_area` because
+/// `update` is handed every event wherever the pointer is, which is what lets a drag go on
+/// past the edge of the glyph it began on.
+struct RootGrip {
+    /// Whether a drag is already going, which is what decides that a cursor move anywhere in
+    /// the window is this widget's business. Read off the drill rather than kept here: the
+    /// view is rebuilt from state on every update, so it cannot go stale, and a `State` on the
+    /// widget would put the gesture somewhere `App::update` cannot see.
+    dragging: bool,
+}
+
+impl canvas::Program<Message> for RootGrip {
+    type State = ();
+
+    /// Nothing. What the learner sees here is the glyph stacked over this canvas, and the
+    /// pointer turning to a grab is what says the glyph can be taken hold of.
+    fn draw(
+        &self,
+        _state: &(),
+        _renderer: &Renderer,
+        _theme: &Theme,
+        _bounds: Rectangle,
+        _cursor: iced::mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        Vec::new()
+    }
+
+    fn update(
+        &self,
+        _state: &mut (),
+        event: &canvas::Event,
+        bounds: Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> Option<canvas::Action<Message>> {
+        let display = RootDisplay::new(bounds.size());
+        let over = cursor
+            .position_in(bounds)
+            .is_some_and(|point| display.grabs(point));
+
+        match event {
+            // The press is the one moment the pointer has to be on the glyph. What it carries
+            // is the window's x rather than the canvas's: `position_in` is `None` the moment
+            // the pointer leaves, which is exactly when the drag still has work to do.
+            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left))
+                if over =>
+            {
+                let x = cursor.position()?.x;
+                Some(canvas::Action::publish(Message::GrabDrillRoot(x)).and_capture())
+            }
+            // `position` here is already the window's, which is the frame the anchor is in.
+            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) if self.dragging => {
+                Some(canvas::Action::publish(Message::DragDrillRoot(position.x)).and_capture())
+            }
+            iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left))
+                if self.dragging =>
+            {
+                Some(canvas::Action::publish(Message::DropDrillRoot).and_capture())
+            }
+            // Captured whether or not it stepped, so a wheel over the glyph never falls
+            // through. Nothing on this screen scrolls today, and this is what keeps that true.
+            iced::Event::Mouse(iced::mouse::Event::WheelScrolled { delta }) if over => Some(
+                canvas::Action::publish(Message::ScrollDrillRoot(steps_from(*delta))).and_capture(),
+            ),
+            _ => None,
+        }
+    }
+
+    fn mouse_interaction(
+        &self,
+        _state: &(),
+        bounds: Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> iced::mouse::Interaction {
+        if self.dragging {
+            // Held for the length of the gesture, wherever the pointer has got to — the same
+            // reason `update` stops asking where it is once a drag has begun.
+            iced::mouse::Interaction::Grabbing
+        } else if cursor
+            .position_in(bounds)
+            .is_some_and(|point| RootDisplay::new(bounds.size()).grabs(point))
+        {
+            iced::mouse::Interaction::Grab
+        } else {
+            iced::mouse::Interaction::default()
+        }
+    }
+}
 
 /// The scale's formula, with the drill's place in it marked.
 ///
@@ -946,7 +1178,10 @@ mod tests {
     use super::*;
     use crate::audio::detect::Detection;
     use crate::ui::KIND_BUTTON_SIZE;
+    // `as _` brings the trait in for method resolution without binding the name: `update` is
+    // `Program`'s, and a trait's methods are only callable where the trait is in scope.
     use iced::keyboard;
+    use iced::widget::canvas::Program as _;
 
     /// An app parked on the Scale Trainer with a known scale and a run going.
     ///
@@ -1029,6 +1264,49 @@ mod tests {
             .expect("the neck sounds every pitch class")
     }
 
+    /// Widths the root display is plausibly drawn at. The middle column takes what the neck
+    /// and the selector leave, so the width is what varies with the window; the height is
+    /// `ROOT_ROW_HEIGHT` and does not.
+    const ROOT_SIZES: [Size; 4] = [
+        Size::new(220.0, ROOT_ROW_HEIGHT),
+        Size::new(278.0, ROOT_ROW_HEIGHT),
+        Size::new(360.0, ROOT_ROW_HEIGHT),
+        Size::new(520.0, ROOT_ROW_HEIGHT),
+    ];
+
+    /// The box every gesture is tested against: centred on the canvas, the glyph's size, and
+    /// never reaching past the edge into what is drawn beside it.
+    ///
+    /// The canvas draws nothing, so there is no drawing for this to be held against — what it
+    /// guards instead is that the one region three gestures share stays where the glyph is.
+    #[test]
+    fn the_grab_box_is_centred_and_stays_inside_the_canvas() {
+        for size in ROOT_SIZES {
+            let display = RootDisplay::new(size);
+            let grab_box = display.grab_box();
+
+            assert!(
+                display.grabs(display.center),
+                "{size:?} does not grab its own centre"
+            );
+
+            // A point just outside each edge belongs to nothing.
+            for outside in [
+                Point::new(grab_box.x - 1.0, display.center.y),
+                Point::new(grab_box.x + grab_box.width + 1.0, display.center.y),
+                Point::new(display.center.x, grab_box.y - 1.0),
+                Point::new(display.center.x, grab_box.y + grab_box.height + 1.0),
+            ] {
+                assert!(!display.grabs(outside), "{size:?} grabs {outside:?}");
+            }
+
+            assert!(
+                grab_box.x >= 0.0 && grab_box.x + grab_box.width <= size.width,
+                "{size:?} puts the box past the canvas edge"
+            );
+        }
+    }
+
     /// The kind pills are laid out in the rows `kind_row_spans` gives, and the widest of them
     /// — `Spanish Gypsy`, `Whole Tone` and `Diminished` — has to fit inside the card or it is
     /// drawn past its edge. The Scale Trainer never hits this because its kind card is half
@@ -1065,6 +1343,285 @@ mod tests {
             "the selector column leaves {available} for a kind row that needs {widest}; the \
              longest row would be drawn past the card's edge"
         );
+    }
+
+    // ---- The root display ----
+
+    /// The two units one movement arrives in, reduced to the one the drill counts.
+    #[test]
+    fn a_notch_and_a_step_of_pixels_are_each_one_step() {
+        assert_eq!(steps_from(ScrollDelta::Lines { x: 0.0, y: 1.0 }), 1.0);
+        assert_eq!(
+            steps_from(ScrollDelta::Pixels {
+                x: 0.0,
+                y: STEP_DISTANCE
+            }),
+            1.0,
+            "a trackpad steps at a different rate from a drag"
+        );
+        assert_eq!(
+            steps_from(ScrollDelta::Lines { x: 4.0, y: 0.0 }),
+            0.0,
+            "sideways scrolling stepped the root"
+        );
+    }
+
+    const GRIP_BOUNDS: Rectangle = Rectangle {
+        x: 0.0,
+        y: 0.0,
+        width: 278.0,
+        height: ROOT_ROW_HEIGHT,
+    };
+
+    /// Whether the canvas acts on an event — which is all a test can read, since what it
+    /// publishes is sealed inside a `canvas::Action`. What the message then does to the drill
+    /// is asserted on the state above, where the messages are synthesized by hand.
+    fn acts_on(dragging: bool, event: &canvas::Event, at: Point) -> bool {
+        RootGrip { dragging }
+            .update(
+                &mut (),
+                event,
+                GRIP_BOUNDS,
+                iced::mouse::Cursor::Available(at),
+            )
+            .is_some()
+    }
+
+    /// The wheel is the one gesture that asks where the pointer is on every event, so the
+    /// hit-test is what keeps a scroll aimed elsewhere on the screen out of the drill.
+    #[test]
+    fn the_wheel_is_only_the_drills_over_the_glyph() {
+        let wheel = iced::Event::Mouse(iced::mouse::Event::WheelScrolled {
+            delta: ScrollDelta::Lines { x: 0.0, y: 1.0 },
+        });
+
+        let display = RootDisplay::new(GRIP_BOUNDS.size());
+        let corner = Point::new(2.0, 2.0);
+        assert!(!display.grabs(corner), "the corner is inside the box");
+
+        assert!(
+            !acts_on(false, &wheel, corner),
+            "a scroll off the glyph reached the drill"
+        );
+        assert!(
+            acts_on(false, &wheel, display.center),
+            "a scroll on the glyph did not"
+        );
+    }
+
+    /// Which events the canvas claims, and when. A press has to land on the glyph; everything
+    /// after it is claimed on the strength of the drag being under way, wherever the pointer
+    /// has got to — which is the asymmetry the whole gesture rests on.
+    #[test]
+    fn the_press_is_placed_and_the_rest_of_the_drag_is_not() {
+        let display = RootDisplay::new(GRIP_BOUNDS.size());
+        let corner = Point::new(2.0, 2.0);
+
+        let press =
+            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left));
+        let moved = iced::Event::Mouse(iced::mouse::Event::CursorMoved { position: corner });
+        let release = iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
+            iced::mouse::Button::Left,
+        ));
+
+        assert!(acts_on(false, &press, display.center));
+        assert!(
+            !acts_on(false, &press, corner),
+            "a press off the glyph began a drag"
+        );
+
+        assert!(
+            !acts_on(false, &moved, display.center),
+            "a cursor move with no drag going was claimed"
+        );
+        assert!(
+            acts_on(true, &moved, corner),
+            "a drag stopped at the canvas edge"
+        );
+        assert!(
+            acts_on(true, &release, corner),
+            "the drag could not be released outside the glyph"
+        );
+        assert!(
+            !acts_on(false, &release, display.center),
+            "a release with no drag going was claimed"
+        );
+    }
+
+    // ---- The root, as the drill holds it ----
+
+    fn root(app: &App) -> PitchClass {
+        app.walk_the_scale.scale().root()
+    }
+
+    /// Steps of drag travel, as the x a `DragDrillRoot` carries. The press is at zero, so the
+    /// arithmetic under test is the only thing deciding where a step falls.
+    fn drags(app: &mut App, steps: f32) {
+        let _ = app.update(Message::DragDrillRoot(steps * STEP_DISTANCE));
+    }
+
+    #[test]
+    fn stepping_the_root_wraps_both_ways() {
+        let mut app = drill_app(11, ScaleKind::Ionian);
+        app.walk_the_scale.step_root(1);
+        assert_eq!(root(&app), PitchClass::new(0), "B did not wrap to C");
+
+        app.walk_the_scale.step_root(-1);
+        assert_eq!(root(&app), PitchClass::new(11), "C did not wrap to B");
+    }
+
+    #[test]
+    fn a_drag_steps_a_semitone_for_each_step_of_travel() {
+        let mut app = drill_app(0, ScaleKind::Ionian);
+        let _ = app.update(Message::GrabDrillRoot(0.0));
+
+        drags(&mut app, 1.0);
+        assert_eq!(root(&app), PitchClass::new(1));
+
+        drags(&mut app, 5.0);
+        assert_eq!(
+            root(&app),
+            PitchClass::new(5),
+            "the drag is measured from the press"
+        );
+    }
+
+    #[test]
+    fn a_drag_left_lowers_the_root() {
+        let mut app = drill_app(5, ScaleKind::Ionian);
+        let _ = app.update(Message::GrabDrillRoot(0.0));
+
+        drags(&mut app, -2.0);
+        assert_eq!(root(&app), PitchClass::new(3));
+    }
+
+    #[test]
+    fn a_drag_back_to_the_press_point_returns_the_root() {
+        let mut app = drill_app(9, ScaleKind::Ionian);
+        let _ = app.update(Message::GrabDrillRoot(0.0));
+
+        drags(&mut app, 3.0);
+        assert_eq!(root(&app), PitchClass::new(0));
+
+        drags(&mut app, 0.0);
+        assert_eq!(
+            root(&app),
+            PitchClass::new(9),
+            "the travel was not given back"
+        );
+    }
+
+    #[test]
+    fn a_press_that_goes_nowhere_changes_nothing() {
+        let mut app = drill_app(9, ScaleKind::Ionian);
+
+        let _ = app.update(Message::GrabDrillRoot(120.0));
+        // Short of a step, in both directions.
+        let _ = app.update(Message::DragDrillRoot(120.0 + STEP_DISTANCE * 0.9));
+        let _ = app.update(Message::DragDrillRoot(120.0 - STEP_DISTANCE * 0.9));
+        let _ = app.update(Message::DropDrillRoot);
+
+        assert_eq!(root(&app), PitchClass::new(9));
+    }
+
+    #[test]
+    fn a_move_with_no_drag_in_progress_changes_nothing() {
+        let mut app = drill_app(9, ScaleKind::Ionian);
+        drags(&mut app, 4.0);
+        assert_eq!(root(&app), PitchClass::new(9));
+    }
+
+    #[test]
+    fn a_drop_ends_the_gesture() {
+        let mut app = drill_app(9, ScaleKind::Ionian);
+        let _ = app.update(Message::GrabDrillRoot(0.0));
+        let _ = app.update(Message::DropDrillRoot);
+
+        drags(&mut app, 4.0);
+        assert_eq!(
+            root(&app),
+            PitchClass::new(9),
+            "a move after the drop still stepped"
+        );
+    }
+
+    #[test]
+    fn the_wheel_steps_the_root() {
+        let mut app = drill_app(0, ScaleKind::Ionian);
+
+        let _ = app.update(Message::ScrollDrillRoot(1.0));
+        assert_eq!(root(&app), PitchClass::new(1));
+
+        let _ = app.update(Message::ScrollDrillRoot(-2.0));
+        assert_eq!(
+            root(&app),
+            PitchClass::new(11),
+            "the wheel did not wrap downwards"
+        );
+    }
+
+    /// The remainder is what makes a trackpad usable: its deltas arrive in pixels, far short
+    /// of a step each, and a drill that discarded them would never move at all.
+    #[test]
+    fn two_half_steps_of_scroll_make_one_semitone() {
+        let mut app = drill_app(0, ScaleKind::Ionian);
+
+        let _ = app.update(Message::ScrollDrillRoot(0.5));
+        assert_eq!(
+            root(&app),
+            PitchClass::new(0),
+            "half a step is not a semitone"
+        );
+
+        let _ = app.update(Message::ScrollDrillRoot(0.5));
+        assert_eq!(root(&app), PitchClass::new(1));
+    }
+
+    #[test]
+    fn a_scroll_and_its_reverse_leave_the_root_alone() {
+        let mut app = drill_app(0, ScaleKind::Ionian);
+
+        let _ = app.update(Message::ScrollDrillRoot(0.6));
+        let _ = app.update(Message::ScrollDrillRoot(-0.6));
+
+        assert_eq!(root(&app), PitchClass::new(0));
+    }
+
+    #[test]
+    fn the_wheel_is_ignored_mid_drag() {
+        let mut app = drill_app(0, ScaleKind::Ionian);
+        let _ = app.update(Message::GrabDrillRoot(0.0));
+
+        let _ = app.update(Message::ScrollDrillRoot(3.0));
+        assert_eq!(
+            root(&app),
+            PitchClass::new(0),
+            "the wheel stepped during a drag"
+        );
+
+        drags(&mut app, 1.0);
+        assert_eq!(root(&app), PitchClass::new(1), "the travel alone decides");
+    }
+
+    /// A drag passes through roots on its way. None of them is a scale that was walked, so
+    /// none of them may show up as one.
+    #[test]
+    fn passing_through_roots_does_not_score() {
+        let mut app = drill_app(0, ScaleKind::MinorPentatonic);
+        let _ = app.update(Message::CycleScaleDuration);
+        completes(&mut app);
+        let _ = app.update(Message::AdvanceScaleSequence);
+
+        let _ = app.update(Message::GrabDrillRoot(0.0));
+        drags(&mut app, 5.0);
+        let _ = app.update(Message::DropDrillRoot);
+
+        assert_eq!(root(&app), PitchClass::new(5));
+        assert_eq!(app.walk_the_scale.progress(), Some((0, 5)));
+
+        app.walk_the_scale.rewind(Duration::from_secs(180));
+        let _ = app.update(Message::WalkTheScaleTick);
+        assert_eq!(app.walk_the_scale.summary(), Some((1, 1)));
     }
 
     // ---- The sequence ----
@@ -1134,8 +1691,9 @@ mod tests {
         answers(&mut app);
         assert_eq!(app.walk_the_scale.progress(), Some((1, 7)));
 
-        let _ = app.update(Message::SelectDrillRoot(PitchClass::new(5)));
+        app.walk_the_scale.step_root(5);
 
+        assert_eq!(app.walk_the_scale.scale().root(), PitchClass::new(5));
         assert_eq!(app.walk_the_scale.progress(), Some((0, 7)));
     }
 
@@ -1709,6 +2267,104 @@ mod tests {
 
         let _ = app.update(Message::GoBack);
         assert_eq!(app.screen, Screen::Home);
+    }
+
+    #[test]
+    fn the_bracket_keys_step_the_root() {
+        let mut app = drill_app(0, ScaleKind::Ionian);
+        let none = keyboard::Modifiers::empty();
+
+        press_into(&mut app, "]", none);
+        assert_eq!(root(&app), PitchClass::new(1));
+
+        press_into(&mut app, "[", none);
+        press_into(&mut app, "[", none);
+        assert_eq!(
+            root(&app),
+            PitchClass::new(11),
+            "the step down did not wrap"
+        );
+    }
+
+    /// An accelerator fires a widget without walking the ring onto it, and these two have no
+    /// widget to walk onto at all — so the ring has to be exactly where it was.
+    #[test]
+    fn the_root_keys_leave_the_focus_ring_alone() {
+        let mut app = drill_app(0, ScaleKind::Ionian);
+        app.focused = FocusTarget::DrillKind(4);
+
+        press_into(&mut app, "]", keyboard::Modifiers::empty());
+
+        assert_eq!(root(&app), PitchClass::new(1));
+        assert_eq!(app.focused, FocusTarget::DrillKind(4));
+    }
+
+    /// The ring's whole path on this screen, now that the root grid has gone: Back, the
+    /// sixteen kinds in the order the rows lay them out, then the run's controls.
+    ///
+    /// Pinned as deliberately as the path it replaces. Removing the root card also took the
+    /// screen down to one card, and a two-band split left over from the old layout would walk
+    /// the first three columns of every kind row before coming back for the rest — a wrong
+    /// order that nothing else here would notice.
+    #[test]
+    fn the_ring_walks_back_then_the_kinds_then_the_controls() {
+        let mut app = app_with_seed(0);
+        app.navigate_to(Screen::WalkTheScale);
+        let _ = app.update(Message::StartWalkTheScale);
+
+        let targets = app.focusables();
+        let kinds = ScaleKind::ALL.len();
+
+        assert_eq!(targets.first(), Some(&FocusTarget::Back));
+        assert_eq!(
+            targets[1..=kinds],
+            (0..kinds).map(FocusTarget::DrillKind).collect::<Vec<_>>()[..],
+            "the kinds are not walked in the order they are drawn"
+        );
+        assert!(
+            targets[kinds + 1..]
+                .iter()
+                .all(|target| !matches!(target, FocusTarget::DrillKind(_) | FocusTarget::Back)),
+            "the run's controls are interleaved with the kinds"
+        );
+    }
+
+    /// The drill sets its root on the glyph, so nothing in its ring names one — while the two
+    /// screens that still choose a root from a grid keep every one of their twelve stops.
+    #[test]
+    fn no_root_is_a_focus_stop_here_and_every_one_still_is_elsewhere() {
+        let mut app = app_with_seed(0);
+        app.navigate_to(Screen::WalkTheScale);
+        let _ = app.update(Message::StartWalkTheScale);
+
+        assert!(
+            app.focusables()
+                .iter()
+                .all(|target| !matches!(target, FocusTarget::Root(_) | FocusTarget::CagedRoot(_))),
+            "the drill stops on a root"
+        );
+
+        // The first element is annotated so both closures coerce to the same fn pointer —
+        // two closures are two distinct types, and an array needs one.
+        for (screen, is_a_root) in [
+            (
+                Screen::ScaleTrainer,
+                (|target: &FocusTarget| matches!(target, FocusTarget::Root(_)))
+                    as fn(&FocusTarget) -> bool,
+            ),
+            (Screen::Caged, |target| {
+                matches!(target, FocusTarget::CagedRoot(_))
+            }),
+        ] {
+            app.navigate_to(screen.clone());
+            let stops = app.focusables().iter().filter(|t| is_a_root(t)).count();
+
+            assert_eq!(
+                stops,
+                PitchClass::ALL.len(),
+                "{screen:?} lost a root button"
+            );
+        }
     }
 
     #[test]

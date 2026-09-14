@@ -589,10 +589,19 @@ pub enum Message {
     AdvancePlayPrompt,
     /// Starts another run after one has ended on its duration.
     StartWalkTheScale,
-    /// Picks the root and the kind the drill walks. Its own pair rather than `SelectRoot`
-    /// and `SelectScaleKind`, which would move the Scale Trainer's scale from here.
-    SelectDrillRoot(PitchClass),
+    /// Picks the kind the drill walks. Its own variant rather than `SelectScaleKind`, which
+    /// would move the Scale Trainer's scale from here.
     SelectDrillKind(ScaleKind),
+    /// The root display's drag, as the three moments it has. Each carries the cursor's x in
+    /// window coordinates rather than in the canvas's, since the gesture outlives the
+    /// pointer's stay over the canvas and only differences are read.
+    GrabDrillRoot(f32),
+    DragDrillRoot(f32),
+    DropDrillRoot,
+    /// The wheel over the root display, in steps rather than in the `ScrollDelta` it came
+    /// from: a line and a pixel are two units for one movement, and the canvas is where they
+    /// stop being two.
+    ScrollDrillRoot(f32),
     /// A different scale to drill. Its own variant rather than `RerollScale`, for the reason
     /// `RerollCagedRoot` is one.
     RerollDrillScale,
@@ -696,9 +705,18 @@ pub enum FocusTarget {
     CagedRoot(usize),
     /// The CAGED window's shuffle button: a new root, not a new scale.
     RerollCagedRoot,
-    /// The scale drill's own root and kind grids, indexed like the Scale Trainer's.
-    DrillRoot(usize),
+    /// The scale drill's kind grid, indexed like the Scale Trainer's.
     DrillKind(usize),
+    /// The two keys that step the drill's root, down and up.
+    ///
+    /// The first targets in the app that are actions rather than focus stops: the drill's root
+    /// is dragged on the glyph that names it, so there is no widget for a key to fire. Nothing
+    /// requires a target to be in the grid — `activate` is a match and the key lookup never
+    /// consults it — but the name is less true than it was. The honest fix is an `Accelerator`
+    /// whose second element is a message rather than a target, which is worth doing when a
+    /// second screen wants a key with no widget behind it and not before.
+    DrillRootDown,
+    DrillRootUp,
     /// A different scale to drill.
     RerollDrillScale,
     /// Starts another run, offered only once one has ended on its duration.
@@ -959,8 +977,11 @@ impl App {
             Message::ToggleNotation => self.toggle_notation(),
             Message::RerollScale => self.reroll_scale(),
             Message::StartWalkTheScale => self.walk_the_scale.restart(),
-            Message::SelectDrillRoot(root) => self.walk_the_scale.select_root(root),
             Message::SelectDrillKind(kind) => self.walk_the_scale.select_kind(kind),
+            Message::GrabDrillRoot(x) => self.walk_the_scale.grab_root(x),
+            Message::DragDrillRoot(x) => self.walk_the_scale.drag_root(x),
+            Message::DropDrillRoot => self.walk_the_scale.drop_root(),
+            Message::ScrollDrillRoot(steps) => self.walk_the_scale.scroll_root(steps),
             Message::RerollDrillScale => self.walk_the_scale.reroll(&mut self.rng),
             Message::ToggleScaleAnswering => self.walk_the_scale.toggle_answering(),
             Message::CycleScaleDuration => self.walk_the_scale.cycle_duration(),
@@ -1433,11 +1454,8 @@ impl App {
             }
             FocusTarget::CagedShape(index) => self.caged.select_shape(index),
             FocusTarget::RerollCagedRoot => self.reroll_caged_root(),
-            FocusTarget::DrillRoot(index) => {
-                if let Some(&pitch_class) = PitchClass::ALL.get(index) {
-                    self.walk_the_scale.select_root(pitch_class);
-                }
-            }
+            FocusTarget::DrillRootDown => self.walk_the_scale.step_root(-1),
+            FocusTarget::DrillRootUp => self.walk_the_scale.step_root(1),
             FocusTarget::DrillKind(index) => {
                 if let Some(&kind) = ScaleKind::ALL.get(index) {
                     self.walk_the_scale.select_kind(kind);
@@ -1755,29 +1773,20 @@ impl App {
                 }
                 grid
             }
-            // The same shape as the Scale Trainer's, because the screen is laid out the same
-            // way: Back on a row of its own, then the root and kind grids side by side. What
-            // differs is the last row, which grows with the run — a control that is not on
-            // screen is not a focus target, which is what keeps Tab from stopping on nothing.
+            // Back on a row of its own, then the kind grid alone: the drill's root is set on
+            // the glyph in the middle column, so there is no root row to walk and no per-root
+            // stop to land on. What differs from every other screen is the last row, which
+            // grows with the run — a control that is not on screen is not a focus target,
+            // which is what keeps Tab from stopping on nothing.
             Screen::WalkTheScale => {
-                let mut back_row: FocusRow = vec![None; ROOT_ROW_WIDTH];
-                back_row[0] = Some(FocusTarget::Back);
+                let mut grid: Vec<FocusRow> = vec![vec![Some(FocusTarget::Back)]];
 
-                let root_rows: Vec<_> = root_row_spans().collect();
-                let kind_rows: Vec<_> = kind_row_spans().collect();
-
-                let mut grid = vec![back_row];
-                for r in 0..root_rows.len().max(kind_rows.len()) {
-                    let mut row: FocusRow = vec![None; ROOT_ROW_WIDTH];
-                    if let Some(&(start, len)) = root_rows.get(r) {
-                        for (col, cell) in row.iter_mut().enumerate().take(len) {
-                            *cell = Some(FocusTarget::DrillRoot(start + col));
-                        }
-                    }
-                    if let Some(&(start, len)) = kind_rows.get(r) {
-                        row.extend((0..len).map(|i| Some(FocusTarget::DrillKind(start + i))));
-                    }
-                    grid.push(row);
+                for (start, len) in kind_row_spans() {
+                    grid.push(
+                        (0..len)
+                            .map(|i| Some(FocusTarget::DrillKind(start + i)))
+                            .collect(),
+                    );
                 }
 
                 let mut drill_row: FocusRow = Vec::new();
@@ -1925,16 +1934,18 @@ impl App {
     )]
     fn card_bands(&self, width: usize) -> Vec<Range<usize>> {
         match &self.screen {
-            Screen::ScaleTrainer | Screen::WalkTheScale => {
-                vec![0..ROOT_ROW_WIDTH, ROOT_ROW_WIDTH..width]
-            }
-            // These screens have a single card, so one band spans the whole width.
+            Screen::ScaleTrainer => vec![0..ROOT_ROW_WIDTH, ROOT_ROW_WIDTH..width],
+            // These screens have a single card, so one band spans the whole width. Walk the
+            // Scale joined them when its root card went: two bands split the kind rows down
+            // the middle, and Tab walked the first three columns of every row before coming
+            // back for the rest.
             Screen::Home
             | Screen::NoteTrainer
             | Screen::IntervalTrainer
             | Screen::PlayTheInterval
             | Screen::ChordLibrary
             | Screen::Caged
+            | Screen::WalkTheScale
             | Screen::Tuner => vec![0..width],
         }
     }
@@ -2150,8 +2161,14 @@ fn accelerators_for(screen: &Screen, notation: Notation, drill: &WalkTheScale) -
         // the key does, which is why the label is a `Cow` and this arm is built rather than
         // listed.
         Screen::WalkTheScale => {
-            let mut keys: Vec<Accelerator> =
-                vec![('r', FocusTarget::RerollDrillScale, "new scale".into())];
+            // `[` and `]` rather than the arrows: the ring still has sixteen kinds to walk on
+            // this screen, and the three widgets elsewhere that claim the motion keys are all
+            // focus stops a Tab can leave. The root display is deliberately not one.
+            let mut keys: Vec<Accelerator> = vec![
+                ('r', FocusTarget::RerollDrillScale, "new scale".into()),
+                ('[', FocusTarget::DrillRootDown, "root down".into()),
+                (']', FocusTarget::DrillRootUp, "root up".into()),
+            ];
 
             if !drill.is_running() {
                 keys.push(('p', FocusTarget::RestartDrill, "another run".into()));
@@ -3962,6 +3979,31 @@ mod tests {
             press_into(&mut app, "i", keyboard::Modifiers::empty());
 
             assert_eq!(snapshot(&app), before, "{:?} claimed i", app.screen);
+        }
+    }
+
+    /// The scale drill's two, on the same terms as `i` above: read from the table, so a
+    /// screen that takes a bracket up exempts itself rather than making this a failure to
+    /// edit by hand.
+    #[test]
+    fn the_brackets_are_inert_on_screens_that_do_not_claim_them() {
+        for screen in every_screen() {
+            for key in ["[", "]"] {
+                if accelerators_for(&screen, Notation::Notes, &WalkTheScale::new())
+                    .iter()
+                    .any(|(bound, ..)| bound.to_string() == key)
+                {
+                    continue;
+                }
+
+                let mut app = app_with_seed(0xbeef);
+                app.navigate_to(screen.clone());
+
+                let before = snapshot(&app);
+                press_into(&mut app, key, keyboard::Modifiers::empty());
+
+                assert_eq!(snapshot(&app), before, "{:?} claimed {key}", app.screen);
+            }
         }
     }
 

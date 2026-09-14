@@ -34,9 +34,9 @@ double sharps on the fretboard — so there is nothing to choose and no ♯/♭ 
 wrong. `i` toggles the markers between note names and scale degrees; `r` rerolls a random
 scale.
 
-**Walk the Scale** — the Scale Trainer's picture, asked as a question. Pick a root and a kind
-here too, and the screen names one degree at a time and walks the scale in order, refusing to
-move on until that degree is found. Nothing is lit while it asks: a neck with every degree
+**Walk the Scale** — the Scale Trainer's picture, asked as a question. Pick a kind here too,
+drag the root, and the screen names one degree at a time and walks the scale in order,
+refusing to move on until that degree is found. Nothing is lit while it asks: a neck with every degree
 marked carries the answer to every element of the sequence. What has been found so far stays
 lit, labelled with the degree it satisfied, so the shape builds up as it is played.
 
@@ -46,6 +46,14 @@ things to look at, and one screen holding both has two jobs and one keyboard. It
 scale it drills for the same reason the CAGED window owns its root: rerolling here would
 otherwise move a screen you are not on.
 
+The root is the one control that is also what the screen is saying. It is set on the glyph
+that names it — dragged left or right, or scrolled over, a semitone every forty pixels and
+wrapping past B to C — rather than on a grid of twelve buttons like the Scale Trainer's and
+the CAGED window's. A screen that states the scale in 120-point type and then restates it as
+twelve buttons is spending a card and twelve stops in the focus ring to say something it has
+already said, so the drill spends neither: its ring is Back, the sixteen kinds, and the run's
+controls.
+
 Completing the last degree is what scores, and only that — a flash after every note would cost
 seven seconds to walk a seven-note scale. A degree is judged by the pitch class it sounds, so
 it is right at any position carrying it and in any octave, which is the rule both interval
@@ -54,7 +62,8 @@ drills already apply and the reason a walked scale need not literally ascend the
 The screen is three columns: the neck alone on the left, so nothing takes width the strings
 need; the root set large on the black ground with the sequence at its feet, the degrees already
 found lit and the one being asked for bright, which is the progress readout and the question in
-one mark; and the root and kind grids on the right with the run's controls beneath them.
+one mark; and the kind grid on the right with the run's controls beneath it. The root is set on
+the glyph in the middle rather than in a grid — see above.
 
 `m` swaps between answering with a press and answering on the guitar, the second being the
 same listener the played drill and the tuner use. `t` sets a duration, after which the run
@@ -279,7 +288,10 @@ inert there — and one claimed by two screens is free to mean different things 
 swaps a trainer's direction, picks the library's degrees, and opens the input list on both
 screens that listen. `r` is the one key that means the same thing everywhere it is bound —
 replace what is on screen — including on Walk the Scale, where it picks another scale to
-drill. A key that holds a setting rather than firing an action says so in the overlay: that
+drill. That screen's `[` and `]` step its root down and up from wherever the ring is standing;
+they are brackets rather than `← →` because the arrows belong to the ring, which still has
+sixteen kinds to walk there, and because the root display they step is deliberately not a
+focus stop for the arrows to be claimed on. A key that holds a setting rather than firing an action says so in the overlay: that
 screen's `t` reads `timer: 5:00` and its `n` reads `neck: hidden`, which is why an
 accelerator's label is a `Cow<'static, str>` and not a `&'static str`.
 
