@@ -58,6 +58,51 @@ notes:
 notes-preview version:
     git-cliff --unreleased --tag v{{version}}
 
+# bump the crate version and the lock entry that mirrors it, leaving the change in the working
+# copy to be reviewed and described. Cargo.lock carries the crate's own version too, and every
+# recipe in the gate runs --locked, so moving Cargo.toml alone fails `just ci` before anything
+# else — which is a confusing place to be told about a version bump.
+#
+# set the crate version, in both files that carry it
+bump version:
+    sed -i '0,/^version = /s/^version = .*/version = "{{version}}"/' Cargo.toml
+    cargo update --workspace --offline
+
+# tag the tip of main and push the tag, which is the single action that starts a release. The
+# last job it reaches publishes to crates.io, and a published version can only be yanked, so
+# every check the workflow's guard would fail on runs here first — while the tag is still local
+# and free to delete — and the push is confirmed rather than assumed.
+#
+# tag main and push the tag, which is what cuts the release
+tag version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    crate="$(cargo pkgid)"; crate="${crate##*[#@]}"
+    if [[ "{{version}}" != "${crate}" ]]; then
+        echo "Cargo.toml says ${crate}, not {{version}} — \`just bump {{version}}\` and commit that first" >&2
+        exit 1
+    fi
+
+    if [[ -n "$(jj diff --summary)" ]]; then
+        echo "the working copy has changes — they would not be in the release" >&2
+        exit 1
+    fi
+
+    # the tag has to name a commit origin already carries, or the release builds a tree nobody
+    # else can check out and git-cliff walks a history the remote does not have
+    if [[ "$(jj log -r main --no-graph -T commit_id)" != "$(jj log -r main@origin --no-graph -T commit_id)" ]]; then
+        echo "main and main@origin differ — \`jj git push --bookmark main\` first" >&2
+        exit 1
+    fi
+
+    jj log -r main --no-graph -T 'commit_id.short() ++ " " ++ description.first_line() ++ "\n"'
+    read -rp "tag that v{{version}} and push it? [y/N] " reply
+    [[ "${reply}" == [yY] ]] || { echo "nothing pushed"; exit 1; }
+
+    jj tag set "v{{version}}" -r main
+    jj git push --tag "v{{version}}"
+
 # publish to crates.io — the release workflow runs this with a short-lived trusted-publishing
 # token in CARGO_REGISTRY_TOKEN. Verifies by building the packaged crate before it uploads,
 # which is the last chance to catch a tarball that is missing a file the build needs.
