@@ -28,8 +28,22 @@ impl Layout {
     const PAD_X: f32 = 20.0;
     const PAD_BOTTOM: f32 = 20.0;
     const OPEN_MARKER_GAP: f32 = 4.0;
+    /// How far the keyboard cursor's ring sits outside the marker it surrounds, and how thick
+    /// it is drawn. Here rather than at the `stroke` call because `pad_top` has to reserve
+    /// room for them: the cursor starts life at `CURSOR_HOME`, which is the open low E, and an
+    /// open marker is drawn *above* the nut. Two copies of these numbers would have been two
+    /// numbers free to disagree, which is how the ring came to be clipped by exactly the four
+    /// pixels this reserves.
+    const CURSOR_RING_GAP: f32 = 3.0;
+    const CURSOR_RING_STROKE: f32 = 2.0;
     const TARGET_FRET_CELL_RATIO: f32 = 1.35;
     const STRING_COUNT: usize = 6;
+
+    /// How far a cursor ring reaches past the marker it surrounds: the gap, plus the half of
+    /// its stroke that is painted outside the path.
+    const fn cursor_ring_overhang() -> f32 {
+        Self::CURSOR_RING_GAP + Self::CURSOR_RING_STROKE / 2.0
+    }
 
     fn new(size: Size, fret_count: usize) -> Self {
         let available_w = size.width - 2.0 * Self::PAD_X;
@@ -40,7 +54,7 @@ impl Layout {
         // open-string marker before `fret_spacing` — and so the final radius — is known.
         // Collapsing this into `note_radius` below would move the whole neck down.
         let max_note_radius = (available_string_spacing * 0.35).clamp(8.0, 14.0);
-        let pad_top = max_note_radius * 2.0 + Self::OPEN_MARKER_GAP;
+        let pad_top = max_note_radius * 2.0 + Self::OPEN_MARKER_GAP + Self::cursor_ring_overhang();
 
         let usable_h = size.height - pad_top - Self::PAD_BOTTOM;
         let fret_spacing = usable_h / fret_count as f32;
@@ -338,8 +352,10 @@ impl<Message> canvas::Program<Message> for Fretboard<Message> {
             let center = layout.marker_center(string, fret);
 
             frame.stroke(
-                &Path::circle(center, note_radius + 3.0),
-                Stroke::default().with_color(ink).with_width(2.0),
+                &Path::circle(center, note_radius + Layout::CURSOR_RING_GAP),
+                Stroke::default()
+                    .with_color(ink)
+                    .with_width(Layout::CURSOR_RING_STROKE),
             );
         }
 
@@ -593,6 +609,26 @@ mod tests {
         );
     }
 
+    /// The cursor starts on the open low E and an open marker is drawn above the nut, so the
+    /// ring around it is the one mark that can reach past the top of the canvas. This is the
+    /// assertion that `pad_top` reserves enough for it, at the width where the marker radius
+    /// is at its cap and the margin is therefore at its tightest.
+    #[test]
+    fn the_cursor_ring_on_an_open_string_fits_inside_the_canvas() {
+        for width in [200.0_f32, 280.0, 420.0, 640.0] {
+            for height in [400.0_f32, 700.0, 1000.0] {
+                let layout = Layout::new(Size::new(width, height), FRETS);
+                let center = layout.marker_center(0, 0);
+                let top = center.y - layout.note_radius - Layout::cursor_ring_overhang();
+
+                assert!(
+                    top >= 0.0,
+                    "{width}x{height}: the ring reaches {top} — above the canvas"
+                );
+            }
+        }
+    }
+
     /// `pad_top` is built from `max_note_radius`, which is deliberately *not* the radius
     /// markers end up drawn with — it is the upper bound reserved before `fret_spacing`
     /// is known. Collapsing the two would move the whole neck down as the window shrank.
@@ -606,9 +642,10 @@ mod tests {
         let short = Layout::new(Size::new(280.0, 500.0), FRETS);
 
         // available_string_spacing = (280 - 40) / 5 = 48 → clamp(16.8, 8, 14) = 14
-        // pad_top = 14 * 2 + 4 = 32, at both heights.
-        assert_eq!(tall.top_y(), 32.0);
-        assert_eq!(short.top_y(), 32.0);
+        // pad_top = 14 * 2 + 4 + 4 = 36, at both heights — the last 4 being the cursor
+        // ring's overhang, which is what stops it being clipped on an open string.
+        assert_eq!(tall.top_y(), 36.0);
+        assert_eq!(short.top_y(), 36.0);
 
         // The radius, meanwhile, is squeezed by the shorter neck's fret spacing.
         assert!(
