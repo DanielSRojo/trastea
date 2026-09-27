@@ -53,7 +53,7 @@ pub(super) struct Listener {
     devices: Vec<DeviceChoice>,
     /// `Some` while the picker is open, carrying the highlighted row.
     picking: Option<usize>,
-    /// Set when a remembered device was absent and the default was opened instead.
+    /// Set when the device asked for was absent and the default was opened instead.
     fell_back: bool,
 }
 
@@ -80,7 +80,13 @@ impl Listener {
         }
 
         let wanted = remembered_device();
-        self.listening = match Input::open_id(wanted.as_deref()) {
+        self.settle(Input::open_id(wanted.as_deref()));
+    }
+
+    /// Takes on whatever opening a device produced. The one place `fell_back` is set, so a
+    /// device opened from memory and one opened from the list cannot disagree about it.
+    fn settle(&mut self, opened: Result<Input, InputError>) {
+        self.listening = match opened {
             Ok(input) => {
                 self.fell_back = input.fell_back();
                 Listening::Open(Box::new(input))
@@ -190,20 +196,15 @@ impl Listener {
         };
 
         let id = device.id().to_owned();
-        self.listening = match Input::open_id(Some(&id)) {
-            Ok(input) => {
-                // A device chosen by hand is not a fallback even if opening it fell back:
-                // it was asked for, and `fell_back` is what the screen says about a
-                // remembered choice that was gone before anyone chose anything.
-                self.fell_back = false;
-                remember_device(&id);
-                Listening::Open(Box::new(input))
-            }
-            Err(error) => Listening::Failed(error),
-        };
+        let opened = Input::open_id(Some(&id));
 
-        self.tracker = Tracker::new();
-        self.heard = Heard::Silence;
+        // A device unplugged between the list being read and the row being chosen opens
+        // the default instead. Remembering it would record a choice that never took effect.
+        if opened.as_ref().is_ok_and(|input| !input.fell_back()) {
+            remember_device(&id);
+        }
+
+        self.settle(opened);
         self.picking = None;
     }
 
@@ -306,7 +307,7 @@ pub(super) fn ui_device_line(
 
     if listener.fell_back() {
         line = line.push(
-            text("the remembered device was not found — using the system default")
+            text("the chosen device was not found — using the system default")
                 .size(11)
                 .color(MUTE),
         );
