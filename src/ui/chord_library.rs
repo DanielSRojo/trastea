@@ -300,7 +300,9 @@ impl ChordLibrary {
                     self.caret = at;
                 }
             }
-            keyboard::Key::Character(text) if !modifiers.intersects(super::COMMAND_MODIFIERS) => {
+            keyboard::Key::Character(text)
+                if !modifiers.intersects(super::keys::COMMAND_MODIFIERS) =>
+            {
                 let mut next: Vec<char> = self.query.chars().collect();
                 let at = self.caret.min(next.len());
 
@@ -710,9 +712,9 @@ pub(super) fn ui_chord_library(
                             .padding([7, 12])
                             .width(Length::Fill)
                             .style(if picked {
-                                super::selected_row_button
+                                super::style::selected_row_button
                             } else {
-                                super::row_button
+                                super::style::row_button
                             })
                             .on_press(Message::SelectChordRow(index)),
                     )
@@ -804,7 +806,7 @@ fn detail_pane(
                     )
                     .padding([6, 14])
                     .style(if chosen {
-                        super::selected_root_button
+                        super::style::selected_root_button
                     } else {
                         ghost_button
                     })
@@ -897,9 +899,9 @@ fn voicing_card(
         )
         .padding(8)
         .style(if picked {
-            super::selected_row_button
+            super::style::selected_row_button
         } else {
-            super::row_button
+            super::style::row_button
         })
         // A press anywhere inside picks the voicing: selection is about the diagram as a
         // whole, never about which position was pressed.

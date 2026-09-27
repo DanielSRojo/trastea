@@ -712,7 +712,7 @@ mod tests {
         for _ in 0..100 {
             let prompt = app.play_the_interval.prompt;
 
-            assert!(prompt.root.string < super::super::NECK_STRINGS);
+            assert!(prompt.root.string < super::super::neck::NECK_STRINGS);
             assert!(prompt.root.fret <= DRILL_NECK.frets());
             assert!(
                 app.play_the_interval.target().is_some(),

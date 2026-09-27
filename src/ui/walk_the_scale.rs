@@ -1044,7 +1044,10 @@ fn drill_panel(drill: &WalkTheScale, focused: FocusTarget) -> Element<'static, M
             focused == FocusTarget::ScaleAnswering,
         ));
         controls = controls.push(control_button(
-            control_label(text(super::duration_label(drill.duration())), CONTROL_SIZE),
+            control_label(
+                text(super::keys::duration_label(drill.duration())),
+                CONTROL_SIZE,
+            ),
             Message::CycleScaleDuration,
             focused == FocusTarget::ScaleDuration,
         ));
@@ -1089,7 +1092,7 @@ fn drill_panel(drill: &WalkTheScale, focused: FocusTarget) -> Element<'static, M
             .color(BODY),
             Space::new().width(Length::Fill),
             text(match drill.remaining() {
-                Some(left) => super::duration_label(Some(left)),
+                Some(left) => super::keys::duration_label(Some(left)),
                 None => String::new(),
             })
             .size(CONTROL_SIZE)

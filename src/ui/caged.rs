@@ -261,7 +261,7 @@ fn root_string(chord: Chord, shape: Voicing) -> Option<usize> {
                 .and_then(|pitch_class| chord.degree(pitch_class))
                 .is_some_and(|degree| degree.number() == 1)
         })
-        .map(|(string, _)| super::NECK_STRINGS - string)
+        .map(|(string, _)| super::neck::NECK_STRINGS - string)
 }
 
 /// How the selected shape reads: which one it is, where it sits, and which string roots it.

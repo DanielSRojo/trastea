@@ -618,8 +618,9 @@ fn interval_answer_row(
 }
 #[cfg(test)]
 mod tests {
+    use super::super::keys::accelerators_for;
     use super::super::tests::{app_with_seed, press_into};
-    use super::super::{App, Notation, Screen, accelerators_for};
+    use super::super::{App, Notation, Screen};
     use super::*;
     use crate::ui::WalkTheScale;
     use iced::keyboard;

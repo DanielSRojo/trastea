@@ -658,9 +658,10 @@ fn note_answer_row(
 
 #[cfg(test)]
 mod tests {
+    use super::super::keys::{accelerators_for, translate_key};
     use super::super::style::{SMUFL_FLAT, SMUFL_SHARP};
     use super::super::tests::{app_with_seed, every_screen, press_into, press_named};
-    use super::super::{App, Notation, Screen, accelerators_for, translate_key};
+    use super::super::{App, Notation, Screen};
     use super::*;
     use crate::ui::WalkTheScale;
     use iced::keyboard;
