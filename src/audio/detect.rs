@@ -37,6 +37,13 @@
 /// That number is physics, not a tuning parameter to be lowered until the low E breaks.
 pub const WINDOW: usize = 2048;
 
+/// How far the window slides between analyses, and so how often the tracker is fed.
+///
+/// A quarter window, so consecutive windows overlap by three quarters: the latency stays
+/// `WINDOW`, but a reading can change every 10.7 ms rather than every 42.7. The tracker's
+/// constants below are tuned to this spacing, so it is shared rather than restated.
+pub const HOP: usize = 512;
+
 /// The lowest pitch searched for. The open low E is 82.41 Hz; the margin below it is for a
 /// string being tuned up from slack, which is exactly when a tuner is wanted.
 const MIN_HZ: f32 = 70.0;
@@ -71,7 +78,7 @@ const CLARITY_GATE: f32 = 0.99;
 
 /// How many consecutive windows must agree before a reading is released.
 ///
-/// Three at a 512-sample hop is 32 ms of agreement, which the attack of a plucked note —
+/// Three at a [`HOP`] of 512 samples is 32 ms of agreement, which the attack of a plucked note —
 /// inharmonic for its first ~40 ms — cannot supply.
 const STABLE_RUN: usize = 3;
 
@@ -595,7 +602,7 @@ mod tests {
 
     #[test]
     fn a_held_note_is_released_and_stays_put() {
-        let readings = track(&plucked(A2, WINDOW * 6), 512);
+        let readings = track(&plucked(A2, WINDOW * 6), HOP);
         let hz = released(&readings);
 
         assert!(!hz.is_empty(), "a sustained note released nothing");
@@ -612,7 +619,7 @@ mod tests {
     #[test]
     fn a_strummed_chord_is_never_released() {
         let strum = chord(&[110.0, 164.81, 220.0, 277.18, 329.63], WINDOW * 8);
-        let readings = track(&strum, 512);
+        let readings = track(&strum, HOP);
 
         assert!(
             released(&readings).is_empty(),
@@ -642,7 +649,7 @@ mod tests {
         // Two semitones over two seconds, the shape of a real bend.
         let from = D3;
         let to = D3 * 2.0f32.powf(2.0 / 12.0);
-        let readings = track(&sweep(from, to, (SR * 2.0) as usize), 512);
+        let readings = track(&sweep(from, to, (SR * 2.0) as usize), HOP);
         let hz = released(&readings);
 
         assert!(hz.len() > 20, "a bend released only {} readings", hz.len());
@@ -670,7 +677,7 @@ mod tests {
         let mut samples = plucked(A2, WINDOW * 4);
         samples.extend(plucked(D3, WINDOW * 4));
 
-        let hz = released(&track(&samples, 512));
+        let hz = released(&track(&samples, HOP));
 
         assert!(cents_off(hz[0], A2) < 5.0, "started on {}", hz[0]);
         assert!(

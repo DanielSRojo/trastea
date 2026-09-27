@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{ErrorKind, SampleFormat};
 
-use super::detect::WINDOW;
+use super::detect::{HOP, WINDOW};
 
 /// Why there is nothing to listen to.
 ///
@@ -274,23 +274,10 @@ impl Input {
         self.sample_rate
     }
 
-    /// The most recent full window, or `None` if none has arrived since the last call.
-    ///
-    /// Takes the window rather than copying it, so a window is analysed once — a redraw
-    /// faster than the audio would otherwise re-analyse the same samples and re-confirm a
-    /// reading that had not changed.
+    /// The most recent full window, or `None` if a hop has not arrived since the last call.
     pub fn take_window(&self) -> Option<Vec<f32>> {
         let mut held = self.shared.samples.lock().ok()?;
-        if held.len() < WINDOW {
-            return None;
-        }
-
-        // Exactly `WINDOW`, and the newest of what is there. Handing over everything that
-        // had accumulated would make the analysed length — and so the latency — depend on
-        // how long it had been since the last redraw.
-        let window = held[held.len() - WINDOW..].to_vec();
-        held.clear();
-        Some(window)
+        take(&mut held)
     }
 
     /// Whether the device has failed since it was opened, and what the host said.
@@ -380,6 +367,25 @@ fn collect<S: Sample>(data: &[S], channels: usize, shared: &Shared) {
     }
 
     held.extend(deinterleave(data, channels));
+}
+
+/// The newest `WINDOW` of `held`, keeping only the overlap the next window will share.
+///
+/// Keeping `WINDOW - HOP` rather than nothing is what makes the next window arrive one
+/// [`HOP`] later instead of one `WINDOW` later — the spacing the tracker is tuned for. A
+/// redraw faster than that still gets `None`, so the same window is never analysed twice.
+fn take(held: &mut Vec<f32>) -> Option<Vec<f32>> {
+    if held.len() < WINDOW {
+        return None;
+    }
+
+    // The newest of what is there. Handing over everything that had accumulated would
+    // make the analysed length — and so the latency — depend on how long it had been
+    // since the last redraw.
+    let window = held[held.len() - WINDOW..].to_vec();
+    let consumed = held.len() - (WINDOW - HOP);
+    held.drain(..consumed);
+    Some(window)
 }
 
 /// The first channel of an interleaved buffer, converted to `f32`.
@@ -599,28 +605,34 @@ mod tests {
 
     #[test]
     fn a_full_window_is_handed_over_exactly_once() {
-        let shared = shared();
-        collect(&vec![0.25f32; WINDOW * 2], 1, &shared);
+        let mut held = vec![0.25f32; WINDOW * 2];
 
-        let input_like = |shared: &Arc<Shared>| -> Option<Vec<f32>> {
-            let mut held = shared.samples.lock().ok()?;
-            if held.len() < WINDOW {
-                return None;
-            }
-            let window = held[held.len() - WINDOW..].to_vec();
-            held.clear();
-            Some(window)
-        };
-
-        let first = input_like(&shared).expect("a full window had arrived");
+        let first = take(&mut held).expect("a full window had arrived");
         assert_eq!(
             first.len(),
             WINDOW,
             "the window was not the specified length"
         );
         assert!(
-            input_like(&shared).is_none(),
+            take(&mut held).is_none(),
             "the same samples were handed over twice"
+        );
+    }
+
+    #[test]
+    fn the_next_window_arrives_one_hop_later_and_overlaps_the_last() {
+        let mut held: Vec<f32> = (0..WINDOW).map(|i| i as f32).collect();
+        let first = take(&mut held).expect("a full window had arrived");
+
+        held.extend((WINDOW..WINDOW + HOP - 1).map(|i| i as f32));
+        assert!(take(&mut held).is_none(), "a window arrived short of a hop");
+
+        held.push((WINDOW + HOP - 1) as f32);
+        let second = take(&mut held).expect("a hop had arrived");
+        assert_eq!(
+            second[..WINDOW - HOP],
+            first[HOP..],
+            "consecutive windows did not share their overlap"
         );
     }
 
