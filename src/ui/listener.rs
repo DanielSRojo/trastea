@@ -383,3 +383,139 @@ fn card_button_container(theme: &iced::Theme) -> iced::widget::container::Style 
         ..Default::default()
     }
 }
+
+#[cfg(test)]
+mod device_tests {
+    use crate::ui::tests::every_screen;
+    use crate::ui::*;
+
+    #[test]
+    fn leaving_the_screen_puts_the_device_down() {
+        let (mut app, _) = App::new();
+
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+        let _ = app.update(Message::OpenDevices);
+        assert!(app.tuner.listener().is_picking());
+
+        // Esc closes the picker, and the second one leaves.
+        let _ = app.update(Message::GoBack);
+        let _ = app.update(Message::GoBack);
+
+        assert_eq!(app.screen, Screen::Home);
+        assert!(
+            !app.tuner.listener().is_listening(),
+            "the tuner kept the capture device after leaving the screen"
+        );
+        assert!(
+            !app.tuner.listener().is_picking(),
+            "the device list survived the exit"
+        );
+    }
+
+    /// The invariant `App::listener` rests on: moving between the two listening screens
+    /// closes one stream before the other opens, so there is never a moment with both.
+    ///
+    /// `leaving_for` is what enforces it, and it is asked of the screen being left before
+    /// `self.screen` moves — which is the whole reason it is a separate method rather than
+    /// a line inside `navigate_to`.
+    #[test]
+    fn only_one_screen_holds_a_stream_at_a_time() {
+        let (mut app, _) = App::new();
+
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+        let opened = app.tuner.listener().is_listening();
+
+        let _ = app.update(Message::Navigate(Screen::PlayTheInterval));
+
+        assert!(
+            !app.tuner.listener().is_listening(),
+            "the Tuner kept its device when the drill took over"
+        );
+        assert_eq!(
+            app.play_the_interval.listener().is_listening(),
+            opened,
+            "the drill did not open the device the Tuner put down"
+        );
+
+        // ...and back the other way.
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+
+        assert!(
+            !app.play_the_interval.listener().is_listening(),
+            "the drill kept its device when the Tuner took over"
+        );
+        assert_eq!(app.tuner.listener().is_listening(), opened);
+    }
+
+    /// Both ways out of the played drill release the device, as both ways out of the Tuner
+    /// do — `Esc` and a Home navigation go through the one method that says so.
+    #[test]
+    fn leaving_the_played_drill_puts_the_device_down() {
+        for leave in [Message::GoBack, Message::Navigate(Screen::Caged)] {
+            let (mut app, _) = App::new();
+
+            let _ = app.update(Message::Navigate(Screen::PlayTheInterval));
+            let _ = app.update(leave);
+
+            assert_ne!(app.screen, Screen::PlayTheInterval);
+            assert!(
+                !app.play_the_interval.listener().is_listening(),
+                "the drill kept the capture device after leaving the screen"
+            );
+        }
+    }
+
+    /// The poll ticks on either listening screen and on none of the others, read from the
+    /// same routing the messages take — so the subscription and the routing cannot
+    /// disagree about which screen is listening.
+    #[test]
+    fn the_poll_is_live_on_the_listening_screens_and_no_others() {
+        for screen in every_screen() {
+            let (mut app, _) = App::new();
+            app.open(screen.clone());
+
+            let listens = matches!(screen, Screen::Tuner | Screen::PlayTheInterval);
+            assert_eq!(
+                app.listener_ref().is_some(),
+                listens,
+                "{screen:?} disagrees about whether it listens"
+            );
+
+            // With no device on the machine the stream never opens, and the poll correctly
+            // does not tick — the screen says "no input" instead of appearing to listen.
+            if !listens {
+                assert!(!app.is_listening(), "{screen:?} is polling for audio");
+            }
+        }
+    }
+
+    #[test]
+    fn navigating_elsewhere_puts_it_down_too() {
+        // The other way out: a Home digit rather than Esc. Both paths go through
+        // `leaving_for`, and this is what holds them together.
+        let (mut app, _) = App::new();
+
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+        let _ = app.update(Message::Navigate(Screen::Caged));
+
+        assert_eq!(app.screen, Screen::Caged);
+        assert!(!app.tuner.listener().is_listening());
+    }
+
+    #[test]
+    fn re_entering_listens_again() {
+        let (mut app, _) = App::new();
+
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+        let first = app.tuner.listener().is_listening();
+
+        let _ = app.update(Message::GoBack);
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+
+        assert_eq!(
+            app.tuner.listener().is_listening(),
+            first,
+            "re-entering did not restore whatever the machine could do the first time"
+        );
+    }
+}

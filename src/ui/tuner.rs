@@ -524,3 +524,344 @@ mod dial_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod screen_tests {
+    use crate::audio::detect::{Detection, Heard};
+    use crate::music::notes::Letter;
+    use crate::ui::keys::accelerators_for;
+    use crate::ui::tests::press_into;
+    use crate::ui::*;
+
+    /// A released reading at a given frequency, as the detector would produce one.
+    fn heard(hz: f32) -> Heard {
+        Heard::Pitch(Detection::synthesized(hz, 0.999))
+    }
+
+    /// Drives the app to the Tuner and feeds it a reading, with no audio anywhere.
+    fn tuned_to(hz: f32) -> App {
+        let (mut app, _) = App::new();
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+        let _ = app.update(Message::Heard(heard(hz)));
+        app
+    }
+
+    #[test]
+    fn the_tuner_is_reachable_and_leavable_like_every_other_screen() {
+        let (mut app, _) = App::new();
+
+        // Present in the menu, and as the eighth entry it has a digit.
+        let entry = HOME_MENU
+            .iter()
+            .position(|item| item.screen == Screen::Tuner)
+            .expect("the Tuner is a Home menu entry");
+        assert!(
+            accelerators_for(&Screen::Home, Notation::Notes, &WalkTheScale::new())
+                .iter()
+                .any(|(key, target, _)| *key == '8' && *target == FocusTarget::HomeMenuItem(entry)),
+            "the Tuner has no digit on the Home menu"
+        );
+
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+        assert_eq!(app.screen, Screen::Tuner);
+
+        let _ = app.update(Message::GoBack);
+        assert_eq!(app.screen, Screen::Home, "Esc did not leave the Tuner");
+    }
+
+    #[test]
+    fn an_open_string_is_named_with_its_octave() {
+        // 82.41 Hz is the open low E. Naming it "E" would be the pitch-class answer, and
+        // the whole reason this screen needed absolute pitch.
+        let app = tuned_to(82.41);
+        let (pitch, cents) = app
+            .tuner
+            .listener()
+            .reading()
+            .expect("a reading was applied");
+
+        assert_eq!(pitch.pitch_class(), PitchClass::new(4));
+        assert_eq!(
+            pitch.octave(),
+            2,
+            "named E{} rather than E2",
+            pitch.octave()
+        );
+        assert!(cents.value().abs() < 1.0);
+    }
+
+    #[test]
+    fn a_badly_mistuned_string_reads_as_what_it_is() {
+        // A low E tuned a semitone flat sounds D#2, and the screen says so rather than
+        // calling it a very flat E. The trade chromatic buys, stated in the spec.
+        let app = tuned_to(77.78);
+        let (pitch, _) = app.tuner.listener().reading().expect("a reading");
+
+        assert_eq!(pitch.pitch_class(), PitchClass::new(3));
+        assert_eq!(pitch.octave(), 2);
+    }
+
+    #[test]
+    fn an_alternate_tuning_needs_no_setting() {
+        // Drop D: the lowest string at D2, with nothing having been configured.
+        let app = tuned_to(73.42);
+        let (pitch, cents) = app.tuner.listener().reading().expect("a reading");
+
+        assert_eq!(pitch.pitch_class(), PitchClass::new(2));
+        assert_eq!(pitch.octave(), 2);
+        assert!(cents.value().abs() < 2.0);
+    }
+
+    #[test]
+    fn sharp_reads_positive_and_flat_reads_negative() {
+        let sharp = tuned_to(440.0 * 2.0f32.powf(10.0 / 1200.0));
+        assert!(
+            sharp
+                .tuner
+                .listener()
+                .reading()
+                .expect("a reading")
+                .1
+                .value()
+                > 0.0
+        );
+
+        let flat = tuned_to(440.0 * 2.0f32.powf(-10.0 / 1200.0));
+        assert!(
+            flat.tuner
+                .listener()
+                .reading()
+                .expect("a reading")
+                .1
+                .value()
+                < 0.0
+        );
+    }
+
+    #[test]
+    fn the_four_states_are_distinguishable() {
+        let (mut app, _) = App::new();
+
+        // Before the screen is entered, nothing is being listened to.
+        assert_eq!(app.tuner.listener().state(), listener::State::NotStarted);
+
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+        // Whether a device opened depends on the machine, so both are legitimate here —
+        // what matters is that silence and a reading are distinct from each other and
+        // from a failure, which the arms below assert.
+        let opened = app.tuner.listener().error().is_none();
+
+        let _ = app.update(Message::Heard(Heard::Silence));
+        assert_eq!(
+            app.tuner.listener().state(),
+            if opened {
+                listener::State::Silent
+            } else {
+                listener::State::NoInput
+            }
+        );
+
+        if opened {
+            let _ = app.update(Message::Heard(Heard::Unpitched));
+            assert_eq!(app.tuner.listener().state(), listener::State::Unnameable);
+
+            let _ = app.update(Message::Heard(heard(440.0)));
+            assert_eq!(app.tuner.listener().state(), listener::State::Reading);
+        }
+    }
+
+    #[test]
+    fn a_reading_does_not_outlive_the_sound() {
+        let mut app = tuned_to(440.0);
+        assert!(app.tuner.listener().reading().is_some());
+
+        let _ = app.update(Message::Heard(Heard::Silence));
+        assert!(
+            app.tuner.listener().reading().is_none(),
+            "a stale reading survived the silence after it"
+        );
+    }
+
+    #[test]
+    fn a_strum_names_nothing() {
+        let mut app = tuned_to(440.0);
+
+        // What the detector releases for a chord: nothing nameable, at any level.
+        let _ = app.update(Message::Heard(Heard::Unpitched));
+        assert!(app.tuner.listener().reading().is_none());
+    }
+
+    #[test]
+    fn the_device_list_opens_walks_and_closes() {
+        let (mut app, _) = App::new();
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+        assert!(!app.tuner.listener().is_picking());
+
+        let _ = app.update(Message::OpenDevices);
+        assert!(app.tuner.listener().is_picking(), "the list did not open");
+
+        // The list claims the vertical pair while it is up, and clamps rather than wraps.
+        let offered = app.tuner.listener().devices().len();
+        let _ = app.update(Message::FocusDown);
+        let _ = app.update(Message::FocusDown);
+        let walked = app.tuner.listener().picking().expect("still picking");
+        assert!(walked < offered.max(1), "the highlight ran off the end");
+
+        let _ = app.update(Message::FocusUp);
+        let _ = app.update(Message::FocusUp);
+        let _ = app.update(Message::FocusUp);
+        assert_eq!(
+            app.tuner.listener().picking(),
+            Some(0),
+            "the highlight wrapped"
+        );
+
+        // Esc closes the list rather than leaving the screen.
+        let _ = app.update(Message::GoBack);
+        assert!(!app.tuner.listener().is_picking());
+        assert_eq!(app.screen, Screen::Tuner, "Esc left the screen as well");
+
+        // And then Esc does leave it.
+        let _ = app.update(Message::GoBack);
+        assert_eq!(app.screen, Screen::Home);
+    }
+
+    #[test]
+    fn the_device_control_is_in_the_focus_ring_and_opens_the_list() {
+        let (mut app, _) = App::new();
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+
+        assert!(
+            app.focusables().contains(&FocusTarget::InputDevice),
+            "the device control is unreachable by keyboard"
+        );
+
+        app.focused = FocusTarget::InputDevice;
+        let _ = app.update(Message::ActivateFocused);
+        assert!(app.tuner.listener().is_picking());
+    }
+
+    #[test]
+    fn i_renames_the_pitch_without_touching_any_other_screen() {
+        let mut app = tuned_to(233.08); // A#3 / Bb3 — one of the five with two names.
+        let before = app.notation;
+
+        press_into(&mut app, "i", keyboard::Modifiers::empty());
+
+        let (pitch, _) = app.tuner.listener().reading().expect("a reading");
+        assert_eq!(
+            app.tuner.spelling().spell(pitch.pitch_class()).letter,
+            Letter::B,
+            "`i` did not switch the name to its flat spelling"
+        );
+        assert_eq!(
+            app.notation, before,
+            "`i` on the Tuner changed the fretboard notation as well"
+        );
+    }
+
+    #[test]
+    fn the_help_overlay_lists_the_keys_the_screen_claims() {
+        let keys: Vec<char> =
+            accelerators_for(&Screen::Tuner, Notation::Notes, &WalkTheScale::new())
+                .iter()
+                .map(|(key, _, _)| *key)
+                .collect();
+
+        assert_eq!(keys, vec!['d', 'i']);
+    }
+
+    #[test]
+    fn a_key_bound_elsewhere_is_inert_here() {
+        let (mut app, _) = App::new();
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+
+        // `a` widens the Note Trainer's pool, `r` rerolls on three other screens, and the
+        // library's `d` picks degrees — none of which this screen claims. `d` *is* claimed
+        // here, and means the device list, which is the point of a per-screen table.
+        let spelling = app.tuner.spelling();
+        for key in ["a", "r"] {
+            let _ = app.update(Message::Key(
+                keyboard::Key::Character(key.into()),
+                keyboard::Modifiers::default(),
+            ));
+
+            assert_eq!(app.screen, Screen::Tuner, "`{key}` navigated");
+            assert!(
+                !app.tuner.listener().is_picking(),
+                "`{key}` opened the device list"
+            );
+            assert_eq!(app.tuner.spelling(), spelling, "`{key}` renamed the pitch");
+        }
+    }
+}
+
+#[cfg(test)]
+mod direction_tests {
+    use crate::audio::detect::{Detection, Heard};
+    use crate::ui::tuner::Correction;
+    use crate::ui::*;
+
+    fn hearing(hz: f32) -> App {
+        let (mut app, _) = App::new();
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+        let _ = app.update(Message::Heard(Heard::Pitch(Detection::synthesized(
+            hz, 0.999,
+        ))));
+        app
+    }
+
+    /// A frequency a given number of cents from A4.
+    fn off_by(cents: f32) -> f32 {
+        440.0 * 2.0f32.powf(cents / 1200.0)
+    }
+
+    #[test]
+    fn a_sharp_string_is_told_to_come_down_and_a_flat_one_to_go_up() {
+        assert_eq!(
+            hearing(off_by(20.0)).tuner.correction(),
+            Some(Correction::Down)
+        );
+        assert_eq!(
+            hearing(off_by(-20.0)).tuner.correction(),
+            Some(Correction::Up)
+        );
+    }
+
+    #[test]
+    fn an_in_tune_string_is_told_nothing() {
+        for cents in [-2.0, -1.0, 0.0, 1.0, 2.0] {
+            assert_eq!(
+                hearing(off_by(cents)).tuner.correction(),
+                None,
+                "{cents} cents asked for a correction"
+            );
+        }
+    }
+
+    #[test]
+    fn the_correction_and_the_in_tune_colouring_agree_on_where_the_boundary_is() {
+        // Just inside and just outside, on both sides. The two must flip together — a dial
+        // that reads "in tune" beside a line saying "keep going" is the one failure this
+        // pairing can have.
+        let inside = 2.9;
+        let outside = 3.1;
+
+        assert_eq!(hearing(off_by(inside)).tuner.correction(), None);
+        assert_eq!(hearing(off_by(-inside)).tuner.correction(), None);
+        assert!(hearing(off_by(outside)).tuner.correction().is_some());
+        assert!(hearing(off_by(-outside)).tuner.correction().is_some());
+    }
+
+    #[test]
+    fn nothing_sounding_asks_for_no_correction() {
+        let (mut app, _) = App::new();
+        let _ = app.update(Message::Navigate(Screen::Tuner));
+
+        let _ = app.update(Message::Heard(Heard::Silence));
+        assert_eq!(app.tuner.correction(), None);
+
+        let _ = app.update(Message::Heard(Heard::Unpitched));
+        assert_eq!(app.tuner.correction(), None);
+    }
+}
