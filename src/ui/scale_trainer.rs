@@ -13,15 +13,15 @@
 use iced::{Element, Padding, font};
 
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
+use super::neck::{DRILL_NECK, NECK_STRINGS};
 use super::style::{
     BODY, FEEL_FONT, INK, LINK, MUSIC_FONT, MUTE, SMUFL_FLAT, card_container, control_button,
     control_glyph, control_label, control_shuffle,
 };
 use super::{
-    DRILL_NECK, FocusTarget, Message, NECK_STRINGS, Notation, ROOT_SELECTOR_CARD_WIDTH,
-    SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT, SUMMARY_NAME_SIZE, SUMMARY_ROOT_SIZE,
-    intervalic_text, kind_row_spans, marker_label, note_label, root_note_row, root_row_spans,
-    scale_kind_row,
+    FocusTarget, Message, Notation, ROOT_SELECTOR_CARD_WIDTH, SELECTOR_CARD_HEIGHT,
+    SUMMARY_CARD_HEIGHT, SUMMARY_NAME_SIZE, SUMMARY_ROOT_SIZE, intervalic_text, kind_row_spans,
+    marker_label, note_label, root_note_row, root_row_spans, scale_kind_row,
 };
 use crate::music::notes::PitchClass;
 use crate::music::scales::{Scale, ScaleKind};
@@ -229,7 +229,7 @@ fn scale_markers(scale: Scale, notation: Notation) -> Vec<NoteMarker> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::STANDARD_TUNING;
+    use crate::ui::neck::STANDARD_TUNING;
     use std::collections::HashSet;
 
     /// Every marker's pitch class, derived independently of `scale.spell` by

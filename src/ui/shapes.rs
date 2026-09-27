@@ -15,7 +15,7 @@ use crate::music::chords::{Chord, ChordQuality};
 use crate::music::notes::PitchClass;
 
 use super::chord_diagram::window_for;
-use super::{Neck, STANDARD_TUNING};
+use super::neck::{Neck, STANDARD_TUNING};
 
 /// How many frets apart a shape's stopped notes may sit.
 ///
@@ -1033,7 +1033,7 @@ pub(super) fn position_label(voicing: Voicing) -> String {
 mod tests {
     use super::*;
 
-    use crate::ui::{CAGED_NECK, DRILL_NECK};
+    use crate::ui::neck::{CAGED_NECK, DRILL_NECK};
 
     fn pc(semitone: u8) -> PitchClass {
         PitchClass::new(semitone)

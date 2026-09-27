@@ -12,14 +12,15 @@
 use iced::{Color, Element, Padding};
 
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
+use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS};
 use super::style::{
     BODY, CANVAS, CONTROL_SIZE, DANGER, INK, LINK, MUTE, SUCCESS, card_container,
     control_accidental, control_button, control_label, control_shuffle, correct_answer_button,
     focus_ring, ghost_button, spelling_glyph, streak_readout, wrong_answer_button,
 };
 use super::{
-    ANSWER_ROW_WIDTH, CURSOR_HOME, DRILL_NECK, Direction, Drill, FocusTarget, Message,
-    NECK_STRINGS, ROOT_BUTTON_SIZE, SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT, note_label,
+    ANSWER_ROW_WIDTH, Direction, Drill, FocusTarget, Message, ROOT_BUTTON_SIZE,
+    SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT, note_label,
 };
 use crate::music::notes::{PitchClass, Spelling};
 use crate::rng::Rng;

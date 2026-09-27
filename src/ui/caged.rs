@@ -15,6 +15,7 @@ use iced::widget::text;
 use iced::{Color, Element};
 
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
+use super::neck::CAGED_NECK;
 use super::shapes::{Voicing, voicings};
 use super::style::{
     BODY, CANVAS, INK, LINK, MUSIC_FONT, MUTE, ROOT_MARKER, SMUFL_FLAT, card_container,
@@ -22,7 +23,7 @@ use super::style::{
     selected_root_button,
 };
 use super::{
-    CAGED_NECK, FocusTarget, Message, Notation, ROOT_SELECTOR_CARD_WIDTH, SELECTOR_CARD_HEIGHT,
+    FocusTarget, Message, Notation, ROOT_SELECTOR_CARD_WIDTH, SELECTOR_CARD_HEIGHT,
     SUMMARY_CARD_HEIGHT, SUMMARY_NAME_SIZE, intervalic_text, marker_label, note_label,
     root_row_spans, root_square,
 };
