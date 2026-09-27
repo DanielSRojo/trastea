@@ -340,10 +340,19 @@ src/
     detect.rs            McLeod pitch detection — a difference function, not an FFT
     input.rs             the capture device, and the only untestable file in the tree
   ui/
-    mod.rs               App, Screen, Message, the focus grid, Neck and the two necks the
-                         screens draw, the twelve nameable distances both interval drills
-                         ask for, the Home view, and the root buttons and formula tokens
-                         that three screens share
+    mod.rs               App, Screen, Message — update, view and the subscription — the
+                         Home view, and the root buttons and formula tokens that three
+                         screens share
+    style.rs             the palette, the faces and the glyphs drawn from them, and the
+                         control and container styles every screen builds from
+    neck.rs              the tuning, Neck and the two necks the screens draw, and a
+                         Position on one — the instrument, shared by every screen
+    drill.rs             which way a drill runs, and the twelve nameable distances both
+                         interval drills ask for
+    focus.rs             FocusTarget, each screen's focus grid, and how the ring steps
+                         across it
+    keys.rs              key translation, the per-screen accelerator table, and the `?`
+                         overlay drawn from that table
     scale_trainer.rs     the Scale Trainer: the lit neck and the grids that choose it
     walk_the_scale.rs    the scale drill's state machine and the screen that draws it —
                          its own scale, its sequence, and the gate that decides when a
@@ -436,7 +445,7 @@ and it is right here for exactly the reason it is wrong there.
 `chord_library.rs`, `caged.rs` and `tuner.rs` each keep their state and their views together
 so the state can keep its fields private — they are read all over those views and nowhere
 else. `App` drives them all through the methods they mark
-`pub(super)` and never reaches past them; what the neck *is* stays in `mod.rs`, since that is
+`pub(super)` and never reaches past them; what the neck *is* lives in `neck.rs`, since that is
 the instrument rather than the drill, and they all want it on the same terms. The CAGED window
 keeps only a root and an index into the shapes that root produced: the cycle itself is derived
 wherever it is wanted, since a cached list is a field free to disagree with the root beside it.
