@@ -12,6 +12,7 @@
 //! not panic — an unwind through a C callback is undefined. So it copies and returns, and
 //! every decision happens elsewhere.
 
+use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -162,7 +163,12 @@ fn is_hardware(id: &str) -> bool {
 /// than by not thinking about it.
 #[derive(Debug)]
 struct Shared {
+    /// Whole interleaved frames, every channel the device has. Which one is heard is decided
+    /// by the reader, per window, so the callback stays a copy.
     samples: Mutex<Vec<f32>>,
+    /// Fixed for the stream's life, and kept beside the buffer it describes. Non-zero by
+    /// type, because a stride of zero is a panic and the callback may not panic.
+    channels: NonZeroUsize,
     /// Set by the error callback. `Ordering::Relaxed` throughout: this is one flag with no
     /// other memory ordered against it, and a reader seeing it a few microseconds late is
     /// indistinguishable from the device having failed a few microseconds later.
@@ -223,15 +229,13 @@ impl Input {
 
         // `SampleRate` is a plain `u32` in this version rather than a newtype.
         let sample_rate = config.sample_rate() as f32;
-        let channels = config.channels() as usize;
+        let channels = NonZeroUsize::new(usize::from(config.channels())).ok_or_else(|| {
+            InputError::Unavailable("the device reports no input channels".to_owned())
+        })?;
 
-        let shared = Arc::new(Shared {
-            samples: Mutex::new(Vec::with_capacity(CAPACITY)),
-            lost: AtomicBool::new(false),
-            reason: Mutex::new(None),
-        });
+        let shared = Arc::new(Shared::new(channels));
 
-        let stream = build_stream(&device, &config, channels, Arc::clone(&shared))?;
+        let stream = build_stream(&device, &config, Arc::clone(&shared))?;
         stream.play()?;
 
         Ok(Input {
@@ -259,7 +263,7 @@ impl Input {
     /// The most recent full window, or `None` if a hop has not arrived since the last call.
     pub fn take_window(&self) -> Option<Vec<f32>> {
         let mut held = self.shared.samples.lock().ok()?;
-        take(&mut held)
+        take(&mut held, self.shared.channels)
     }
 
     /// Whether the device has failed since it was opened, and what the host said.
@@ -284,7 +288,6 @@ impl Input {
 fn build_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
-    channels: usize,
     shared: Arc<Shared>,
 ) -> Result<cpal::Stream, InputError> {
     let errors = Arc::clone(&shared);
@@ -303,7 +306,7 @@ fn build_stream(
             device.build_input_stream(
                 stream_config.clone(),
                 move |data: &[$sample], _: &cpal::InputCallbackInfo| {
-                    collect(data, channels, &shared);
+                    collect(data, &shared);
                 },
                 on_error,
                 None,
@@ -325,63 +328,105 @@ fn build_stream(
     .map_err(InputError::from)
 }
 
-/// The most the buffer ever holds, and what `open` reserves: two windows is enough to always
-/// have a full one ready if the reader falls behind, and the oldest is the one worth losing.
+/// The most frames the buffer ever holds, and what `open` reserves: two windows is enough to
+/// always have a full one ready if the reader falls behind, and the oldest is the one worth
+/// losing.
 const CAPACITY: usize = WINDOW * 2;
+
+impl Shared {
+    fn new(channels: NonZeroUsize) -> Shared {
+        Shared {
+            samples: Mutex::new(Vec::with_capacity(CAPACITY * channels.get())),
+            channels,
+            lost: AtomicBool::new(false),
+            reason: Mutex::new(None),
+        }
+    }
+}
 
 /// The body of the audio callback.
 ///
-/// Allocates nothing — the buffer was reserved at `CAPACITY` and room is made before a chunk
-/// lands rather than after, so it never outgrows that — never waits, and cannot panic: every
-/// fallible step is a `try_lock` or a saturating subtraction.
-fn collect<S: Sample>(data: &[S], channels: usize, shared: &Shared) {
+/// Allocates nothing — the buffer was reserved at `CAPACITY` frames and room is made before a
+/// chunk lands rather than after, so it never outgrows that — never waits, and cannot panic:
+/// every fallible step is a `try_lock` or a saturating subtraction, and the stride is
+/// non-zero by type.
+fn collect<S: Sample>(data: &[S], shared: &Shared) {
     let Ok(mut held) = shared.samples.try_lock() else {
         // The reader has it. Dropping this chunk costs one chunk of freshness and is the
         // whole reason this is a `try_lock` rather than a `lock`.
         return;
     };
 
-    // `div_ceil` because that is how many `step_by` yields. A chunk longer than the whole
-    // buffer keeps only its own newest `CAPACITY`.
-    let incoming = data.len().div_ceil(channels.max(1));
+    // Whole frames only, so the buffer can never fall out of step with its channels. A
+    // chunk longer than the whole buffer keeps only its own newest `CAPACITY`.
+    let channels = shared.channels.get();
+    let frames = data.chunks_exact(channels);
+    let incoming = frames.len();
     let keep = CAPACITY.saturating_sub(incoming);
 
     // The length is read into a local first. `held` is a `MutexGuard`, so `held.drain(..)`
     // goes through `DerefMut` — and the two-phase borrow that makes `v.push(v.len())` legal
     // on a plain `Vec` does not reach through an overloaded deref, so the mutable borrow is
     // already live when the argument wants to read the length.
-    let excess = held.len().saturating_sub(keep);
+    let excess = held.len().saturating_sub(keep * channels);
     held.drain(..excess);
 
-    held.extend(deinterleave(data, channels).skip(incoming.saturating_sub(CAPACITY)));
+    held.extend(
+        frames
+            .skip(incoming.saturating_sub(CAPACITY))
+            .flatten()
+            .map(|s| s.to_f32()),
+    );
 }
 
-/// The newest `WINDOW` of `held`, keeping only the overlap the next window will share.
+/// The loudest channel of the newest `WINDOW` frames, keeping only the overlap the next
+/// window will share.
 ///
 /// Keeping `WINDOW - HOP` rather than nothing is what makes the next window arrive one
 /// [`HOP`] later instead of one `WINDOW` later — the spacing the tracker is tuned for. A
 /// redraw faster than that still gets `None`, so the same window is never analysed twice.
-fn take(held: &mut Vec<f32>) -> Option<Vec<f32>> {
-    if held.len() < WINDOW {
+fn take(held: &mut Vec<f32>, channels: NonZeroUsize) -> Option<Vec<f32>> {
+    let width = channels.get();
+    if held.len() < WINDOW * width {
         return None;
     }
 
     // The newest of what is there. Handing over everything that had accumulated would
     // make the analysed length — and so the latency — depend on how long it had been
     // since the last redraw.
-    let window = held[held.len() - WINDOW..].to_vec();
-    let consumed = held.len() - (WINDOW - HOP);
+    let frames = &held[held.len() - WINDOW * width..];
+    let window = channel(frames, channels, loudest(frames, channels)).collect();
+
+    let consumed = held.len() - (WINDOW - HOP) * width;
     held.drain(..consumed);
     Some(window)
 }
 
-/// The first channel of an interleaved buffer, converted to `f32`.
+/// One channel of an interleaved buffer.
 ///
 /// Not optional. A 2-in interface hands `[in1, in2, in1, in2, ...]`, and passing that
 /// through as if it were mono halves the apparent sample rate and reports every pitch an
 /// octave low — with perfect confidence, because the interleaved signal is still periodic.
-fn deinterleave<S: Sample>(data: &[S], channels: usize) -> impl Iterator<Item = f32> + '_ {
-    data.iter().step_by(channels.max(1)).map(|s| s.to_f32())
+fn channel(frames: &[f32], channels: NonZeroUsize, which: usize) -> impl Iterator<Item = f32> + '_ {
+    frames.iter().skip(which).step_by(channels.get()).copied()
+}
+
+/// The channel carrying the most energy across `frames`.
+///
+/// A guitar is one mono source, so on an interface with several inputs the one it is plugged
+/// into is the loud one and the rest are hiss. Chosen per window rather than once, so moving
+/// the cable needs nothing said. The range is walked backwards because `max_by` keeps the
+/// last of equals, and a tie — silence, or a stereo pair carrying one source — should go to
+/// the first input.
+fn loudest(frames: &[f32], channels: NonZeroUsize) -> usize {
+    (0..channels.get())
+        .rev()
+        .map(|which| {
+            let energy: f32 = channel(frames, channels, which).map(|s| s * s).sum();
+            (which, energy)
+        })
+        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+        .map_or(0, |(which, _)| which)
 }
 
 /// Scaling whatever the device gives us onto the same range.
@@ -478,35 +523,91 @@ fn write_choice(path: &std::path::Path, id: &str) {
 mod tests {
     use super::*;
 
-    /// Opening a device needs hardware, so what is tested here is everything on the near
-    /// side of that: the conversions, the classification of failures, and the buffer's
-    /// behaviour when two threads reach it at once.
+    // Opening a device needs hardware, so what is tested here is everything on the near
+    // side of that: the conversions, the classification of failures, and the buffer's
+    // behaviour when two threads reach it at once.
+
+    const MONO: NonZeroUsize = NonZeroUsize::MIN;
+    const STEREO: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
     #[test]
-    fn the_first_channel_is_taken_from_an_interleaved_buffer() {
+    fn one_channel_is_taken_from_an_interleaved_buffer() {
         // What a 2-in interface delivers: [in1, in2, in1, in2, ...].
         let frames: Vec<f32> = vec![1.0, -1.0, 2.0, -2.0, 3.0, -3.0];
 
-        let mono: Vec<f32> = deinterleave(&frames, 2).collect();
+        let first: Vec<f32> = channel(&frames, STEREO, 0).collect();
+        let second: Vec<f32> = channel(&frames, STEREO, 1).collect();
 
-        assert_eq!(mono, vec![1.0, 2.0, 3.0]);
+        assert_eq!(first, vec![1.0, 2.0, 3.0]);
+        assert_eq!(second, vec![-1.0, -2.0, -3.0]);
         // Emphatically not the interleaved buffer: passing that through reads every pitch
         // an octave low, confidently, because the interleaving is itself periodic.
-        assert_ne!(mono, frames);
+        assert_ne!(first, frames);
     }
 
     #[test]
     fn a_single_channel_source_passes_through() {
         let frames: Vec<f32> = vec![0.25, 0.5, -0.25];
-        assert_eq!(deinterleave(&frames, 1).collect::<Vec<_>>(), frames);
+        assert_eq!(channel(&frames, MONO, 0).collect::<Vec<_>>(), frames);
+    }
+
+    /// `frames` of a sine at `hz` in input `into` of a `channels`-input interface, with a
+    /// hiss far below it in every other input.
+    fn plugged_into(into: usize, channels: usize, hz: f32, frames: usize) -> Vec<f32> {
+        (0..frames)
+            .flat_map(|frame| {
+                let t = frame as f32 / 48_000.0;
+                (0..channels).map(move |input| {
+                    if input == into {
+                        0.5 * (std::f32::consts::TAU * hz * t).sin()
+                    } else if frame % 2 == 0 {
+                        0.001
+                    } else {
+                        -0.001
+                    }
+                })
+            })
+            .collect()
     }
 
     #[test]
-    fn a_channel_count_of_zero_does_not_divide_by_it() {
-        // Nothing should report zero channels, but a stride of zero is an infinite loop
-        // rather than a wrong answer, so it is clamped rather than trusted.
-        let frames: Vec<f32> = vec![0.1, 0.2];
-        assert_eq!(deinterleave(&frames, 0).count(), 2);
+    fn the_loudest_input_is_the_one_heard() {
+        for into in 0..4 {
+            let frames = plugged_into(into, 4, 110.0, 64);
+            assert_eq!(
+                loudest(&frames, NonZeroUsize::new(4).unwrap()),
+                into,
+                "a guitar in input {} was not the loudest",
+                into + 1
+            );
+        }
+    }
+
+    #[test]
+    fn a_tie_goes_to_the_first_input() {
+        // Silence, and a stereo pair carrying one source, are both ties.
+        assert_eq!(loudest(&[0.0; 8], STEREO), 0);
+        assert_eq!(loudest(&[0.3, 0.3, -0.2, -0.2], STEREO), 0);
+    }
+
+    #[test]
+    fn a_guitar_in_the_second_input_is_named() {
+        // The case that used to read as permanent silence: a 2-in interface with the guitar
+        // in input 2 and nothing in input 1. End to end, from the callback to a pitch.
+        let shared = Shared::new(STEREO);
+        collect(&plugged_into(1, 2, 110.0, WINDOW), &shared);
+
+        let window = take(&mut shared.samples.lock().expect("uncontended"), STEREO)
+            .expect("a full window had arrived");
+
+        match super::super::detect::detect(&window, 48_000.0) {
+            super::super::detect::Heard::Pitch(detection) => assert!(
+                (detection.hz() - 110.0).abs() < 1.0,
+                "heard {} Hz rather than 110",
+                detection.hz()
+            ),
+            other => panic!("input 2 read as {other:?}"),
+        }
     }
 
     #[test]
@@ -541,22 +642,14 @@ mod tests {
         }
     }
 
-    fn shared() -> Arc<Shared> {
-        Arc::new(Shared {
-            samples: Mutex::new(Vec::with_capacity(CAPACITY)),
-            lost: AtomicBool::new(false),
-            reason: Mutex::new(None),
-        })
-    }
-
     #[test]
     fn the_buffer_keeps_the_newest_samples_and_drops_the_oldest() {
-        let shared = shared();
+        let shared = Shared::new(MONO);
 
         // Far more than the cap, in identifiable order.
         for chunk in 0..8 {
             let block: Vec<f32> = (0..WINDOW).map(|i| (chunk * WINDOW + i) as f32).collect();
-            collect(&block, 1, &shared);
+            collect(&block, &shared);
         }
 
         let held = shared.samples.lock().expect("uncontended");
@@ -577,52 +670,52 @@ mod tests {
 
     #[test]
     fn the_buffer_never_outgrows_what_was_reserved() {
-        let shared = shared();
-        let reserved = shared.samples.lock().expect("uncontended").capacity();
+        for channels in [MONO, STEREO] {
+            let shared = Shared::new(channels);
+            let width = channels.get();
+            let reserved = shared.samples.lock().expect("uncontended").capacity();
 
-        // Sizes a real host hands over, one that divides nothing, and one longer than the
-        // whole buffer — in mono and interleaved stereo.
-        let mut next = 0.0f32;
-        for (frames, channels) in [(480, 1), (1024, 2), (3000, 1), (1, 2), (7000, 2), (2048, 1)] {
-            let block: Vec<f32> = (0..frames * channels)
-                .map(|i| {
-                    if i % channels == 0 {
-                        next + (i / channels) as f32
-                    } else {
-                        -1.0
-                    }
-                })
-                .collect();
-            next += frames as f32;
-            collect(&block, channels, &shared);
+            // Sizes a real host hands over, one that divides nothing, and one longer than
+            // the whole buffer. The first input counts frames; the rest are its negation.
+            let mut next = 0.0f32;
+            for frames in [480, 1024, 3000, 1, 7000, 2048] {
+                let block: Vec<f32> = (0..frames)
+                    .flat_map(|frame| {
+                        let n = next + frame as f32;
+                        (0..width).map(move |input| if input == 0 { n } else { -n })
+                    })
+                    .collect();
+                next += frames as f32;
+                collect(&block, &shared);
 
-            let held = shared.samples.lock().expect("uncontended");
-            assert!(
-                held.len() <= CAPACITY,
-                "held {} after a {frames}-frame chunk",
-                held.len()
-            );
-            assert_eq!(
-                held.capacity(),
-                reserved,
-                "a {frames}-frame chunk reallocated"
-            );
-            assert_eq!(
-                held.last(),
-                Some(&(next - 1.0)),
-                "the newest sample was lost"
-            );
+                let held = shared.samples.lock().expect("uncontended");
+                assert!(
+                    held.len() <= CAPACITY * width,
+                    "held {} after a {frames}-frame chunk",
+                    held.len()
+                );
+                assert_eq!(
+                    held.capacity(),
+                    reserved,
+                    "a {frames}-frame chunk reallocated"
+                );
+                assert_eq!(
+                    held[held.len() - width],
+                    next - 1.0,
+                    "the newest frame was lost, or a frame was split"
+                );
+            }
         }
     }
 
     #[test]
     fn the_callback_drops_its_chunk_rather_than_waiting_for_the_reader() {
-        let shared = shared();
+        let shared = Shared::new(MONO);
         let held = shared.samples.lock().expect("the test takes it first");
 
         // With the lock held, a callback must return rather than block. If it blocked,
         // this test would deadlock rather than fail — which is itself the assertion.
-        collect(&[0.5f32; 64], 1, &shared);
+        collect(&[0.5f32; 64], &shared);
 
         assert!(
             held.is_empty(),
@@ -634,14 +727,14 @@ mod tests {
     fn a_full_window_is_handed_over_exactly_once() {
         let mut held = vec![0.25f32; WINDOW * 2];
 
-        let first = take(&mut held).expect("a full window had arrived");
+        let first = take(&mut held, MONO).expect("a full window had arrived");
         assert_eq!(
             first.len(),
             WINDOW,
             "the window was not the specified length"
         );
         assert!(
-            take(&mut held).is_none(),
+            take(&mut held, MONO).is_none(),
             "the same samples were handed over twice"
         );
     }
@@ -649,13 +742,16 @@ mod tests {
     #[test]
     fn the_next_window_arrives_one_hop_later_and_overlaps_the_last() {
         let mut held: Vec<f32> = (0..WINDOW).map(|i| i as f32).collect();
-        let first = take(&mut held).expect("a full window had arrived");
+        let first = take(&mut held, MONO).expect("a full window had arrived");
 
         held.extend((WINDOW..WINDOW + HOP - 1).map(|i| i as f32));
-        assert!(take(&mut held).is_none(), "a window arrived short of a hop");
+        assert!(
+            take(&mut held, MONO).is_none(),
+            "a window arrived short of a hop"
+        );
 
         held.push((WINDOW + HOP - 1) as f32);
-        let second = take(&mut held).expect("a hop had arrived");
+        let second = take(&mut held, MONO).expect("a hop had arrived");
         assert_eq!(
             second[..WINDOW - HOP],
             first[HOP..],
@@ -712,7 +808,7 @@ mod tests {
 
     #[test]
     fn a_lost_device_is_reported_once_it_is_flagged() {
-        let shared = shared();
+        let shared = Shared::new(MONO);
         assert!(!shared.lost.load(Ordering::Relaxed));
 
         *shared.reason.lock().expect("uncontended") = Some("unplugged".to_owned());

@@ -161,7 +161,9 @@ rather than promising five — five is what a major triad yields, and a minor on
 three a guitarist is actually taught.
 
 **Tuner** — the one screen that listens without asking anything. Plug a guitar into an audio interface, pick the
-input, and it names the pitch it hears and says how far off it is in cents. It is chromatic
+input, and it names the pitch it hears and says how far off it is in cents. On an interface
+with several inputs it listens to whichever is loudest, so it does not matter which one the
+cable is in. It is chromatic
 rather than six-string: it names the nearest of all twelve pitch classes in whatever octave it
 hears, so a capo and an alternate tuning need nothing said about them and drop D is just D2.
 The trade is that a string a full semitone flat reads as the note it has become rather than the
