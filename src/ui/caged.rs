@@ -14,6 +14,7 @@ use crate::music::notes::PitchClass;
 use iced::widget::text;
 use iced::{Color, Element};
 
+use super::focus::{FocusTarget, root_row_spans};
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::neck::CAGED_NECK;
 use super::shapes::{Voicing, voicings};
@@ -23,9 +24,8 @@ use super::style::{
     selected_root_button,
 };
 use super::{
-    FocusTarget, Message, Notation, ROOT_SELECTOR_CARD_WIDTH, SELECTOR_CARD_HEIGHT,
-    SUMMARY_CARD_HEIGHT, SUMMARY_NAME_SIZE, intervalic_text, marker_label, note_label,
-    root_row_spans, root_square,
+    Message, Notation, ROOT_SELECTOR_CARD_WIDTH, SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT,
+    SUMMARY_NAME_SIZE, intervalic_text, marker_label, note_label, root_square,
 };
 
 /// The quality the window shows. Major because it is the only one whose shapes are a cycle:

@@ -12,6 +12,7 @@
 use iced::{Color, Element, Padding};
 
 use super::drill::Drill;
+use super::focus::{ANSWER_ROW_WIDTH, Direction, FocusTarget};
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS};
 use super::style::{
@@ -19,10 +20,7 @@ use super::style::{
     control_accidental, control_button, control_label, control_shuffle, correct_answer_button,
     focus_ring, ghost_button, spelling_glyph, streak_readout, wrong_answer_button,
 };
-use super::{
-    ANSWER_ROW_WIDTH, Direction, FocusTarget, Message, ROOT_BUTTON_SIZE, SELECTOR_CARD_HEIGHT,
-    SUMMARY_CARD_HEIGHT, note_label,
-};
+use super::{Message, ROOT_BUTTON_SIZE, SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT, note_label};
 use crate::music::notes::{PitchClass, Spelling};
 use crate::rng::Rng;
 

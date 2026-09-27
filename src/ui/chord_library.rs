@@ -10,6 +10,7 @@ use crate::music::chords::{Chord, ChordQuality, Query};
 use crate::music::notes::{PitchClass, Spelling};
 
 use super::chord_diagram::{ChordDiagram, FEATURE, STRIP, StringMark, chord_diagram};
+use super::focus::FocusTarget;
 use super::neck::DRILL_NECK;
 use super::shapes::{Voicing, position_label, voicings};
 use super::style::{
@@ -17,7 +18,7 @@ use super::style::{
     SMUFL_CSYM_DIMINISHED, SMUFL_CSYM_HALF_DIMINISHED, SMUFL_CSYM_MAJOR_SEVENTH, SMUFL_SHARP,
     SUCCESS, card_container, focus_ring, ghost_button, hairline_rule,
 };
-use super::{FocusTarget, Message, Notation, intervalic_text, note_label};
+use super::{Message, Notation, intervalic_text, note_label};
 
 /// The library's state: what has been typed, which root it settled on, and what is picked.
 ///

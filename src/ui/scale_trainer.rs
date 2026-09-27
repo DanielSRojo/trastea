@@ -12,6 +12,7 @@
 
 use iced::{Element, Padding, font};
 
+use super::focus::{FocusTarget, kind_row_spans, root_row_spans};
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::neck::{DRILL_NECK, NECK_STRINGS};
 use super::style::{
@@ -19,9 +20,9 @@ use super::style::{
     control_glyph, control_label, control_shuffle,
 };
 use super::{
-    FocusTarget, Message, Notation, ROOT_SELECTOR_CARD_WIDTH, SELECTOR_CARD_HEIGHT,
-    SUMMARY_CARD_HEIGHT, SUMMARY_NAME_SIZE, SUMMARY_ROOT_SIZE, intervalic_text, kind_row_spans,
-    marker_label, note_label, root_note_row, root_row_spans, scale_kind_row,
+    Message, Notation, ROOT_SELECTOR_CARD_WIDTH, SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT,
+    SUMMARY_NAME_SIZE, SUMMARY_ROOT_SIZE, intervalic_text, marker_label, note_label, root_note_row,
+    scale_kind_row,
 };
 use crate::music::notes::PitchClass;
 use crate::music::scales::{Scale, ScaleKind};

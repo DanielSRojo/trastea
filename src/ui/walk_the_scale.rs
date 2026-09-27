@@ -20,6 +20,7 @@ use iced::mouse::ScrollDelta;
 use iced::widget::canvas::{self, Canvas};
 use iced::{Color, Element, Length, Padding, Point, Rectangle, Renderer, Size, Theme};
 
+use super::focus::{Direction, FocusTarget, kind_row_spans};
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
 use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS};
@@ -27,7 +28,7 @@ use super::style::{
     BODY, CONTROL_SIZE, DANGER, INK, LINK, MUSIC_FONT, MUTE, SUCCESS, card_container,
     control_button, control_label, control_shuffle,
 };
-use super::{Direction, FocusTarget, Message, kind_row_spans, note_label, scale_kind_row};
+use super::{Message, note_label, scale_kind_row};
 use crate::audio::detect::Heard;
 use crate::music::intervals::Interval;
 use crate::music::notes::PitchClass;

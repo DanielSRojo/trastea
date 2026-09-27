@@ -22,7 +22,9 @@ use crate::audio::input::{
 };
 use crate::music::pitch::{Cents, Pitch};
 
-use super::{FocusTarget, Message};
+use super::Message;
+
+use super::focus::FocusTarget;
 
 use super::style::{
     BODY, MUTE, card_button, focus_ring, ghost_button, row_button, selected_row_button,
