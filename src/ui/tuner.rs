@@ -22,7 +22,8 @@ use crate::music::notes::Spelling;
 
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
 use super::{
-    BODY, FocusTarget, INK, MUSIC_FONT, MUTE, Message, SMUFL_FLAT, SMUFL_SHARP, SUCCESS, note_label,
+    BODY, FocusTarget, INK, MUSIC_FONT, MUTE, Message, SMUFL_FLAT, SMUFL_SHARP, SUCCESS,
+    control_accidental, control_button, note_label, spelling_glyph,
 };
 
 /// How far from a pitch still counts as in tune.
@@ -194,6 +195,12 @@ fn ui_reading(tuner: &Tuner, focused: FocusTarget) -> Element<'static, Message> 
         ],
         Space::new().height(Length::Fixed(14.0)),
         status,
+        Space::new().height(Length::Fixed(14.0)),
+        control_button(
+            control_accidental(spelling_glyph(tuner.spelling)),
+            Message::ToggleTunerSpelling,
+            focused == FocusTarget::TunerSpellingToggle,
+        ),
     ]
     .align_x(iced::Alignment::Center)
     .spacing(4)

@@ -36,7 +36,7 @@ use keyboard::key::Named;
 use crate::audio::detect::Heard;
 use crate::music::{
     intervals::Interval,
-    notes::{Accidental, Note, PitchClass},
+    notes::{Accidental, Note, PitchClass, Spelling},
     pitch::Pitch,
     scales::Scale,
     scales::ScaleKind,
@@ -532,6 +532,8 @@ pub enum Message {
     TogglePool,
     /// The Note Trainer's spelling, not the scale's — see `NoteTrainer::spelling`.
     ToggleNoteSpelling,
+    /// The Tuner's, which names what it hears and moves no other screen.
+    ToggleTunerSpelling,
     /// Answers a *Name it* prompt on the Interval Trainer with an interval.
     AnswerInterval(Interval),
     /// Answers the Interval Trainer's *Find it* prompt with a position — and what a press
@@ -670,9 +672,10 @@ pub enum FocusTarget {
     NoteAnswer(usize),
     DrillDirectionToggle,
     PoolToggle,
-    /// The Note Trainer's own, and now the only spelling control in the app: the scale
-    /// trainer derives its spelling rather than offering a choice. See `Scale::new`.
+    /// The Note Trainer's own. The scale trainer derives its spelling rather than offering
+    /// a choice — see `Scale::new` — so this and the Tuner's are the only two.
     NoteSpellingToggle,
+    TunerSpellingToggle,
     SkipPrompt,
     /// The Interval Trainer's neck, as its *Find it* answer surface. Claims the motion keys
     /// while focused, exactly as `Fretboard` does on the Note Trainer.
@@ -971,9 +974,6 @@ impl App {
             Message::GoBack => self.go_back(),
             Message::SelectRoot(root) => self.set_scale(root, self.scale.kind()),
             Message::SelectScaleKind(kind) => self.set_scale(self.scale.root(), kind),
-            Message::ToggleNotation if self.screen == Screen::Tuner => {
-                self.tuner.toggle_spelling();
-            }
             Message::ToggleNotation => self.toggle_notation(),
             Message::RerollScale => self.reroll_scale(),
             Message::StartWalkTheScale => self.walk_the_scale.restart(),
@@ -1009,6 +1009,7 @@ impl App {
             Message::ToggleDrillDirection => self.note_trainer.toggle_direction(&mut self.rng),
             Message::TogglePool => self.note_trainer.toggle_pool(&mut self.rng),
             Message::ToggleNoteSpelling => self.note_trainer.toggle_spelling(),
+            Message::ToggleTunerSpelling => self.tuner.toggle_spelling(),
             Message::AnswerInterval(interval) => self.interval_trainer.answer_interval(interval),
             Message::ChooseIntervalPosition(string, fret) => {
                 self.interval_trainer.answer_position(string, fret)
@@ -1497,6 +1498,7 @@ impl App {
             FocusTarget::DrillDirectionToggle => self.note_trainer.toggle_direction(&mut self.rng),
             FocusTarget::PoolToggle => self.note_trainer.toggle_pool(&mut self.rng),
             FocusTarget::NoteSpellingToggle => self.note_trainer.toggle_spelling(),
+            FocusTarget::TunerSpellingToggle => self.tuner.toggle_spelling(),
             FocusTarget::SkipPrompt => self.note_trainer.skip(&mut self.rng),
             FocusTarget::SearchBox => self.chord_library.focus_search(),
             FocusTarget::NotationChoice(index) => self.chord_library.set_notation(index),
@@ -1682,12 +1684,13 @@ impl App {
     /// taller kinds card alongside.
     fn focus_grid(&self) -> Vec<FocusRow> {
         match &self.screen {
-            // Two focusables: back, and the control that opens the device list. The list
-            // itself is not in the ring — while it is up it claims the motion keys outright,
-            // the way the CAGED shape row does, so walking it is one gesture.
+            // Back, the control that opens the device list, and the spelling under the dial.
+            // The list itself is not in the ring — while it is up it claims the motion keys
+            // outright, the way the CAGED shape row does, so walking it is one gesture.
             Screen::Tuner => vec![
                 vec![Some(FocusTarget::Back)],
                 vec![Some(FocusTarget::InputDevice)],
+                vec![Some(FocusTarget::TunerSpellingToggle)],
             ],
             // Back, the skip control, and the device control. The neck is not a focus
             // target here: it takes no press, so there would be nothing to activate on it.
@@ -2299,7 +2302,7 @@ fn accelerators_for(screen: &Screen, notation: Notation, drill: &WalkTheScale) -
         // written, which here is the sharp or flat name of the pitch being heard.
         Screen::Tuner => vec![
             ('d', FocusTarget::InputDevice, "input device".into()),
-            ('i', FocusTarget::NotationToggle, "flat names".into()),
+            ('i', FocusTarget::TunerSpellingToggle, "flat names".into()),
         ],
     }
 }
@@ -2441,6 +2444,15 @@ fn control_glyph<'a>(label: impl Into<Element<'a, Message>>) -> Element<'a, Mess
 /// Next to a letter that is exactly what an accidental should do; alone in a pill it reads
 /// as floating. Fixing the container's height is what makes the top padding move the glyph
 /// rather than the pill.
+/// The accidental a spelling control wears: the one in force, not the one pressing it
+/// would bring.
+fn spelling_glyph(spelling: Spelling) -> char {
+    match spelling {
+        Spelling::Sharps => SMUFL_SHARP,
+        Spelling::Flats => SMUFL_FLAT,
+    }
+}
+
 fn control_accidental(glyph: char) -> Element<'static, Message> {
     use iced::Length;
     use iced::widget::{container, text};
@@ -3707,7 +3719,7 @@ mod tests {
     }
 
     /// Every screen, so a new one cannot quietly escape the checks that sweep them all.
-    pub(super) fn every_screen() -> [Screen; 7] {
+    pub(super) fn every_screen() -> [Screen; 8] {
         [
             Screen::Home,
             Screen::ScaleTrainer,
@@ -3716,6 +3728,7 @@ mod tests {
             Screen::PlayTheInterval,
             Screen::ChordLibrary,
             Screen::Caged,
+            Screen::Tuner,
         ]
     }
 
@@ -4943,6 +4956,7 @@ mod tuner_tests {
     use super::*;
     use crate::audio::detect::{Detection, Heard};
     use crate::music::notes::Letter;
+    use crate::ui::tests::press_into;
 
     /// A released reading at a given frequency, as the detector would produce one.
     fn heard(hz: f32) -> Heard {
@@ -5157,7 +5171,7 @@ mod tuner_tests {
         let mut app = tuned_to(233.08); // A#3 / Bb3 — one of the five with two names.
         let before = app.notation;
 
-        let _ = app.update(Message::ToggleNotation);
+        press_into(&mut app, "i", keyboard::Modifiers::empty());
 
         let (pitch, _) = app.tuner.listener().reading().expect("a reading");
         assert_eq!(

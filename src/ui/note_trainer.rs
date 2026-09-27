@@ -15,9 +15,9 @@ use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::{
     ANSWER_ROW_WIDTH, BODY, CANVAS, CONTROL_SIZE, CURSOR_HOME, DANGER, DRILL_NECK, Direction,
     Drill, FocusTarget, INK, LINK, MUTE, Message, NECK_STRINGS, ROOT_BUTTON_SIZE,
-    SELECTOR_CARD_HEIGHT, SMUFL_FLAT, SMUFL_SHARP, SUCCESS, SUMMARY_CARD_HEIGHT, card_container,
-    control_accidental, control_button, control_label, control_shuffle, correct_answer_button,
-    focus_ring, ghost_button, note_label, streak_readout, wrong_answer_button,
+    SELECTOR_CARD_HEIGHT, SUCCESS, SUMMARY_CARD_HEIGHT, card_container, control_accidental,
+    control_button, control_label, control_shuffle, correct_answer_button, focus_ring,
+    ghost_button, note_label, spelling_glyph, streak_readout, wrong_answer_button,
 };
 use crate::music::notes::{PitchClass, Spelling};
 use crate::rng::Rng;
@@ -522,15 +522,6 @@ fn position_markers(trainer: &NoteTrainer) -> Vec<NoteMarker> {
         .collect()
 }
 
-/// The accidental the spelling control wears: the one in force, not the one pressing it
-/// would bring.
-fn spelling_glyph(spelling: Spelling) -> char {
-    match spelling {
-        Spelling::Sharps => SMUFL_SHARP,
-        Spelling::Flats => SMUFL_FLAT,
-    }
-}
-
 /// The header row: direction, pool, spelling, skip.
 ///
 /// The first three are labelled with the mode they are *currently* in rather than with what
@@ -666,7 +657,9 @@ fn note_answer_row(
 #[cfg(test)]
 mod tests {
     use super::super::tests::{app_with_seed, every_screen, press_into, press_named};
-    use super::super::{App, Notation, Screen, accelerators_for, translate_key};
+    use super::super::{
+        App, Notation, SMUFL_FLAT, SMUFL_SHARP, Screen, accelerators_for, translate_key,
+    };
     use super::*;
     use crate::ui::WalkTheScale;
     use iced::keyboard;
