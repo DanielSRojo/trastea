@@ -2174,6 +2174,17 @@ mod tests {
     }
 
     #[test]
+    fn the_run_clock_ticks_only_while_a_run_is_on_screen() {
+        let mut app = drill_app(0, ScaleKind::Ionian);
+        let _ = app.update(Message::CycleScaleDuration);
+        assert!(app.wants_run_clock(), "a timed run has no clock to end it");
+
+        app.go_back();
+
+        assert!(!app.wants_run_clock(), "the clock outlived the screen");
+    }
+
+    #[test]
     fn leaving_the_screen_ends_a_running_duration() {
         let mut app = drill_app(0, ScaleKind::Ionian);
         let _ = app.update(Message::CycleScaleDuration);

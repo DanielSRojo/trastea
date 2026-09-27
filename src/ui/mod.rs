@@ -1218,6 +1218,13 @@ impl App {
         self.listener_ref().is_some_and(Listener::is_listening)
     }
 
+    /// Whether the run's one-second clock should tick. Named rather than inlined in
+    /// `subscription` because a `Subscription` cannot be inspected, and this is the part a
+    /// test can reach.
+    fn wants_run_clock(&self) -> bool {
+        self.screen == Screen::WalkTheScale && self.walk_the_scale.is_running()
+    }
+
     /// One tick of audio, folded into the screen that asked for it.
     ///
     /// Not `listener().poll()` alone: a drill has to see the reading to judge it, so the
@@ -1619,7 +1626,7 @@ impl App {
         // One second is the resolution the readout needs — `4:59` — and anything finer would
         // redraw for nothing. Gated on a run rather than on the screen, so an untimed run
         // ticks no more than a timed one needs.
-        if self.screen == Screen::ScaleTrainer && self.walk_the_scale.is_running() {
+        if self.wants_run_clock() {
             streams
                 .push(iced::time::every(Duration::from_secs(1)).map(|_| Message::WalkTheScaleTick));
         }
