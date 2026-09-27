@@ -15,17 +15,6 @@
 //! Every constant below was measured against a guitar through an audio interface rather
 //! than taken from a paper; where a figure has a reason, the reason is beside it.
 
-// The screen is the caller and lands in the same change; until it does, this module is
-// reached only from its own tests. `expect` rather than `allow` so the attribute fails the
-// build of its own accord once that caller exists.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "detection precedes the tuner screen that reads it"
-    )
-)]
-
 /// The analysis window.
 ///
 /// This is a floor rather than a preference. The difference function needs two periods of
@@ -115,6 +104,8 @@ pub enum Heard {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Detection {
     hz: f32,
+    /// How close the normalized difference function came to a perfect match at the period
+    /// it chose: 1.0 is a pure repeating waveform, and a strummed chord sits near 0.5.
     clarity: f32,
 }
 
@@ -129,12 +120,6 @@ impl Detection {
 
     pub fn hz(self) -> f32 {
         self.hz
-    }
-
-    /// How close the normalized difference function came to a perfect match at the period
-    /// it chose: 1.0 is a pure repeating waveform, and a strummed chord sits near 0.5.
-    pub fn clarity(self) -> f32 {
-        self.clarity
     }
 }
 
@@ -546,12 +531,12 @@ mod tests {
         let Heard::Pitch(single) = detect(&plucked(A2, WINDOW), SR) else {
             panic!("a single note should be measured");
         };
-        assert!(single.clarity() > CLARITY_GATE, "{}", single.clarity());
+        assert!(single.clarity > CLARITY_GATE, "{}", single.clarity);
 
         // An open A chord: A2 E3 A3 C#4 E4.
         let strum = chord(&[110.0, 164.81, 220.0, 277.18, 329.63], WINDOW);
         let clarity = match detect(&strum, SR) {
-            Heard::Pitch(detection) => detection.clarity(),
+            Heard::Pitch(detection) => detection.clarity,
             _ => 0.0,
         };
         assert!(

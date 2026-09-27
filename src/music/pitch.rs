@@ -5,15 +5,6 @@
 //! every screen the app draws. It stops being enough the moment a frequency is involved:
 //! 82.41 Hz is a low E and 329.63 Hz is a high one, and both are pitch class 4.
 
-// Nothing outside the tests reads a pitch until the tuner lands. `expect` rather than
-// `allow`, so the attribute warns of its own accord once that happens — and
-// `cfg_attr(not(test))` because this module's own tests do call all of it, so a bare
-// expectation would itself go unfulfilled under a test build.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "absolute pitch precedes the tuner that reads it")
-)]
-
 use super::notes::PitchClass;
 
 /// The reference the whole temperament hangs off. Named rather than inlined because it is
@@ -88,6 +79,9 @@ impl Pitch {
     /// Arithmetic rather than a table of 128 entries, for the reason scale spelling is
     /// arithmetic rather than a table of key signatures: a table has entries that can be
     /// individually wrong, and `440 * 2^((m - 69) / 12)` cannot be.
+    ///
+    /// Only the tests call it: the app goes from hertz to pitch, and they synthesize the reverse.
+    #[cfg(test)]
     pub fn frequency(self) -> f32 {
         A4_HZ * 2.0f32.powf((f32::from(self.0) - f32::from(A4_MIDI)) / 12.0)
     }

@@ -11,13 +11,6 @@
 //! hit-testing, held together by the same round-trip test. This widget's geometry is the
 //! harder of the two, which is a reason to want that test more rather than less.
 
-// Nothing outside the tests draws a diagram until the screen lands. `expect` rather than
-// `allow`, so the attribute warns of its own accord once that happens.
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the widget precedes the screen that holds it")
-)]
-
 use iced::alignment;
 use iced::widget::canvas::{self, Canvas, Fill, Frame, Path, Stroke, Text};
 use iced::{Color, Element, Length, Pixels, Point, Rectangle, Renderer, Size, Theme};
@@ -51,6 +44,7 @@ impl Window {
         self.first_fret == 1
     }
 
+    #[cfg(test)]
     fn last_fret(self) -> u8 {
         self.first_fret + self.fret_count as u8 - 1
     }

@@ -12,19 +12,6 @@
 //! not panic — an unwind through a C callback is undefined. So it copies and returns, and
 //! every decision happens elsewhere.
 
-// The screen is the caller and lands in the same change.
-//
-// A bare `#[expect]` rather than `detect.rs`'s `cfg_attr(not(test), ...)`, and the
-// difference is the point: everything in `detect` is exercised by its own tests, so under
-// a test build nothing there is dead and a bare expectation would go unfulfilled. Here the
-// opposite holds — opening a device needs hardware, so `Input` and everything reaching it
-// stay dead under both builds, and gating the attribute on `not(test)` would leave the
-// test build warning about exactly the items that cannot be tested.
-#![expect(
-    dead_code,
-    reason = "input precedes the tuner screen that opens it; the device path needs hardware"
-)]
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -206,11 +193,6 @@ pub struct Input {
 }
 
 impl Input {
-    /// Opens the system default capture device.
-    pub fn open() -> Result<Input, InputError> {
-        Input::open_id(None)
-    }
-
     /// Opens the device with this id, or the system default when `wanted` is `None` or names
     /// a device that is not present.
     ///
@@ -845,7 +827,7 @@ mod fallback_tests {
     fn the_default_is_not_a_fallback() {
         // Asking for nothing in particular and getting the default is a choice, not a
         // failure — the screen must not claim a remembered device went missing.
-        if let Ok(input) = Input::open() {
+        if let Ok(input) = Input::open_id(None) {
             assert!(
                 !input.fell_back(),
                 "the default reported itself as a fallback"
