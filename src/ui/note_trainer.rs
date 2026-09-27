@@ -152,36 +152,27 @@ impl NoteTrainer {
     /// turn this into a hang, and a hang inside a rejection loop is a miserable bug to
     /// find.
     fn draw_prompt(&mut self, drill: Drill, rng: &mut Rng) {
-        let current = self.prompt;
+        self.prompt = rng.draw_other_than(self.prompt, |rng| match drill {
+            Drill::NameIt => {
+                let positions = self.positions();
+                debug_assert!(
+                    positions.len() >= 2,
+                    "a pool must hold at least two positions or this loop cannot end"
+                );
 
-        loop {
-            let candidate = match drill {
-                Drill::NameIt => {
-                    let positions = self.positions();
-                    debug_assert!(
-                        positions.len() >= 2,
-                        "a pool must hold at least two positions or this loop cannot end"
-                    );
-
-                    let (string, fret) = positions[rng.below(positions.len())];
-                    Prompt::NameIt { string, fret }
-                }
-                Drill::FindIt => {
-                    let choices = self.pool.pitch_classes();
-                    debug_assert!(
-                        choices.len() >= 2,
-                        "a pool must hold at least two pitch classes or this loop cannot end"
-                    );
-
-                    Prompt::FindIt(choices[rng.below(choices.len())])
-                }
-            };
-
-            if candidate != current {
-                self.prompt = candidate;
-                break;
+                let (string, fret) = positions[rng.below(positions.len())];
+                Prompt::NameIt { string, fret }
             }
-        }
+            Drill::FindIt => {
+                let choices = self.pool.pitch_classes();
+                debug_assert!(
+                    choices.len() >= 2,
+                    "a pool must hold at least two pitch classes or this loop cannot end"
+                );
+
+                Prompt::FindIt(choices[rng.below(choices.len())])
+            }
+        });
 
         // Both kinds of feedback belong to the prompt they were given against, so a new
         // prompt arrives with a clean surface — and a skip or a toggle during the flash

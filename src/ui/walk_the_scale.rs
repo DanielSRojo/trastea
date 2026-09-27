@@ -306,17 +306,14 @@ impl WalkTheScale {
     /// `r`: replace what is on screen, which here is the scale being drilled.
     pub(super) fn reroll(&mut self, rng: &mut Rng) {
         let current = (self.scale.root(), self.scale.kind());
-
-        loop {
-            let root = PitchClass::ALL[rng.below(PitchClass::ALL.len())];
-            let kind = ScaleKind::ALL[rng.below(ScaleKind::ALL.len())];
-
-            if (root, kind) != current {
-                self.scale = Scale::new(root, kind);
-                self.restart_sequence();
-                return;
-            }
-        }
+        let (root, kind) = rng.draw_other_than(current, |rng| {
+            (
+                PitchClass::ALL[rng.below(PitchClass::ALL.len())],
+                ScaleKind::ALL[rng.below(ScaleKind::ALL.len())],
+            )
+        });
+        self.scale = Scale::new(root, kind);
+        self.restart_sequence();
     }
 
     pub(super) fn answering(&self) -> Answering {

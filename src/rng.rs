@@ -75,6 +75,27 @@ impl Rng {
 
         (self.next_u64() % len as u64) as usize
     }
+
+    /// Draws with `draw` until it yields something other than `current`.
+    ///
+    /// The rule every reroll and every fresh prompt follows — a press always changes what is on
+    /// screen — as one rejection loop. `draw` is handed the generator rather than capturing
+    /// it, so it can borrow whatever else it needs to build a candidate.
+    ///
+    /// Never returns if `draw` can only produce `current`. Callers whose pool could shrink
+    /// that far say so with a `debug_assert!` beside the call.
+    pub fn draw_other_than<T: PartialEq>(
+        &mut self,
+        current: T,
+        mut draw: impl FnMut(&mut Rng) -> T,
+    ) -> T {
+        loop {
+            let candidate = draw(self);
+            if candidate != current {
+                return candidate;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -148,5 +169,19 @@ mod tests {
     #[should_panic(expected = "no index below zero")]
     fn below_zero_panics() {
         Rng::from_seed(1).below(0);
+    }
+
+    #[test]
+    fn a_redraw_never_lands_on_what_is_already_there() {
+        let mut rng = Rng::from_seed(7);
+        let mut current = 0;
+
+        // Two values is the smallest pool the loop can end on, so every draw that repeats
+        // has to be rejected rather than returned.
+        for _ in 0..200 {
+            let next = rng.draw_other_than(current, |rng| rng.below(2));
+            assert_ne!(next, current);
+            current = next;
+        }
     }
 }

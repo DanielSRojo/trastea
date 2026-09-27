@@ -822,31 +822,22 @@ impl App {
     /// which is also why the very first scale of a session is never C Ionian.
     fn reroll_scale(&mut self) {
         let current = (self.scale.root(), self.scale.kind());
-
-        loop {
-            let root = PitchClass::ALL[self.rng.below(PitchClass::ALL.len())];
-            let kind = ScaleKind::ALL[self.rng.below(ScaleKind::ALL.len())];
-
-            if (root, kind) != current {
-                self.set_scale(root, kind);
-                return;
-            }
-        }
+        let (root, kind) = self.rng.draw_other_than(current, |rng| {
+            (
+                PitchClass::ALL[rng.below(PitchClass::ALL.len())],
+                ScaleKind::ALL[rng.below(ScaleKind::ALL.len())],
+            )
+        });
+        self.set_scale(root, kind);
     }
 
     /// A different root than the one on show, so a press always changes the neck — the rule
     /// `reroll_scale` follows, with one field to draw instead of two.
     fn reroll_caged_root(&mut self) {
-        let current = self.caged.root();
-
-        loop {
-            let root = PitchClass::ALL[self.rng.below(PitchClass::ALL.len())];
-
-            if root != current {
-                self.caged.select_root(root);
-                return;
-            }
-        }
+        let root = self.rng.draw_other_than(self.caged.root(), |rng| {
+            PitchClass::ALL[rng.below(PitchClass::ALL.len())]
+        });
+        self.caged.select_root(root);
     }
 
     /// The one place a `Scale` is built, because its spelling is derived from the

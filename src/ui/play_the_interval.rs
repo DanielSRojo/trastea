@@ -111,7 +111,6 @@ impl PlayTheInterval {
     /// and asking what lies between them, for the reason the Interval Trainer gives: it is
     /// what guarantees the distance is one the vocabulary can name.
     fn draw_prompt(&mut self, rng: &mut Rng) {
-        let current = self.prompt;
         let neck = neck();
 
         debug_assert!(
@@ -119,16 +118,11 @@ impl PlayTheInterval {
             "the drill must have at least two prompts to choose between or this loop cannot end"
         );
 
-        loop {
+        self.prompt = rng.draw_other_than(self.prompt, |rng| {
             let (root, _) = neck[rng.below(neck.len())];
             let interval = ANSWERS[rng.below(ANSWERS.len())].interval;
-            let candidate = Prompt { root, interval };
-
-            if candidate != current {
-                self.prompt = candidate;
-                break;
-            }
-        }
+            Prompt { root, interval }
+        });
 
         self.score.next_prompt();
         // Deaf to whatever is sounding *now*, whatever the reason the prompt was drawn —

@@ -120,7 +120,6 @@ impl IntervalTrainer {
     /// them. Forward is what guarantees the distance drawn is one the answer grid can
     /// express; backward could land on a pair the vocabulary has no button for.
     fn draw_prompt(&mut self, drill: Drill, rng: &mut Rng) {
-        let current = self.prompt;
         let neck = neck();
 
         // The rejection loop below ends only if there are at least two prompts to choose
@@ -132,11 +131,11 @@ impl IntervalTrainer {
             "the drill must have at least two prompts to choose between or this loop cannot end"
         );
 
-        loop {
+        self.prompt = rng.draw_other_than(self.prompt, |rng| {
             let (root, root_pitch) = neck[rng.below(neck.len())];
             let interval = ANSWERS[rng.below(ANSWERS.len())].interval;
 
-            let candidate = match drill {
+            match drill {
                 Drill::NameIt => {
                     // The root's own position is excluded, so a unison prompt lights an
                     // octave elsewhere on the neck rather than stacking both marks on one
@@ -155,7 +154,7 @@ impl IntervalTrainer {
                     debug_assert!(
                         !carriers.is_empty(),
                         "every pitch class occurs several times on the neck, so an interval \
-                         above any root always has somewhere to land"
+                     above any root always has somewhere to land"
                     );
 
                     Prompt::NameIt {
@@ -164,13 +163,8 @@ impl IntervalTrainer {
                     }
                 }
                 Drill::FindIt => Prompt::FindIt { root, interval },
-            };
-
-            if candidate != current {
-                self.prompt = candidate;
-                break;
             }
-        }
+        });
 
         // Both kinds of feedback belong to the prompt they were given against, so a new
         // prompt arrives with a clean surface.
