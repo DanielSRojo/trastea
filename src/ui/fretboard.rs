@@ -2,6 +2,8 @@ use iced::alignment;
 use iced::widget::canvas::{self, Canvas, Fill, Frame, Path, Stroke, Text};
 use iced::{Color, Element, Length, Pixels, Point, Rectangle, Renderer, Size, Theme};
 
+use super::neck::Position;
+
 /// Where everything on the neck sits, computed once from the canvas bounds.
 ///
 /// Both drawing and hit-testing read this. Two independent copies of the same
@@ -198,7 +200,7 @@ pub struct Fretboard<Message> {
     /// Owned by the caller rather than kept in `Program::State`, because the application
     /// runs its own focus system and the canvas has no way to know whether it is the
     /// focused widget. See design decision 6.
-    pub cursor: Option<(usize, usize)>,
+    pub cursor: Option<Position>,
     /// What a press on `(string, fret)` means, or `None` for a display-only neck.
     ///
     /// A plain `fn` pointer, not a `Box<dyn Fn>`: every caller passes a bare enum
@@ -348,7 +350,7 @@ impl<Message> canvas::Program<Message> for Fretboard<Message> {
         //
         // A stroked ring, deliberately not a filled dot: on a screen whose whole point is
         // "which dot is lit", a second filled circle would read as a second lit note.
-        if let Some((string, fret)) = self.cursor {
+        if let Some(Position { string, fret }) = self.cursor {
             let center = layout.marker_center(string, fret);
 
             frame.stroke(

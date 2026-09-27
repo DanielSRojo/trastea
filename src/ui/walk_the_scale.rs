@@ -23,7 +23,7 @@ use iced::{Color, Element, Length, Padding, Point, Rectangle, Renderer, Size, Th
 use super::focus::{Direction, FocusTarget, kind_row_spans};
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
-use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS};
+use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS, Position};
 use super::style::{
     BODY, CONTROL_SIZE, DANGER, INK, LINK, MUSIC_FONT, MUTE, SUCCESS, card_container,
     control_button, control_label, control_shuffle,
@@ -100,7 +100,7 @@ struct Run {
     /// fact rather than two.
     duration: Option<Duration>,
     /// Where the keyboard is pointing on the neck, for answering without a mouse.
-    cursor: (usize, usize),
+    cursor: Position,
 }
 
 /// What the screen is doing.
@@ -600,7 +600,7 @@ impl WalkTheScale {
         }
     }
 
-    pub(super) fn cursor(&self) -> Option<(usize, usize)> {
+    pub(super) fn cursor(&self) -> Option<Position> {
         self.run().map(|run| run.cursor)
     }
 
@@ -609,20 +609,13 @@ impl WalkTheScale {
         let Mode::Running(run) = &mut self.mode else {
             return;
         };
-        let (string, fret) = run.cursor;
-
-        run.cursor = match direction {
-            Direction::Left => (string.saturating_sub(1), fret),
-            Direction::Right => ((string + 1).min(NECK_STRINGS - 1), fret),
-            Direction::Up => (string, fret.saturating_sub(1)),
-            Direction::Down => (string, (fret + 1).min(DRILL_NECK.frets())),
-        };
+        run.cursor = run.cursor.step(direction);
     }
 
     /// Enter on the neck answers with wherever the cursor is sitting — the same thing a
     /// click on that position would send.
     pub(super) fn answer_at_cursor(&mut self) {
-        let Some((string, fret)) = self.cursor() else {
+        let Some(Position { string, fret }) = self.cursor() else {
             return;
         };
         if let Some(pitch_class) = DRILL_NECK.pitch_class_at(string, fret) {

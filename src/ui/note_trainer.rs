@@ -14,7 +14,7 @@ use iced::{Color, Element, Padding};
 use super::drill::{Drill, Score};
 use super::focus::{ANSWER_ROW_WIDTH, Direction, FocusTarget};
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
-use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS};
+use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS, Position};
 use super::style::{
     BODY, CANVAS, CONTROL_SIZE, DANGER, INK, LINK, MUTE, SUCCESS, card_container,
     control_accidental, control_button, control_label, control_shuffle, correct_answer_button,
@@ -97,7 +97,7 @@ pub(super) struct NoteTrainer {
     /// chosen while practising scales has no business renaming the answer buttons here.
     spelling: Spelling,
     score: Score<Answer>,
-    cursor: (usize, usize),
+    cursor: Position,
 }
 
 impl NoteTrainer {
@@ -227,7 +227,7 @@ impl NoteTrainer {
     /// and because a press *is* a move-then-answer, the two arrive as one call rather than
     /// as an assignment the caller has to remember to make first.
     pub(super) fn answer_position(&mut self, string: usize, fret: usize) {
-        self.cursor = (string, fret);
+        self.cursor = Position { string, fret };
         self.answer(Answer::Position { string, fret });
     }
 
@@ -236,7 +236,7 @@ impl NoteTrainer {
     /// The same thing a press on that position would send, reached the other way round: the
     /// cursor is already there, so only the answer half of `answer_position` is left to do.
     pub(super) fn answer_at_cursor(&mut self) {
-        let (string, fret) = self.cursor;
+        let Position { string, fret } = self.cursor;
         self.answer(Answer::Position { string, fret });
     }
 
@@ -313,14 +313,7 @@ impl NoteTrainer {
     ///
     /// Up is towards the nut, because the neck is drawn with the nut at the top.
     pub(super) fn move_cursor(&mut self, direction: Direction) {
-        let (string, fret) = self.cursor;
-
-        self.cursor = match direction {
-            Direction::Left => (string.saturating_sub(1), fret),
-            Direction::Right => ((string + 1).min(NECK_STRINGS - 1), fret),
-            Direction::Up => (string, fret.saturating_sub(1)),
-            Direction::Down => (string, (fret + 1).min(DRILL_NECK.frets())),
-        };
+        self.cursor = self.cursor.step(direction);
     }
 }
 
@@ -616,6 +609,10 @@ mod tests {
     use crate::ui::WalkTheScale;
     use iced::keyboard;
     use iced::keyboard::key::Named;
+
+    fn at(string: usize, fret: usize) -> Position {
+        Position { string, fret }
+    }
 
     // ---- Note Trainer drill logic ----
 
@@ -1025,47 +1022,6 @@ mod tests {
     }
 
     #[test]
-    fn the_cursor_stops_at_the_necks_edges() {
-        let (mut trainer, _) = trainer_with_seed(0);
-
-        trainer.cursor = (0, 0);
-        trainer.move_cursor(Direction::Left);
-        assert_eq!(trainer.cursor, (0, 0), "walked off the low E");
-        trainer.move_cursor(Direction::Up);
-        assert_eq!(trainer.cursor, (0, 0), "walked off the nut");
-
-        trainer.cursor = (NECK_STRINGS - 1, DRILL_NECK.frets());
-        trainer.move_cursor(Direction::Right);
-        assert_eq!(
-            trainer.cursor,
-            (NECK_STRINGS - 1, DRILL_NECK.frets()),
-            "walked off the high e"
-        );
-        trainer.move_cursor(Direction::Down);
-        assert_eq!(
-            trainer.cursor,
-            (NECK_STRINGS - 1, DRILL_NECK.frets()),
-            "walked off the last fret"
-        );
-    }
-
-    #[test]
-    fn the_cursor_walks_one_position_at_a_time() {
-        let (mut trainer, _) = trainer_with_seed(0);
-        trainer.cursor = (2, 5);
-
-        trainer.move_cursor(Direction::Right);
-        assert_eq!(trainer.cursor, (3, 5));
-        trainer.move_cursor(Direction::Down);
-        assert_eq!(trainer.cursor, (3, 6));
-        trainer.move_cursor(Direction::Left);
-        assert_eq!(trainer.cursor, (2, 6));
-        // Up is towards the nut, because the neck is drawn with the nut at the top.
-        trainer.move_cursor(Direction::Up);
-        assert_eq!(trainer.cursor, (2, 5));
-    }
-
-    #[test]
     fn every_position_the_drill_can_prompt_is_on_the_neck() {
         for pool in [Pool::Naturals, Pool::All] {
             let (mut trainer, _) = trainer_with_seed(0);
@@ -1211,13 +1167,13 @@ mod tests {
     fn the_arrows_drive_the_cursor_not_the_ring() {
         let mut app = find_it_app(2);
         app.focused = FocusTarget::Fretboard;
-        app.note_trainer.cursor = (2, 4);
+        app.note_trainer.cursor = at(2, 4);
 
         for (named, expected) in [
-            (Named::ArrowRight, (3, 4)),
-            (Named::ArrowDown, (3, 5)),
-            (Named::ArrowLeft, (2, 5)),
-            (Named::ArrowUp, (2, 4)),
+            (Named::ArrowRight, at(3, 4)),
+            (Named::ArrowDown, at(3, 5)),
+            (Named::ArrowLeft, at(2, 5)),
+            (Named::ArrowUp, at(2, 4)),
         ] {
             press_named(&mut app, named);
 
@@ -1230,9 +1186,14 @@ mod tests {
     fn the_vim_motions_drive_the_cursor_too() {
         let mut app = find_it_app(2);
         app.focused = FocusTarget::Fretboard;
-        app.note_trainer.cursor = (2, 4);
+        app.note_trainer.cursor = at(2, 4);
 
-        for (key, expected) in [("l", (3, 4)), ("j", (3, 5)), ("h", (2, 5)), ("k", (2, 4))] {
+        for (key, expected) in [
+            ("l", at(3, 4)),
+            ("j", at(3, 5)),
+            ("h", at(2, 5)),
+            ("k", at(2, 4)),
+        ] {
             press_into(&mut app, key, keyboard::Modifiers::empty());
 
             assert_eq!(app.note_trainer.cursor, expected, "{key}");
@@ -1244,11 +1205,11 @@ mod tests {
     #[test]
     fn tab_always_escapes_the_neck() {
         for cursor in [
-            (0, 0),
-            (0, DRILL_NECK.frets()),
-            (NECK_STRINGS - 1, 0),
-            (NECK_STRINGS - 1, DRILL_NECK.frets()),
-            (3, 6),
+            at(0, 0),
+            at(0, DRILL_NECK.frets()),
+            at(NECK_STRINGS - 1, 0),
+            at(NECK_STRINGS - 1, DRILL_NECK.frets()),
+            at(3, 6),
         ] {
             let mut app = find_it_app(9);
             app.focused = FocusTarget::Fretboard;
@@ -1289,7 +1250,7 @@ mod tests {
         let (string, fret) = all_positions()
             .find(|&(s, f)| DRILL_NECK.pitch_class_at(s, f) == Some(target))
             .unwrap();
-        app.note_trainer.cursor = (string, fret);
+        app.note_trainer.cursor = Position { string, fret };
 
         press_named(&mut app, Named::Enter);
 
@@ -1309,7 +1270,7 @@ mod tests {
         let (string, fret) = all_positions()
             .find(|&(s, f)| DRILL_NECK.pitch_class_at(s, f) != Some(target))
             .unwrap();
-        app.note_trainer.cursor = (string, fret);
+        app.note_trainer.cursor = Position { string, fret };
 
         press_named(&mut app, Named::Space);
 
@@ -1372,7 +1333,7 @@ mod tests {
         let Answer::Position { string, fret } = correct_answer(&app.note_trainer) else {
             unreachable!("find_it_app guarantees the direction")
         };
-        app.note_trainer.cursor = (string, fret);
+        app.note_trainer.cursor = Position { string, fret };
 
         press_named(&mut app, Named::Space);
 
@@ -1446,7 +1407,11 @@ mod tests {
 
         let _ = app.update(Message::ChooseNotePosition(string, fret));
 
-        assert_eq!(app.note_trainer.cursor, (string, fret), "the cursor lagged");
+        assert_eq!(
+            app.note_trainer.cursor,
+            Position { string, fret },
+            "the cursor lagged"
+        );
         assert_eq!(app.note_trainer.score.streak(), 1);
     }
 
@@ -1510,7 +1475,7 @@ mod tests {
     }
 
     /// Everything a keypress on the Note Trainer could disturb.
-    fn note_trainer_state(app: &App) -> (Prompt, Pool, Spelling, u32, u32, (usize, usize)) {
+    fn note_trainer_state(app: &App) -> (Prompt, Pool, Spelling, u32, u32, Position) {
         let t = &app.note_trainer;
         (
             t.prompt,

@@ -18,7 +18,7 @@ use iced::{Color, Element, Padding};
 use super::drill::{ANSWERS, Drill, Score, choice_for, interval_label};
 use super::focus::{ANSWER_ROW_WIDTH, Direction, FocusTarget};
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
-use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS, Position, neck};
+use super::neck::{CURSOR_HOME, DRILL_NECK, Position, neck};
 use super::style::{
     BODY, CANVAS, CONTROL_SIZE, DANGER, INK, LINK, MUTE, ROOT_MARKER, SUCCESS, card_container,
     control_button, control_label, control_shuffle, correct_answer_button, focus_ring,
@@ -27,13 +27,6 @@ use super::style::{
 use super::{Message, ROOT_BUTTON_SIZE, SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT};
 use crate::music::intervals::Interval;
 use crate::rng::Rng;
-
-/// Where the cursor starts, as a `Position`. The Note Trainer's `CURSOR_HOME` tuple stays
-/// the one statement of *which* corner; this only reshapes it.
-const CURSOR_START: Position = Position {
-    string: CURSOR_HOME.0,
-    fret: CURSOR_HOME.1,
-};
 
 /// What the Interval Trainer is asking right now.
 ///
@@ -109,11 +102,11 @@ impl IntervalTrainer {
             // Replaced by `draw_prompt` before anyone sees it; it exists only to give the
             // rejection loop something to differ from.
             prompt: Prompt::NameIt {
-                root: CURSOR_START,
-                target: CURSOR_START,
+                root: CURSOR_HOME,
+                target: CURSOR_HOME,
             },
             score: Score::default(),
-            cursor: CURSOR_START,
+            cursor: CURSOR_HOME,
         };
 
         trainer.draw_prompt(Drill::NameIt, rng);
@@ -270,7 +263,7 @@ impl IntervalTrainer {
     pub(super) fn toggle_direction(&mut self, rng: &mut Rng) {
         let flipped = self.prompt.drill().flipped();
         self.score.break_streak();
-        self.cursor = CURSOR_START;
+        self.cursor = CURSOR_HOME;
         self.draw_prompt(flipped, rng);
     }
 
@@ -278,33 +271,14 @@ impl IntervalTrainer {
     pub(super) fn enter(&mut self, rng: &mut Rng) {
         let drill = self.prompt.drill();
         self.score.break_streak();
-        self.cursor = CURSOR_START;
+        self.cursor = CURSOR_HOME;
         self.draw_prompt(drill, rng);
     }
 
     /// Walks the cursor one position, stopping at the neck's edges rather than wrapping.
     /// Up is towards the nut, because the neck is drawn with the nut at the top.
     pub(super) fn move_cursor(&mut self, direction: Direction) {
-        let Position { string, fret } = self.cursor;
-
-        self.cursor = match direction {
-            Direction::Left => Position {
-                string: string.saturating_sub(1),
-                fret,
-            },
-            Direction::Right => Position {
-                string: (string + 1).min(NECK_STRINGS - 1),
-                fret,
-            },
-            Direction::Up => Position {
-                string,
-                fret: fret.saturating_sub(1),
-            },
-            Direction::Down => Position {
-                string,
-                fret: (fret + 1).min(DRILL_NECK.frets()),
-            },
-        };
+        self.cursor = self.cursor.step(direction);
     }
 }
 
@@ -342,7 +316,7 @@ pub(super) fn ui_interval_trainer(
                 .into_iter()
                 .chain(position_markers(trainer))
                 .collect(),
-            cursor: Some((trainer.cursor.string, trainer.cursor.fret)),
+            cursor: Some(trainer.cursor),
             on_press: Some(Message::ChooseIntervalPosition),
         },
     };
@@ -585,6 +559,7 @@ fn interval_answer_row(
 #[cfg(test)]
 mod tests {
     use super::super::keys::accelerators_for;
+    use super::super::neck::NECK_STRINGS;
     use super::super::tests::{app_with_seed, press_into};
     use super::super::{App, Notation, Screen};
     use super::*;
@@ -1046,43 +1021,6 @@ mod tests {
         trainer.draw_prompt(Drill::FindIt, &mut rng);
         trainer.skip(&mut rng);
         assert_eq!(trainer.drill(), Drill::FindIt);
-    }
-
-    #[test]
-    fn the_cursor_stops_at_the_necks_edges() {
-        let (mut trainer, _) = trainer_with_seed(0xc);
-
-        for _ in 0..NECK_STRINGS + 4 {
-            trainer.move_cursor(Direction::Left);
-            trainer.move_cursor(Direction::Up);
-        }
-        assert_eq!(trainer.cursor, Position { string: 0, fret: 0 });
-
-        for _ in 0..NECK_STRINGS + DRILL_NECK.frets() + 4 {
-            trainer.move_cursor(Direction::Right);
-            trainer.move_cursor(Direction::Down);
-        }
-        assert_eq!(
-            trainer.cursor,
-            Position {
-                string: NECK_STRINGS - 1,
-                fret: DRILL_NECK.frets()
-            }
-        );
-    }
-
-    #[test]
-    fn the_cursor_walks_one_position_at_a_time() {
-        let (mut trainer, _) = trainer_with_seed(0xa);
-
-        trainer.move_cursor(Direction::Down);
-        assert_eq!(trainer.cursor, Position { string: 0, fret: 1 });
-        trainer.move_cursor(Direction::Right);
-        assert_eq!(trainer.cursor, Position { string: 1, fret: 1 });
-        trainer.move_cursor(Direction::Up);
-        assert_eq!(trainer.cursor, Position { string: 1, fret: 0 });
-        trainer.move_cursor(Direction::Left);
-        assert_eq!(trainer.cursor, Position { string: 0, fret: 0 });
     }
 
     // ---- What the neck is asked to draw ----

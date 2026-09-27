@@ -5,6 +5,8 @@
 use crate::music::notes::PitchClass;
 use crate::music::pitch::Pitch;
 
+use super::focus::Direction;
+
 /// Concert pitch — what the strings sound, not what a guitarist reads. Guitar is a
 /// transposing instrument: its music is written an octave above where it sounds, so the
 /// low E is written E3 and sounds the E2 named here. Getting this wrong is silent, because
@@ -31,7 +33,7 @@ const fn midi(number: u8) -> Pitch {
 }
 
 /// Where the keyboard cursor starts: the open low E, the neck's top-left corner.
-pub(super) const CURSOR_HOME: (usize, usize) = (0, 0);
+pub(super) const CURSOR_HOME: Position = Position { string: 0, fret: 0 };
 pub(super) const NECK_STRINGS: usize = STANDARD_TUNING.len();
 
 /// A neck: what its strings are tuned to, and how many frets it has.
@@ -100,9 +102,9 @@ impl Neck {
 /// not about any one drill — the same reason `pitch_class_at` and `STANDARD_TUNING` live
 /// in this module.
 ///
-/// Named fields rather than the bare `(usize, usize)` the Note Trainer uses. That pair is
-/// unambiguous there, where a prompt holds exactly one position; the Interval Trainer's
-/// *Name it* prompt holds two of them, and a root swapped with a target is a silent bug
+/// Named fields rather than a bare `(usize, usize)`. A pair is unambiguous where a prompt
+/// holds exactly one position, which is why the Note Trainer's prompts still use one; the
+/// Interval Trainer's *Name it* prompt holds two of them, and a root swapped with a target is a silent bug
 /// that inverts every interval on screen — a minor third read back as a major sixth, with
 /// nothing failing to compile. `Position { string, fret }` makes that swap unwriteable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,10 +117,34 @@ impl Position {
     /// The pitch class sounding here, or `None` off the neck — `Neck::pitch_class_at`'s
     /// `Option` and its reasoning, reached through the named fields.
     ///
-    /// Bound to `DRILL_NECK` because only the Interval Trainer holds a `Position`. A neck
-    /// parameter here would be threaded through a dozen call sites to vary nothing.
+    /// Bound to `DRILL_NECK` because only the drills hold a `Position`, and they all draw that
+    /// neck. A neck parameter here would be threaded through a dozen call sites to vary nothing.
     pub(super) fn pitch_class(self) -> Option<PitchClass> {
         DRILL_NECK.pitch_class_at(self.string, self.fret)
+    }
+
+    /// One arrow's move across the drill neck, stopping at its edges rather than wrapping — a
+    /// cursor that wrapped from the high E to the low one would look like it had jumped.
+    pub(super) fn step(self, direction: Direction) -> Position {
+        let Position { string, fret } = self;
+        match direction {
+            Direction::Left => Position {
+                string: string.saturating_sub(1),
+                ..self
+            },
+            Direction::Right => Position {
+                string: (string + 1).min(NECK_STRINGS - 1),
+                ..self
+            },
+            Direction::Up => Position {
+                fret: fret.saturating_sub(1),
+                ..self
+            },
+            Direction::Down => Position {
+                fret: (fret + 1).min(DRILL_NECK.frets()),
+                ..self
+            },
+        }
     }
 }
 
@@ -267,5 +293,31 @@ mod tests {
         );
         // Off the fretboard sideways, on either neck.
         assert_eq!(CAGED_NECK.pitch_class_at(NECK_STRINGS, 0), None);
+    }
+
+    fn at(string: usize, fret: usize) -> Position {
+        Position { string, fret }
+    }
+
+    #[test]
+    fn a_step_stops_at_the_necks_edges() {
+        let corner = at(0, 0);
+        assert_eq!(corner.step(Direction::Left), corner, "walked off the low E");
+        assert_eq!(corner.step(Direction::Up), corner, "walked off the nut");
+
+        let far = at(NECK_STRINGS - 1, DRILL_NECK.frets());
+        assert_eq!(far.step(Direction::Right), far, "walked off the high e");
+        assert_eq!(far.step(Direction::Down), far, "walked off the last fret");
+    }
+
+    #[test]
+    fn a_step_moves_one_position_at_a_time() {
+        let start = at(2, 5);
+
+        assert_eq!(start.step(Direction::Right), at(3, 5));
+        assert_eq!(start.step(Direction::Down), at(2, 6));
+        assert_eq!(start.step(Direction::Left), at(1, 5));
+        // Up is towards the nut, because the neck is drawn with the nut at the top.
+        assert_eq!(start.step(Direction::Up), at(2, 4));
     }
 }
