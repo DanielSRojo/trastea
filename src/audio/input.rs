@@ -154,7 +154,7 @@ fn is_hardware(id: &str) -> bool {
 /// A `Mutex` in an audio path deserves its raised eyebrow, so: the callback only ever
 /// `try_lock`s, and drops its chunk when the lock is held. It never waits, which is the
 /// property that matters — priority inversion needs a blocking acquire. What that costs is
-/// one window of freshness, about 43 ms, in the rare moment the reader holds the lock.
+/// one chunk of samples, a few milliseconds, in the rare moment the reader holds the lock.
 ///
 /// A lock-free ring would avoid even that, and in a DAW it would be the right call. Here
 /// the consumer is a redraw a few times a second and the cost of a dropped window is a
@@ -226,7 +226,7 @@ impl Input {
         let channels = config.channels() as usize;
 
         let shared = Arc::new(Shared {
-            samples: Mutex::new(Vec::with_capacity(WINDOW)),
+            samples: Mutex::new(Vec::with_capacity(CAPACITY)),
             lost: AtomicBool::new(false),
             reason: Mutex::new(None),
         });
@@ -325,30 +325,35 @@ fn build_stream(
     .map_err(InputError::from)
 }
 
+/// The most the buffer ever holds, and what `open` reserves: two windows is enough to always
+/// have a full one ready if the reader falls behind, and the oldest is the one worth losing.
+const CAPACITY: usize = WINDOW * 2;
+
 /// The body of the audio callback.
 ///
-/// Allocates nothing — the buffer was reserved at `open` and only ever grows to the cap
-/// below — never waits, and cannot panic: every fallible step is a `try_lock` or a
-/// saturating truncation.
+/// Allocates nothing — the buffer was reserved at `CAPACITY` and room is made before a chunk
+/// lands rather than after, so it never outgrows that — never waits, and cannot panic: every
+/// fallible step is a `try_lock` or a saturating subtraction.
 fn collect<S: Sample>(data: &[S], channels: usize, shared: &Shared) {
     let Ok(mut held) = shared.samples.try_lock() else {
-        // The reader has it. Dropping this chunk costs one window of freshness and is the
+        // The reader has it. Dropping this chunk costs one chunk of freshness and is the
         // whole reason this is a `try_lock` rather than a `lock`.
         return;
     };
 
-    // Keep the buffer from growing without bound if nothing ever reads it — two windows is
-    // enough to always have a full one ready, and the oldest is the one worth losing.
-    if held.len() > WINDOW * 2 {
-        // The length is read into a local first. `held` is a `MutexGuard`, so `held.drain(..)`
-        // goes through `DerefMut` — and the two-phase borrow that makes `v.push(v.len())`
-        // legal on a plain `Vec` does not reach through an overloaded deref, so the
-        // mutable borrow is already live when the argument wants to read the length.
-        let excess = held.len() - WINDOW;
-        held.drain(..excess);
-    }
+    // `div_ceil` because that is how many `step_by` yields. A chunk longer than the whole
+    // buffer keeps only its own newest `CAPACITY`.
+    let incoming = data.len().div_ceil(channels.max(1));
+    let keep = CAPACITY.saturating_sub(incoming);
 
-    held.extend(deinterleave(data, channels));
+    // The length is read into a local first. `held` is a `MutexGuard`, so `held.drain(..)`
+    // goes through `DerefMut` — and the two-phase borrow that makes `v.push(v.len())` legal
+    // on a plain `Vec` does not reach through an overloaded deref, so the mutable borrow is
+    // already live when the argument wants to read the length.
+    let excess = held.len().saturating_sub(keep);
+    held.drain(..excess);
+
+    held.extend(deinterleave(data, channels).skip(incoming.saturating_sub(CAPACITY)));
 }
 
 /// The newest `WINDOW` of `held`, keeping only the overlap the next window will share.
@@ -538,7 +543,7 @@ mod tests {
 
     fn shared() -> Arc<Shared> {
         Arc::new(Shared {
-            samples: Mutex::new(Vec::with_capacity(WINDOW)),
+            samples: Mutex::new(Vec::with_capacity(CAPACITY)),
             lost: AtomicBool::new(false),
             reason: Mutex::new(None),
         })
@@ -556,7 +561,7 @@ mod tests {
 
         let held = shared.samples.lock().expect("uncontended");
         assert!(
-            held.len() <= WINDOW * 2 + WINDOW,
+            held.len() <= CAPACITY,
             "the buffer grew to {} without a reader",
             held.len()
         );
@@ -568,6 +573,46 @@ mod tests {
             held.windows(2).all(|pair| pair[1] > pair[0]),
             "the samples that survived are out of order"
         );
+    }
+
+    #[test]
+    fn the_buffer_never_outgrows_what_was_reserved() {
+        let shared = shared();
+        let reserved = shared.samples.lock().expect("uncontended").capacity();
+
+        // Sizes a real host hands over, one that divides nothing, and one longer than the
+        // whole buffer — in mono and interleaved stereo.
+        let mut next = 0.0f32;
+        for (frames, channels) in [(480, 1), (1024, 2), (3000, 1), (1, 2), (7000, 2), (2048, 1)] {
+            let block: Vec<f32> = (0..frames * channels)
+                .map(|i| {
+                    if i % channels == 0 {
+                        next + (i / channels) as f32
+                    } else {
+                        -1.0
+                    }
+                })
+                .collect();
+            next += frames as f32;
+            collect(&block, channels, &shared);
+
+            let held = shared.samples.lock().expect("uncontended");
+            assert!(
+                held.len() <= CAPACITY,
+                "held {} after a {frames}-frame chunk",
+                held.len()
+            );
+            assert_eq!(
+                held.capacity(),
+                reserved,
+                "a {frames}-frame chunk reallocated"
+            );
+            assert_eq!(
+                held.last(),
+                Some(&(next - 1.0)),
+                "the newest sample was lost"
+            );
+        }
     }
 
     #[test]
