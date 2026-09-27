@@ -15,6 +15,7 @@
 
 use iced::{Color, Element, Padding};
 
+use super::drill::{ANSWERS, Drill, choice_for, interval_label};
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS, Position, neck};
 use super::style::{
@@ -23,8 +24,8 @@ use super::style::{
     ghost_button, streak_readout, wrong_answer_button,
 };
 use super::{
-    ANSWER_ROW_WIDTH, ANSWERS, Direction, Drill, FocusTarget, Message, ROOT_BUTTON_SIZE,
-    SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT, choice_for, interval_label,
+    ANSWER_ROW_WIDTH, Direction, FocusTarget, Message, ROOT_BUTTON_SIZE, SELECTOR_CARD_HEIGHT,
+    SUMMARY_CARD_HEIGHT,
 };
 use crate::music::intervals::Interval;
 use crate::rng::Rng;
