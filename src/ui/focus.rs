@@ -65,16 +65,6 @@ pub enum FocusTarget {
     RerollCagedRoot,
     /// The scale drill's kind grid, indexed like the Scale Trainer's.
     DrillKind(usize),
-    /// The two keys that step the drill's root, down and up.
-    ///
-    /// The first targets in the app that are actions rather than focus stops: the drill's root
-    /// is dragged on the glyph that names it, so there is no widget for a key to fire. Nothing
-    /// requires a target to be in the grid — `activate` is a match and the key lookup never
-    /// consults it — but the name is less true than it was. The honest fix is an `Accelerator`
-    /// whose second element is a message rather than a target, which is worth doing when a
-    /// second screen wants a key with no widget behind it and not before.
-    DrillRootDown,
-    DrillRootUp,
     /// A different scale to drill.
     RerollDrillScale,
     /// Starts another run, offered only once one has ended on its duration.

@@ -42,7 +42,7 @@ use crate::rng::Rng;
 
 use drill::answer_at;
 use focus::{Direction, FocusTarget, step_focus, step_focus_2d};
-use keys::{translate_key, ui_help_overlay};
+use keys::{Fires, translate_key, ui_help_overlay};
 use neck::DRILL_NECK;
 use style::{
     BODY, CANVAS, INK, KEYCAP_BACK, KEYCAP_FONT, MUSIC_FONT, SMUFL_DOUBLE_FLAT, SMUFL_DOUBLE_SHARP,
@@ -159,7 +159,7 @@ pub enum Screen {
     WalkTheScale,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     Navigate(Screen),
     GoBack,
@@ -255,6 +255,8 @@ pub enum Message {
     /// from: a line and a pixel are two units for one movement, and the canvas is where they
     /// stop being two.
     ScrollDrillRoot(f32),
+    /// `[` and `]`: the root a semitone down or up, from wherever the ring is standing.
+    StepDrillRoot(i32),
     /// A different scale to drill. Its own variant rather than `RerollScale`, for the reason
     /// `RerollCagedRoot` is one.
     RerollDrillScale,
@@ -522,6 +524,7 @@ impl App {
             Message::DragDrillRoot(x) => self.walk_the_scale.drag_root(x),
             Message::DropDrillRoot => self.walk_the_scale.drop_root(),
             Message::ScrollDrillRoot(steps) => self.walk_the_scale.scroll_root(steps),
+            Message::StepDrillRoot(steps) => self.walk_the_scale.step_root(steps),
             Message::RerollDrillScale => self.walk_the_scale.reroll(&mut self.rng),
             Message::ToggleScaleAnswering => self.walk_the_scale.toggle_answering(),
             Message::CycleScaleDuration => self.walk_the_scale.cycle_duration(),
@@ -582,7 +585,7 @@ impl App {
             Message::SelectCagedRoot(root) => self.caged.select_root(root),
             Message::SelectCagedShape(index) => self.caged.select_shape(index),
             Message::RerollCagedRoot => self.reroll_caged_root(),
-            Message::Accelerate(c) => self.accelerate(c),
+            Message::Accelerate(c) => return self.accelerate(c),
             // Scoped to the one screen with a box, the way an accelerator a screen does
             // not claim is inert there. `Ctrl+K` reaches here from anywhere, so the guard
             // is what keeps it from focusing a box nobody can see.
@@ -957,22 +960,28 @@ impl App {
     ///
     /// A miss is silent: `translate_key` forwards every character it does not recognise as
     /// a motion, so most of what arrives here is nothing at all.
-    fn accelerate(&mut self, c: char) {
+    fn accelerate(&mut self, c: char) -> Task<Message> {
         // Offered to the screen first, because `gg` is a *pair* of keys and the accelerator
-        // table maps one key to one widget — it has nowhere to keep "a `g` is pending". A
+        // table maps one key to one action — it has nowhere to keep "a `g` is pending". A
         // screen that wants a motion of its own takes it here and the table never sees it.
         if self.screen == Screen::ChordLibrary && self.chord_library.motion(c) {
-            return;
+            return Task::none();
         }
 
-        let target = self
+        let fires = self
             .accelerators()
             .into_iter()
-            .find_map(|(key, target, _)| (key == c).then_some(target));
+            .find_map(|(key, fires, _)| (key == c).then_some(fires));
 
-        if let Some(target) = target {
-            self.activate(target);
+        match fires {
+            Some(Fires::Widget(target)) => self.activate(target),
+            // `dispatch`, as for a translated key, and its task handed back rather than
+            // dropped, so a message that has an effect to run keeps it.
+            Some(Fires::Message(message)) => return self.dispatch(message),
+            None => {}
         }
+
+        Task::none()
     }
 
     /// Performs `target`'s action. Focus is left alone: an accelerator fires a widget
@@ -999,8 +1008,6 @@ impl App {
             }
             FocusTarget::CagedShape(index) => self.caged.select_shape(index),
             FocusTarget::RerollCagedRoot => self.reroll_caged_root(),
-            FocusTarget::DrillRootDown => self.walk_the_scale.step_root(-1),
-            FocusTarget::DrillRootUp => self.walk_the_scale.step_root(1),
             FocusTarget::DrillKind(index) => {
                 if let Some(&kind) = ScaleKind::ALL.get(index) {
                     self.walk_the_scale.select_kind(kind);
@@ -1646,10 +1653,25 @@ mod tests {
     }
 
     /// Every screen, so a new one cannot quietly escape the checks that sweep them all.
-    pub(super) fn every_screen() -> [Screen; 8] {
+    pub(super) fn every_screen() -> [Screen; 9] {
+        // No `_` arm, so a new `Screen` stops this compiling until it is listed — the array
+        // below is the next line to change.
+        match Screen::default() {
+            Screen::Home
+            | Screen::ScaleTrainer
+            | Screen::WalkTheScale
+            | Screen::NoteTrainer
+            | Screen::IntervalTrainer
+            | Screen::PlayTheInterval
+            | Screen::ChordLibrary
+            | Screen::Caged
+            | Screen::Tuner => {}
+        }
+
         [
             Screen::Home,
             Screen::ScaleTrainer,
+            Screen::WalkTheScale,
             Screen::NoteTrainer,
             Screen::IntervalTrainer,
             Screen::PlayTheInterval,

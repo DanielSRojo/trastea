@@ -465,7 +465,7 @@ mod device_tests {
         }
     }
 
-    /// The poll ticks on either listening screen and on none of the others, read from the
+    /// The poll ticks on the listening screens and on none of the others, read from the
     /// same routing the messages take — so the subscription and the routing cannot
     /// disagree about which screen is listening.
     #[test]
@@ -474,7 +474,10 @@ mod device_tests {
             let (mut app, _) = App::new();
             app.open(screen.clone());
 
-            let listens = matches!(screen, Screen::Tuner | Screen::PlayTheInterval);
+            let listens = matches!(
+                screen,
+                Screen::Tuner | Screen::PlayTheInterval | Screen::WalkTheScale
+            );
             assert_eq!(
                 app.listener_ref().is_some(),
                 listens,

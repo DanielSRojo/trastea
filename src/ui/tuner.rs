@@ -558,7 +558,8 @@ mod screen_tests {
         assert!(
             accelerators_for(&Screen::Home, Notation::Notes, &WalkTheScale::new())
                 .iter()
-                .any(|(key, target, _)| *key == '8' && *target == FocusTarget::HomeMenuItem(entry)),
+                .any(|(key, target, _)| *key == '8'
+                    && *target == Fires::Widget(FocusTarget::HomeMenuItem(entry))),
             "the Tuner has no digit on the Home menu"
         );
 

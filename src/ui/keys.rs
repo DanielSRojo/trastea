@@ -86,10 +86,7 @@ fn vim_motion(c: &str) -> Option<Message> {
     }
 }
 
-/// A key that fires a widget's action directly, skipping the walk to it.
-///
-/// The label is what the help overlay shows, so a new accelerator documents itself.
-/// A key, the control it fires, and how the overlay names it.
+/// A key, what it fires, and how the overlay names it — so a new accelerator documents itself.
 ///
 /// The label is a `Cow` rather than a `&'static str` because three of the drill's read a
 /// setting — `timer: 5:00` is no literal. It is not a `String` either: that would cost every
@@ -98,7 +95,19 @@ fn vim_motion(c: &str) -> Option<Message> {
 /// `format!`, so a borrow would point at a temporary owned by the function returning it —
 /// `error[E0515]: cannot return value referencing temporary value`. `Cow::Borrowed` for the
 /// literals, `Cow::Owned` for the three, and one type covering both.
-pub(super) type Accelerator = (char, FocusTarget, Cow<'static, str>);
+pub(super) type Accelerator = (char, Fires, Cow<'static, str>);
+
+/// What an accelerator fires: a widget on the screen, skipping the walk to it, or a message
+/// for an action no widget stands behind.
+///
+/// Two cases rather than a message for everything, because a widget target is what lets the
+/// table be checked against the focus grid — every key that says it fires a widget has to
+/// name one the screen actually has.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Fires {
+    Widget(FocusTarget),
+    Message(Message),
+}
 
 impl App {
     /// The accelerators the current screen claims. A key absent here is inert on that
@@ -130,12 +139,24 @@ pub(super) fn accelerators_for(
             .enumerate()
             .filter_map(|(index, item)| {
                 let key = char::from_digit(index as u32 + 1, 10)?;
-                Some((key, FocusTarget::HomeMenuItem(index), item.label.into()))
+                Some((
+                    key,
+                    Fires::Widget(FocusTarget::HomeMenuItem(index)),
+                    item.label.into(),
+                ))
             })
             .collect(),
         Screen::ScaleTrainer => vec![
-            ('r', FocusTarget::RerollScale, "new scale".into()),
-            ('i', FocusTarget::NotationToggle, "interval notation".into()),
+            (
+                'r',
+                Fires::Widget(FocusTarget::RerollScale),
+                "new scale".into(),
+            ),
+            (
+                'i',
+                Fires::Widget(FocusTarget::NotationToggle),
+                "interval notation".into(),
+            ),
         ],
         // `r` means here what it means on the Scale Trainer. The rest belong to the
         // drill, and three of them report the setting they hold rather than only naming what
@@ -144,21 +165,38 @@ pub(super) fn accelerators_for(
         Screen::WalkTheScale => {
             // `[` and `]` rather than the arrows: the ring still has sixteen kinds to walk on
             // this screen, and every other widget that claims the motion keys is either a focus
-            // stop a Tab can leave or a list `Esc` closes. The root display is neither.
+            // stop a Tab can leave or a list `Esc` closes. The root display is neither, so the
+            // brackets fire a message rather than a widget.
             let mut keys: Vec<Accelerator> = vec![
-                ('r', FocusTarget::RerollDrillScale, "new scale".into()),
-                ('[', FocusTarget::DrillRootDown, "root down".into()),
-                (']', FocusTarget::DrillRootUp, "root up".into()),
+                (
+                    'r',
+                    Fires::Widget(FocusTarget::RerollDrillScale),
+                    "new scale".into(),
+                ),
+                (
+                    '[',
+                    Fires::Message(Message::StepDrillRoot(-1)),
+                    "root down".into(),
+                ),
+                (
+                    ']',
+                    Fires::Message(Message::StepDrillRoot(1)),
+                    "root up".into(),
+                ),
             ];
 
             if !drill.is_running() {
-                keys.push(('p', FocusTarget::RestartDrill, "another run".into()));
+                keys.push((
+                    'p',
+                    Fires::Widget(FocusTarget::RestartDrill),
+                    "another run".into(),
+                ));
             }
 
             if drill.is_running() {
                 keys.push((
                     'm',
-                    FocusTarget::ScaleAnswering,
+                    Fires::Widget(FocusTarget::ScaleAnswering),
                     match drill.answering() {
                         walk_the_scale::Answering::Pressing => "answer: press".into(),
                         walk_the_scale::Answering::Playing { .. } => "answer: play".into(),
@@ -166,7 +204,7 @@ pub(super) fn accelerators_for(
                 ));
                 keys.push((
                     't',
-                    FocusTarget::ScaleDuration,
+                    Fires::Widget(FocusTarget::ScaleDuration),
                     Cow::Owned(format!("timer: {}", duration_label(drill.duration()))),
                 ));
 
@@ -176,14 +214,18 @@ pub(super) fn accelerators_for(
                 if matches!(drill.answering(), walk_the_scale::Answering::Playing { .. }) {
                     keys.push((
                         'n',
-                        FocusTarget::ScaleNeck,
+                        Fires::Widget(FocusTarget::ScaleNeck),
                         if drill.neck_hidden() {
                             "neck: hidden".into()
                         } else {
                             "neck: shown".into()
                         },
                     ));
-                    keys.push(('d', FocusTarget::InputDevice, "input device".into()));
+                    keys.push((
+                        'd',
+                        Fires::Widget(FocusTarget::InputDevice),
+                        "input device".into(),
+                    ));
                 }
             }
 
@@ -193,13 +235,21 @@ pub(super) fn accelerators_for(
         // `d` and `a` are free: `h j k l` are claimed as motions before accelerators are
         // consulted, and neither `d` nor `a` is one.
         Screen::NoteTrainer => vec![
-            ('r', FocusTarget::SkipPrompt, "skip this note".into()),
+            (
+                'r',
+                Fires::Widget(FocusTarget::SkipPrompt),
+                "skip this note".into(),
+            ),
             (
                 'd',
-                FocusTarget::DrillDirectionToggle,
+                Fires::Widget(FocusTarget::DrillDirectionToggle),
                 "swap direction".into(),
             ),
-            ('a', FocusTarget::PoolToggle, "include accidentals".into()),
+            (
+                'a',
+                Fires::Widget(FocusTarget::PoolToggle),
+                "include accidentals".into(),
+            ),
         ],
         // `r` and `d` mean here what they mean on the Note Trainer — replace what is on
         // screen, and swap which way the drill runs. There is no `a`: this screen has no
@@ -207,12 +257,12 @@ pub(super) fn accelerators_for(
         Screen::IntervalTrainer => vec![
             (
                 'r',
-                FocusTarget::SkipIntervalPrompt,
+                Fires::Widget(FocusTarget::SkipIntervalPrompt),
                 "skip this interval".into(),
             ),
             (
                 'd',
-                FocusTarget::IntervalDirectionToggle,
+                Fires::Widget(FocusTarget::IntervalDirectionToggle),
                 "swap direction".into(),
             ),
         ],
@@ -222,10 +272,14 @@ pub(super) fn accelerators_for(
         Screen::PlayTheInterval => vec![
             (
                 'r',
-                FocusTarget::SkipPlayPrompt,
+                Fires::Widget(FocusTarget::SkipPlayPrompt),
                 "skip this interval".into(),
             ),
-            ('d', FocusTarget::InputDevice, "input device".into()),
+            (
+                'd',
+                Fires::Widget(FocusTarget::InputDevice),
+                "input device".into(),
+            ),
         ],
         // `/` is the same physical key as `?`, distinguished by shift: search, and help.
         //
@@ -240,13 +294,25 @@ pub(super) fn accelerators_for(
                 .map_or(0, |at| (at + 1) % chord_library::NOTATIONS.len());
 
             vec![
-                ('/', FocusTarget::SearchBox, "search".into()),
-                ('n', FocusTarget::NotationChoice(0), "note names".into()),
-                ('d', FocusTarget::NotationChoice(1), "degrees".into()),
-                ('f', FocusTarget::NotationChoice(2), "fingers".into()),
+                ('/', Fires::Widget(FocusTarget::SearchBox), "search".into()),
+                (
+                    'n',
+                    Fires::Widget(FocusTarget::NotationChoice(0)),
+                    "note names".into(),
+                ),
+                (
+                    'd',
+                    Fires::Widget(FocusTarget::NotationChoice(1)),
+                    "degrees".into(),
+                ),
+                (
+                    'f',
+                    Fires::Widget(FocusTarget::NotationChoice(2)),
+                    "fingers".into(),
+                ),
                 (
                     'i',
-                    FocusTarget::NotationChoice(next),
+                    Fires::Widget(FocusTarget::NotationChoice(next)),
                     "cycle the three".into(),
                 ),
                 // Here for the overlay's sake. `accelerate` takes `g` and `G` before it
@@ -255,7 +321,7 @@ pub(super) fn accelerators_for(
                 // `gg` is named in the label because it has no row of its own.
                 (
                     'G',
-                    FocusTarget::ChordList,
+                    Fires::Widget(FocusTarget::ChordList),
                     "last chord, gg for the first".into(),
                 ),
             ]
@@ -264,16 +330,32 @@ pub(super) fn accelerators_for(
         // screen, and switch what the dots say. There is no `d`: this screen has no direction
         // to swap, and the library's `d` is a notation it does not offer.
         Screen::Caged => vec![
-            ('r', FocusTarget::RerollCagedRoot, "new root".into()),
-            ('i', FocusTarget::NotationToggle, "interval notation".into()),
+            (
+                'r',
+                Fires::Widget(FocusTarget::RerollCagedRoot),
+                "new root".into(),
+            ),
+            (
+                'i',
+                Fires::Widget(FocusTarget::NotationToggle),
+                "interval notation".into(),
+            ),
         ],
         // `d` is the device list. It means something different again here — the library's
         // `d` picks degrees and a trainer's swaps direction — which is the arrangement a
         // per-screen table exists to allow. `i` keeps its meaning: switch how a note is
         // written, which here is the sharp or flat name of the pitch being heard.
         Screen::Tuner => vec![
-            ('d', FocusTarget::InputDevice, "input device".into()),
-            ('i', FocusTarget::TunerSpellingToggle, "flat names".into()),
+            (
+                'd',
+                Fires::Widget(FocusTarget::InputDevice),
+                "input device".into(),
+            ),
+            (
+                'i',
+                Fires::Widget(FocusTarget::TunerSpellingToggle),
+                "flat names".into(),
+            ),
         ],
     }
 }
@@ -517,7 +599,12 @@ mod tests {
                 let mut app = app_on(screen.clone());
                 app.chord_library.set_notation(index);
 
-                for (key, target, label) in app.accelerators() {
+                // A key that fires a message has no widget to be missing; only the ones that
+                // say they fire a widget can be wrong about it.
+                for (key, fires, label) in app.accelerators() {
+                    let Fires::Widget(target) = fires else {
+                        continue;
+                    };
                     assert!(
                         reachable.contains(&target),
                         "{screen:?} under {notation:?} binds {key:?} ({label}) to \
@@ -543,7 +630,7 @@ mod tests {
                 bound[index],
                 (
                     expected,
-                    FocusTarget::HomeMenuItem(index),
+                    Fires::Widget(FocusTarget::HomeMenuItem(index)),
                     item.label.into()
                 ),
                 "menu item {index} ({}) is misnumbered or mislabelled",
