@@ -536,12 +536,9 @@ impl App {
             // Every arm below borrows `self.note_trainer` and `self.rng` at once. That is
             // allowed because they are disjoint fields — the same reason the drill's methods
             // take the generator as a parameter instead of reaching for it.
-            Message::AnswerNote(pitch_class) => {
-                self.note_trainer.answer_name(pitch_class, &mut self.rng)
-            }
+            Message::AnswerNote(pitch_class) => self.note_trainer.answer_name(pitch_class),
             Message::ChooseNotePosition(string, fret) => {
-                self.note_trainer
-                    .answer_position(string, fret, &mut self.rng)
+                self.note_trainer.answer_position(string, fret)
             }
             Message::SkipPrompt => self.note_trainer.skip(&mut self.rng),
             // Handled above, before the help overlay gets a say.
@@ -1029,10 +1026,10 @@ impl App {
             }
             // Enter on the neck answers with wherever the cursor is sitting, which is the
             // same thing a click on that position would send.
-            FocusTarget::Fretboard => self.note_trainer.answer_at_cursor(&mut self.rng),
+            FocusTarget::Fretboard => self.note_trainer.answer_at_cursor(),
             FocusTarget::NoteAnswer(index) => {
                 if let Some(&pitch_class) = PitchClass::ALL.get(index) {
-                    self.note_trainer.answer_name(pitch_class, &mut self.rng);
+                    self.note_trainer.answer_name(pitch_class);
                 }
             }
             FocusTarget::DrillDirectionToggle => self.note_trainer.toggle_direction(&mut self.rng),

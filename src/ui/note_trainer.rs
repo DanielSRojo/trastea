@@ -208,11 +208,7 @@ impl NoteTrainer {
     }
 
     /// Takes an answer, unless one is already being marked.
-    ///
-    /// The generator is still taken during the pause even though nothing is drawn then: it
-    /// is the same call either way, and a signature that changed with the state would push
-    /// the pause out to every caller.
-    fn answer(&mut self, answer: Answer, _rng: &mut Rng) {
+    fn answer(&mut self, answer: Answer) {
         self.score.mark(answer, self.judge(answer));
     }
 
@@ -221,8 +217,8 @@ impl NoteTrainer {
     /// `Answer` is built here rather than by the caller, which is what keeps it, `Prompt`,
     /// and `Pool` private to this module: `App` names a pitch class or a position, and the
     /// shape they travel in is the drill's own business.
-    pub(super) fn answer_name(&mut self, pitch_class: PitchClass, rng: &mut Rng) {
-        self.answer(Answer::Name(pitch_class), rng);
+    pub(super) fn answer_name(&mut self, pitch_class: PitchClass) {
+        self.answer(Answer::Name(pitch_class));
     }
 
     /// Answers with a position, and takes the cursor there.
@@ -230,18 +226,18 @@ impl NoteTrainer {
     /// The cursor follows, so the mouse and the keyboard never disagree about where it is —
     /// and because a press *is* a move-then-answer, the two arrive as one call rather than
     /// as an assignment the caller has to remember to make first.
-    pub(super) fn answer_position(&mut self, string: usize, fret: usize, rng: &mut Rng) {
+    pub(super) fn answer_position(&mut self, string: usize, fret: usize) {
         self.cursor = (string, fret);
-        self.answer(Answer::Position { string, fret }, rng);
+        self.answer(Answer::Position { string, fret });
     }
 
     /// Answers with wherever the cursor is sitting — what Enter on the neck does.
     ///
     /// The same thing a press on that position would send, reached the other way round: the
     /// cursor is already there, so only the answer half of `answer_position` is left to do.
-    pub(super) fn answer_at_cursor(&mut self, rng: &mut Rng) {
+    pub(super) fn answer_at_cursor(&mut self) {
         let (string, fret) = self.cursor;
-        self.answer(Answer::Position { string, fret }, rng);
+        self.answer(Answer::Position { string, fret });
     }
 
     /// Whether a correct answer is lit, which is the window the flash timer runs in.
@@ -707,7 +703,7 @@ mod tests {
     /// itself call `answer` and stop there.
     fn answer_and_advance(trainer: &mut NoteTrainer, rng: &mut Rng) {
         let answer = correct_answer(trainer);
-        trainer.answer(answer, rng);
+        trainer.answer(answer);
         trainer.advance(rng);
     }
 
@@ -729,7 +725,7 @@ mod tests {
 
         let standing = trainer.prompt;
         let answer = correct_answer(&trainer);
-        trainer.answer(answer, &mut rng);
+        trainer.answer(answer);
 
         assert_eq!(
             trainer.score.correct(),
@@ -741,8 +737,8 @@ mod tests {
 
         // Nothing lands while it is up — not another correct press, and not a wrong one.
         let wrong = wrong_answer(&trainer);
-        trainer.answer(wrong, &mut rng);
-        trainer.answer(answer, &mut rng);
+        trainer.answer(wrong);
+        trainer.answer(answer);
 
         assert_eq!((trainer.score.streak(), trainer.prompt), (1, standing));
         assert!(
@@ -773,7 +769,7 @@ mod tests {
             NoteTrainer::enter,
         ] {
             let answer = correct_answer(&trainer);
-            trainer.answer(answer, &mut rng);
+            trainer.answer(answer);
             assert!(trainer.score.correct().is_some());
 
             interrupt(&mut trainer, &mut rng);
@@ -807,7 +803,7 @@ mod tests {
 
         let standing = trainer.prompt;
         let wrong = wrong_answer(&trainer);
-        trainer.answer(wrong, &mut rng);
+        trainer.answer(wrong);
 
         assert_eq!(trainer.score.streak(), 0);
         assert_eq!(
@@ -836,7 +832,7 @@ mod tests {
             .collect();
 
         for &w in &wrongs {
-            trainer.answer(w, &mut rng);
+            trainer.answer(w);
         }
 
         for &w in &wrongs {
@@ -845,12 +841,12 @@ mod tests {
 
         // Repeating one does not grow the list.
         let before = trainer.score.wrong().len();
-        trainer.answer(wrongs[0], &mut rng);
+        trainer.answer(wrongs[0]);
         assert_eq!(trainer.score.wrong().len(), before);
 
         // The right answer joins them rather than clearing them: for as long as the flash
         // is up, the learner can see what they tried and what it turned out to be.
-        trainer.answer(Answer::Name(actual), &mut rng);
+        trainer.answer(Answer::Name(actual));
         assert_eq!(trainer.score.wrong().len(), before);
 
         trainer.advance(&mut rng);
@@ -870,7 +866,7 @@ mod tests {
         assert_eq!(trainer.score.best(), 5);
 
         let wrong = wrong_answer(&trainer);
-        trainer.answer(wrong, &mut rng);
+        trainer.answer(wrong);
         assert_eq!((trainer.score.streak(), trainer.score.best()), (0, 5));
 
         trainer.skip(&mut rng);
