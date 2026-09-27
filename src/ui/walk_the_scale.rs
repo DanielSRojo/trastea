@@ -241,17 +241,12 @@ impl WalkTheScale {
     }
 
     /// Steps the root `steps` semitones, wrapping in both directions.
-    ///
-    /// `transpose` takes a `u8` and reduces mod 12, so the wrap is the type's arithmetic
-    /// rather than a branch here. `rem_euclid` and not `%`, because `%` keeps the sign of the
-    /// dividend: `(-1) % 12` is `-1`, which is not a `u8`, while `(-1).rem_euclid(12)` is 11 —
-    /// the semitone below, by the same modular add.
     pub(super) fn step_root(&mut self, steps: i32) {
         if steps == 0 {
             return;
         }
 
-        self.select_root(self.scale.root().transpose(steps.rem_euclid(12) as u8));
+        self.select_root(self.scale.root().shift(steps));
     }
 
     pub(super) fn is_dragging(&self) -> bool {

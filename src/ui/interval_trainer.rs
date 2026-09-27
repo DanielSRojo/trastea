@@ -78,10 +78,7 @@ impl Prompt {
 /// interval it is above the root's pitch class. That is what the drill asks about: a
 /// distance between two pitch classes, not a count of frets.
 fn distance(root: Position, target: Position) -> Option<u8> {
-    let root = root.pitch_class()?;
-    let target = target.pitch_class()?;
-
-    Some((target.semitone() + 12 - root.semitone()) % 12)
+    Some(root.pitch_class()?.semitones_up_to(target.pitch_class()?))
 }
 
 /// The Interval Trainer's whole state.

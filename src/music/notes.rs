@@ -56,6 +56,23 @@ impl PitchClass {
         // `semitones % 12` first, so the sum cannot exceed 22 and overflow a u8.
         PitchClass::new(self.0 + semitones % 12)
     }
+
+    /// `transpose` for a step that can go down.
+    ///
+    /// `rem_euclid` and not `%`, because `%` keeps the sign of the dividend: `(-1) % 12` is
+    /// `-1`, while `(-1).rem_euclid(12)` is 11 — the semitone below, by the same modular add.
+    pub fn shift(self, semitones: i32) -> PitchClass {
+        // 0..=11 after `rem_euclid`, so the cast cannot truncate.
+        self.transpose(semitones.rem_euclid(12) as u8)
+    }
+
+    /// How many semitones up from `self` to `other`, within the octave: always 0..=11.
+    ///
+    /// Upward, because a pitch class has no octave to sit below another in — E up to C is 8,
+    /// never -4.
+    pub fn semitones_up_to(self, other: PitchClass) -> u8 {
+        (other.0 + 12 - self.0) % 12
+    }
 }
 
 /// The seven letter names, ordered from C rather than A, so `as usize` indexes
@@ -295,6 +312,33 @@ impl Spelling {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_distance_up_is_what_transposing_by_it_undoes() {
+        for from in PitchClass::ALL {
+            for to in PitchClass::ALL {
+                let up = from.semitones_up_to(to);
+                assert!(up < 12, "{from:?} to {to:?} is {up}");
+                assert_eq!(from.transpose(up), to, "{from:?} up {up} is not {to:?}");
+            }
+        }
+        // E up to C, not down: a pitch class has no octave to sit below another in.
+        assert_eq!(PitchClass::new(4).semitones_up_to(PitchClass::new(0)), 8);
+    }
+
+    #[test]
+    fn a_shift_down_wraps_to_the_top_of_the_octave() {
+        let c = PitchClass::new(0);
+        assert_eq!(c.shift(-1), PitchClass::new(11));
+        assert_eq!(c.shift(-13), PitchClass::new(11));
+        assert_eq!(c.shift(12), c);
+
+        for pitch_class in PitchClass::ALL {
+            for steps in -25..=25 {
+                assert_eq!(pitch_class.shift(steps).shift(-steps), pitch_class);
+            }
+        }
+    }
 
     #[test]
     fn round_trip() {

@@ -15,7 +15,7 @@ use crate::music::chords::{Chord, ChordQuality};
 use crate::music::notes::PitchClass;
 
 use super::chord_diagram::window_for;
-use super::neck::{Neck, STANDARD_TUNING};
+use super::neck::Neck;
 
 /// How many frets apart a shape's stopped notes may sit.
 ///
@@ -895,7 +895,7 @@ impl Shape {
         }
 
         // The shape only sits here if its root string lands on the chord's root.
-        let root_at = self.string_pitch(self.root_string, index_fret, kind)?;
+        let root_at = self.string_pitch(self.root_string, index_fret, kind, neck)?;
         if root_at != root {
             return None;
         }
@@ -978,7 +978,13 @@ impl Shape {
     }
 
     /// What a string sounds once the shape is placed and altered.
-    fn string_pitch(&self, index: usize, index_fret: u8, kind: ChordQuality) -> Option<PitchClass> {
+    fn string_pitch(
+        &self,
+        index: usize,
+        index_fret: u8,
+        kind: ChordQuality,
+        neck: &Neck,
+    ) -> Option<PitchClass> {
         let Sounded { offset, degree } = self.strings[index] else {
             return None;
         };
@@ -986,11 +992,9 @@ impl Shape {
         let fret = i16::from(index_fret) + i16::from(offset) + self.shift(degree, kind)?;
         let fret = u8::try_from(fret).ok()?;
 
-        // `.pitch_class()` because the tuning now names absolute pitches, and a shape is
-        // the same shape wherever it sits — which of twelve is all this arithmetic wants.
-        STANDARD_TUNING
-            .get(index)
-            .map(|open| open.pitch_class().transpose(fret % 12))
+        // A pitch class because a shape is the same shape wherever it sits — which of twelve
+        // is all this arithmetic wants — and off `neck` because the tuning travels with it.
+        neck.pitch_class_at(index, usize::from(fret))
     }
 }
 
@@ -1033,7 +1037,7 @@ pub(super) fn position_label(voicing: Voicing) -> String {
 mod tests {
     use super::*;
 
-    use crate::ui::neck::{CAGED_NECK, DRILL_NECK};
+    use crate::ui::neck::{CAGED_NECK, DRILL_NECK, STANDARD_TUNING};
 
     fn pc(semitone: u8) -> PitchClass {
         PitchClass::new(semitone)
