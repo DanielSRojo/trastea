@@ -516,6 +516,9 @@ impl WalkTheScale {
     /// so a degree is correct wherever on the neck it lies. The cost is that a walked scale
     /// need not literally ascend; requiring that would be drilling where the octave is, on
     /// top of the degree it means to teach.
+    ///
+    /// Not `drill::Score`: a streak here counts clean sequences rather than answers, and the
+    /// best outlives each run.
     fn judge(&mut self, played: PitchClass) {
         let scale = self.scale;
         let streak = {

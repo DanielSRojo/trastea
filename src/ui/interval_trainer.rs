@@ -15,7 +15,7 @@
 
 use iced::{Color, Element, Padding};
 
-use super::drill::{ANSWERS, Drill, choice_for, interval_label};
+use super::drill::{ANSWERS, Drill, Score, choice_for, interval_label};
 use super::focus::{ANSWER_ROW_WIDTH, Direction, FocusTarget};
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS, Position, neck};
@@ -96,14 +96,7 @@ fn distance(root: Position, target: Position) -> Option<u8> {
 /// No iced types, so the streak rules and the judging can be tested without a widget tree.
 pub(super) struct IntervalTrainer {
     prompt: Prompt,
-    streak: u32,
-    best_streak: u32,
-    /// Every wrong answer given to the current prompt, cleared when it advances — a `Vec`
-    /// for the reason the Note Trainer's is one: replacing the last wrong answer would
-    /// un-mark the earlier ones.
-    wrong: Vec<Answer>,
-    /// The correct answer just given, held while it is lit. `Some` is the paused state.
-    correct: Option<Answer>,
+    score: Score<Answer>,
     cursor: Position,
 }
 
@@ -119,10 +112,7 @@ impl IntervalTrainer {
                 root: CURSOR_START,
                 target: CURSOR_START,
             },
-            streak: 0,
-            best_streak: 0,
-            wrong: Vec::new(),
-            correct: None,
+            score: Score::default(),
             cursor: CURSOR_START,
         };
 
@@ -191,8 +181,7 @@ impl IntervalTrainer {
 
         // Both kinds of feedback belong to the prompt they were given against, so a new
         // prompt arrives with a clean surface.
-        self.wrong.clear();
-        self.correct = None;
+        self.score.next_prompt();
     }
 
     /// Judges by semitone distance, which is what makes the two tritone spellings one
@@ -225,26 +214,7 @@ impl IntervalTrainer {
 
     /// Takes an answer, unless one is already being marked.
     fn answer(&mut self, answer: Answer) {
-        // A correct answer is on screen, so the drill is not asking anything. Answers
-        // arriving now are the tail of the press that scored — a held key, a double click.
-        if self.correct.is_some() {
-            return;
-        }
-
-        if self.judge(answer) {
-            self.streak += 1;
-            self.best_streak = self.best_streak.max(self.streak);
-
-            // The prompt is *not* replaced here. It stands, with this answer lit, until
-            // `advance` retires it.
-            self.correct = Some(answer);
-        } else {
-            // Deduplicated so hammering one wrong button cannot grow this without bound.
-            if !self.wrong.contains(&answer) {
-                self.wrong.push(answer);
-            }
-            self.streak = 0;
-        }
+        self.score.mark(answer, self.judge(answer));
     }
 
     /// Answers with an interval — the *Name it* surface.
@@ -270,7 +240,7 @@ impl IntervalTrainer {
 
     /// Whether a correct answer is lit, which is the window the flash timer runs in.
     pub(super) fn is_flashing(&self) -> bool {
-        self.correct.is_some()
+        self.score.is_flashing()
     }
 
     /// Which way the drill is running. The focus grid asks, because the answer surface
@@ -285,27 +255,21 @@ impl IntervalTrainer {
     /// crossed a skip, or landed after the screen was left — cannot retire a prompt the
     /// learner is still reading.
     pub(super) fn advance(&mut self, rng: &mut Rng) {
-        if self.correct.is_some() {
+        if self.score.is_flashing() {
             let drill = self.prompt.drill();
             self.draw_prompt(drill, rng);
         }
     }
 
-    /// Zeroes the run without touching the best of the session. A wrong answer, a skip, and
-    /// a direction change all break it, so the number measures recall rather than time.
-    fn break_streak(&mut self) {
-        self.streak = 0;
-    }
-
     pub(super) fn skip(&mut self, rng: &mut Rng) {
         let drill = self.prompt.drill();
-        self.break_streak();
+        self.score.break_streak();
         self.draw_prompt(drill, rng);
     }
 
     pub(super) fn toggle_direction(&mut self, rng: &mut Rng) {
         let flipped = self.prompt.drill().flipped();
-        self.break_streak();
+        self.score.break_streak();
         self.cursor = CURSOR_START;
         self.draw_prompt(flipped, rng);
     }
@@ -313,7 +277,7 @@ impl IntervalTrainer {
     /// Opening the screen: the direction and the best streak persist, the run does not.
     pub(super) fn enter(&mut self, rng: &mut Rng) {
         let drill = self.prompt.drill();
-        self.break_streak();
+        self.score.break_streak();
         self.cursor = CURSOR_START;
         self.draw_prompt(drill, rng);
     }
@@ -409,7 +373,7 @@ pub(super) fn ui_interval_trainer(
             row![
                 question,
                 Space::new().width(Length::Fill),
-                streak_readout(trainer.streak, trainer.best_streak),
+                streak_readout(trainer.score.streak(), trainer.score.best()),
             ],
             interval_trainer_controls(trainer, focused),
         ]
@@ -491,12 +455,14 @@ fn position_markers(trainer: &IntervalTrainer) -> Vec<NoteMarker> {
     };
 
     trainer
-        .wrong
+        .score
+        .wrong()
         .iter()
         .filter_map(|answer| marker(answer, DANGER))
         .chain(
             trainer
-                .correct
+                .score
+                .correct()
                 .iter()
                 .filter_map(|answer| marker(answer, SUCCESS)),
         )
@@ -584,8 +550,8 @@ fn interval_answer_row(
         .enumerate()
         .fold(row![].spacing(20), |acc, (i, choice)| {
             let answer = Answer::Interval(choice.interval);
-            let was_wrong = trainer.wrong.contains(&answer);
-            let was_right = trainer.correct == Some(answer);
+            let was_wrong = trainer.score.wrong().contains(&answer);
+            let was_right = trainer.score.correct() == Some(answer);
             // Both marked states fill the button, so both need ink that reads on a fill.
             let color = if was_wrong || was_right { CANVAS } else { INK };
 
@@ -944,8 +910,8 @@ mod tests {
 
         for expected in 1..=10 {
             answer_and_advance(&mut trainer, &mut rng);
-            assert_eq!(trainer.streak, expected);
-            assert_eq!(trainer.best_streak, expected);
+            assert_eq!(trainer.score.streak(), expected);
+            assert_eq!(trainer.score.best(), expected);
         }
     }
 
@@ -958,13 +924,13 @@ mod tests {
         trainer.answer(answer);
 
         assert_eq!(trainer.prompt, standing, "the prompt moved under the flash");
-        assert_eq!(trainer.correct, Some(answer));
+        assert_eq!(trainer.score.correct(), Some(answer));
         assert!(trainer.is_flashing());
 
         // A second answer during the flash changes nothing — a held key or a double click.
         trainer.answer(wrong_answer(&trainer));
-        assert_eq!(trainer.streak, 1);
-        assert!(trainer.wrong.is_empty());
+        assert_eq!(trainer.score.streak(), 1);
+        assert!(trainer.score.wrong().is_empty());
 
         trainer.advance(&mut rng);
         assert_ne!(trainer.prompt, standing);
@@ -986,16 +952,16 @@ mod tests {
         let (mut trainer, mut rng) = trainer_with_seed(0x9);
 
         answer_and_advance(&mut trainer, &mut rng);
-        assert_eq!(trainer.streak, 1);
+        assert_eq!(trainer.score.streak(), 1);
 
         let standing = trainer.prompt;
         let wrong = wrong_answer(&trainer);
         trainer.answer(wrong);
 
-        assert_eq!(trainer.streak, 0);
-        assert_eq!(trainer.best_streak, 1);
+        assert_eq!(trainer.score.streak(), 0);
+        assert_eq!(trainer.score.best(), 1);
         assert_eq!(trainer.prompt, standing);
-        assert_eq!(trainer.wrong, vec![wrong]);
+        assert_eq!(trainer.score.wrong(), vec![wrong]);
     }
 
     #[test]
@@ -1017,11 +983,18 @@ mod tests {
             trainer.answer(*answer);
         }
 
-        assert_eq!(trainer.wrong, wrong, "earlier wrong answers were lost");
+        assert_eq!(
+            trainer.score.wrong(),
+            wrong,
+            "earlier wrong answers were lost"
+        );
 
         trainer.answer(correct_answer(&trainer));
         trainer.advance(&mut rng);
-        assert!(trainer.wrong.is_empty(), "a new prompt started dirty");
+        assert!(
+            trainer.score.wrong().is_empty(),
+            "a new prompt started dirty"
+        );
     }
 
     #[test]
@@ -1031,24 +1004,26 @@ mod tests {
         for _ in 0..4 {
             answer_and_advance(&mut trainer, &mut rng);
         }
-        assert_eq!(trainer.best_streak, 4);
+        assert_eq!(trainer.score.best(), 4);
 
         trainer.skip(&mut rng);
         assert_eq!(
-            trainer.streak, 0,
+            trainer.score.streak(),
+            0,
             "skipping past what you do not know counted"
         );
-        assert_eq!(trainer.best_streak, 4);
+        assert_eq!(trainer.score.best(), 4);
 
         answer_and_advance(&mut trainer, &mut rng);
         trainer.toggle_direction(&mut rng);
-        assert_eq!(trainer.streak, 0);
-        assert_eq!(trainer.best_streak, 4);
+        assert_eq!(trainer.score.streak(), 0);
+        assert_eq!(trainer.score.best(), 4);
 
         trainer.enter(&mut rng);
-        assert_eq!(trainer.streak, 0);
+        assert_eq!(trainer.score.streak(), 0);
         assert_eq!(
-            trainer.best_streak, 4,
+            trainer.score.best(),
+            4,
             "reopening forgot the best of the run"
         );
     }
@@ -1229,8 +1204,8 @@ mod tests {
         let app = interval_app(3);
 
         assert_eq!(app.screen, Screen::IntervalTrainer);
-        assert_eq!(app.interval_trainer.streak, 0);
-        assert!(app.interval_trainer.wrong.is_empty());
+        assert_eq!(app.interval_trainer.score.streak(), 0);
+        assert!(app.interval_trainer.score.wrong().is_empty());
     }
 
     /// The screen never reopens on what it last showed, and what persists is the direction
@@ -1241,7 +1216,7 @@ mod tests {
 
         answer_correctly(&mut app);
         answer_correctly(&mut app);
-        let best = app.interval_trainer.best_streak;
+        let best = app.interval_trainer.score.best();
         assert_eq!(best, 2);
 
         for _ in 0..20 {
@@ -1251,8 +1226,12 @@ mod tests {
 
             assert_ne!(app.interval_trainer.prompt, before, "reopened on its last");
             assert_eq!(app.interval_trainer.drill(), Drill::FindIt);
-            assert_eq!(app.interval_trainer.best_streak, best);
-            assert_eq!(app.interval_trainer.streak, 0, "the run carried over");
+            assert_eq!(app.interval_trainer.score.best(), best);
+            assert_eq!(
+                app.interval_trainer.score.streak(),
+                0,
+                "the run carried over"
+            );
         }
     }
 
@@ -1308,7 +1287,7 @@ mod tests {
         app.interval_trainer.cursor = target;
 
         let _ = app.update(Message::ActivateFocused);
-        assert_eq!(app.interval_trainer.streak, 1);
+        assert_eq!(app.interval_trainer.score.streak(), 1);
     }
 
     /// A click reports through the fretboard's press handler — the same message the canvas
@@ -1324,7 +1303,7 @@ mod tests {
         let _ = app.update(Message::ChooseIntervalPosition(target.string, target.fret));
 
         assert_eq!(app.interval_trainer.cursor, target);
-        assert_eq!(app.interval_trainer.streak, 1);
+        assert_eq!(app.interval_trainer.score.streak(), 1);
     }
 
     #[test]

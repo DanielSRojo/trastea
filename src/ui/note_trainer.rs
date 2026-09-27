@@ -11,7 +11,7 @@
 
 use iced::{Color, Element, Padding};
 
-use super::drill::Drill;
+use super::drill::{Drill, Score};
 use super::focus::{ANSWER_ROW_WIDTH, Direction, FocusTarget};
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS};
@@ -96,21 +96,7 @@ pub(super) struct NoteTrainer {
     /// How this screen writes note names. Its own, not the scale trainer's — a spelling
     /// chosen while practising scales has no business renaming the answer buttons here.
     spelling: Spelling,
-    streak: u32,
-    best_streak: u32,
-    /// Every wrong answer given to the current prompt, cleared when it advances.
-    ///
-    /// A `Vec`, not an `Option`: the learner may keep trying, and replacing the single
-    /// last wrong answer would un-mark the earlier ones, which reads as a bug rather than
-    /// as feedback.
-    wrong: Vec<Answer>,
-    /// The correct answer just given, held while it is lit on screen.
-    ///
-    /// `Some` is the paused state: the prompt stays put with its answer marked, and further
-    /// answers are ignored until `advance` retires it a second later. One `Option` rather
-    /// than a flag beside the answer, because "paused" and "which answer to mark" are the
-    /// same fact — a flag could be set with nothing to mark, and this cannot be.
-    correct: Option<Answer>,
+    score: Score<Answer>,
     cursor: (usize, usize),
 }
 
@@ -130,10 +116,7 @@ impl NoteTrainer {
             prompt: Prompt::NameIt { string: 0, fret: 0 },
             pool: Pool::Naturals,
             spelling: Spelling::Sharps,
-            streak: 0,
-            best_streak: 0,
-            wrong: Vec::new(),
-            correct: None,
+            score: Score::default(),
             cursor: CURSOR_HOME,
         };
 
@@ -203,8 +186,7 @@ impl NoteTrainer {
         // Both kinds of feedback belong to the prompt they were given against, so a new
         // prompt arrives with a clean surface — and a skip or a toggle during the flash
         // ends it, since every one of them comes through here.
-        self.wrong.clear();
-        self.correct = None;
+        self.score.next_prompt();
     }
 
     /// Judges by pitch class, so the two names of a black key are one answer.
@@ -231,28 +213,7 @@ impl NoteTrainer {
     /// is the same call either way, and a signature that changed with the state would push
     /// the pause out to every caller.
     fn answer(&mut self, answer: Answer, _rng: &mut Rng) {
-        // A correct answer is on screen, so the drill is not asking anything. Answers
-        // arriving now are the tail of the press that scored — a held key, a double
-        // click — and counting them would either inflate the streak or, worse, mark the
-        // learner wrong for a question they have already got right.
-        if self.correct.is_some() {
-            return;
-        }
-
-        if self.judge(answer) {
-            self.streak += 1;
-            self.best_streak = self.best_streak.max(self.streak);
-
-            // The prompt is *not* replaced here. It stands, with this answer lit, until
-            // `advance` retires it — see `correct`.
-            self.correct = Some(answer);
-        } else {
-            // Deduplicated so hammering one wrong button cannot grow this without bound.
-            if !self.wrong.contains(&answer) {
-                self.wrong.push(answer);
-            }
-            self.streak = 0;
-        }
+        self.score.mark(answer, self.judge(answer));
     }
 
     /// Answers with a note name — the *Name it* surface.
@@ -288,7 +249,7 @@ impl NoteTrainer {
     /// A question rather than the `Option` itself: the subscription only needs to know that
     /// the pause is on, not what is being marked.
     pub(super) fn is_flashing(&self) -> bool {
-        self.correct.is_some()
+        self.score.is_flashing()
     }
 
     /// Which way the drill is running. The focus grid asks, because the answer surface — and
@@ -303,30 +264,21 @@ impl NoteTrainer {
     /// crossed a skip, or landed after the screen was left — cannot retire a prompt the
     /// learner is still reading.
     pub(super) fn advance(&mut self, rng: &mut Rng) {
-        if self.correct.is_some() {
+        if self.score.is_flashing() {
             let drill = self.prompt.drill();
             self.draw_prompt(drill, rng);
         }
     }
 
-    /// Zeroes the run without touching the best of the session.
-    ///
-    /// A wrong answer, a skip, and a settings change all break it for one reason: a streak
-    /// that counted across them would not measure recall. Skips included, so that skipping
-    /// past the notes one does not know cannot inflate the number.
-    fn break_streak(&mut self) {
-        self.streak = 0;
-    }
-
     pub(super) fn skip(&mut self, rng: &mut Rng) {
         let drill = self.prompt.drill();
-        self.break_streak();
+        self.score.break_streak();
         self.draw_prompt(drill, rng);
     }
 
     pub(super) fn toggle_direction(&mut self, rng: &mut Rng) {
         let flipped = self.prompt.drill().flipped();
-        self.break_streak();
+        self.score.break_streak();
         self.cursor = CURSOR_HOME;
         self.draw_prompt(flipped, rng);
     }
@@ -338,7 +290,7 @@ impl NoteTrainer {
         };
 
         let drill = self.prompt.drill();
-        self.break_streak();
+        self.score.break_streak();
         self.draw_prompt(drill, rng);
     }
 
@@ -355,7 +307,7 @@ impl NoteTrainer {
     /// Opening the screen: the settings and the best streak persist, the run does not.
     pub(super) fn enter(&mut self, rng: &mut Rng) {
         let drill = self.prompt.drill();
-        self.break_streak();
+        self.score.break_streak();
         self.cursor = CURSOR_HOME;
         self.draw_prompt(drill, rng);
     }
@@ -428,7 +380,7 @@ pub(super) fn ui_note_trainer(
             row![
                 question,
                 Space::new().width(Length::Fill),
-                streak_readout(trainer.streak, trainer.best_streak),
+                streak_readout(trainer.score.streak(), trainer.score.best()),
             ],
             note_trainer_controls(trainer, focused),
         ]
@@ -512,12 +464,14 @@ fn position_markers(trainer: &NoteTrainer) -> Vec<NoteMarker> {
     };
 
     trainer
-        .wrong
+        .score
+        .wrong()
         .iter()
         .filter_map(|answer| marker(answer, DANGER))
         .chain(
             trainer
-                .correct
+                .score
+                .correct()
                 .iter()
                 .filter_map(|answer| marker(answer, SUCCESS)),
         )
@@ -623,8 +577,8 @@ fn note_answer_row(
         .enumerate()
         .fold(row![].spacing(20), |acc, (i, &pitch_class)| {
             let answer = Answer::Name(pitch_class);
-            let was_wrong = trainer.wrong.contains(&answer);
-            let was_right = trainer.correct == Some(answer);
+            let was_wrong = trainer.score.wrong().contains(&answer);
+            let was_right = trainer.score.correct() == Some(answer);
             // Both marked states fill the button, so both need ink that reads on a fill.
             let color = if was_wrong || was_right { CANVAS } else { INK };
 
@@ -763,7 +717,7 @@ mod tests {
 
         for expected in 1..=3 {
             answer_and_advance(&mut trainer, &mut rng);
-            assert_eq!(trainer.streak, expected);
+            assert_eq!(trainer.score.streak(), expected);
         }
     }
 
@@ -777,21 +731,32 @@ mod tests {
         let answer = correct_answer(&trainer);
         trainer.answer(answer, &mut rng);
 
-        assert_eq!(trainer.correct, Some(answer), "the answer went unmarked");
+        assert_eq!(
+            trainer.score.correct(),
+            Some(answer),
+            "the answer went unmarked"
+        );
         assert_eq!(trainer.prompt, standing, "the prompt left before its flash");
-        assert_eq!(trainer.streak, 1);
+        assert_eq!(trainer.score.streak(), 1);
 
         // Nothing lands while it is up — not another correct press, and not a wrong one.
         let wrong = wrong_answer(&trainer);
         trainer.answer(wrong, &mut rng);
         trainer.answer(answer, &mut rng);
 
-        assert_eq!((trainer.streak, trainer.prompt), (1, standing));
-        assert!(trainer.wrong.is_empty(), "a press during the flash counted");
+        assert_eq!((trainer.score.streak(), trainer.prompt), (1, standing));
+        assert!(
+            trainer.score.wrong().is_empty(),
+            "a press during the flash counted"
+        );
 
         trainer.advance(&mut rng);
 
-        assert_eq!(trainer.correct, None, "the flash outlived its prompt");
+        assert_eq!(
+            trainer.score.correct(),
+            None,
+            "the flash outlived its prompt"
+        );
         assert_ne!(trainer.prompt, standing, "the flash never ended");
     }
 
@@ -809,10 +774,14 @@ mod tests {
         ] {
             let answer = correct_answer(&trainer);
             trainer.answer(answer, &mut rng);
-            assert!(trainer.correct.is_some());
+            assert!(trainer.score.correct().is_some());
 
             interrupt(&mut trainer, &mut rng);
-            assert_eq!(trainer.correct, None, "a flash survived being interrupted");
+            assert_eq!(
+                trainer.score.correct(),
+                None,
+                "a flash survived being interrupted"
+            );
         }
     }
 
@@ -826,7 +795,7 @@ mod tests {
         trainer.advance(&mut rng);
 
         assert_eq!(trainer.prompt, standing);
-        assert_eq!(trainer.streak, 0);
+        assert_eq!(trainer.score.streak(), 0);
     }
 
     #[test]
@@ -834,19 +803,19 @@ mod tests {
         let (mut trainer, mut rng) = trainer_with_seed(11);
 
         answer_and_advance(&mut trainer, &mut rng);
-        assert_eq!(trainer.streak, 1);
+        assert_eq!(trainer.score.streak(), 1);
 
         let standing = trainer.prompt;
         let wrong = wrong_answer(&trainer);
         trainer.answer(wrong, &mut rng);
 
-        assert_eq!(trainer.streak, 0);
+        assert_eq!(trainer.score.streak(), 0);
         assert_eq!(
             trainer.prompt, standing,
             "a wrong answer retired the prompt"
         );
         assert!(
-            trainer.wrong.contains(&wrong),
+            trainer.score.wrong().contains(&wrong),
             "the wrong answer went unmarked"
         );
     }
@@ -871,21 +840,24 @@ mod tests {
         }
 
         for &w in &wrongs {
-            assert!(trainer.wrong.contains(&w));
+            assert!(trainer.score.wrong().contains(&w));
         }
 
         // Repeating one does not grow the list.
-        let before = trainer.wrong.len();
+        let before = trainer.score.wrong().len();
         trainer.answer(wrongs[0], &mut rng);
-        assert_eq!(trainer.wrong.len(), before);
+        assert_eq!(trainer.score.wrong().len(), before);
 
         // The right answer joins them rather than clearing them: for as long as the flash
         // is up, the learner can see what they tried and what it turned out to be.
         trainer.answer(Answer::Name(actual), &mut rng);
-        assert_eq!(trainer.wrong.len(), before);
+        assert_eq!(trainer.score.wrong().len(), before);
 
         trainer.advance(&mut rng);
-        assert!(trainer.wrong.is_empty(), "feedback outlived its prompt");
+        assert!(
+            trainer.score.wrong().is_empty(),
+            "feedback outlived its prompt"
+        );
     }
 
     #[test]
@@ -895,23 +867,23 @@ mod tests {
         for _ in 0..5 {
             answer_and_advance(&mut trainer, &mut rng);
         }
-        assert_eq!(trainer.best_streak, 5);
+        assert_eq!(trainer.score.best(), 5);
 
         let wrong = wrong_answer(&trainer);
         trainer.answer(wrong, &mut rng);
-        assert_eq!((trainer.streak, trainer.best_streak), (0, 5));
+        assert_eq!((trainer.score.streak(), trainer.score.best()), (0, 5));
 
         trainer.skip(&mut rng);
-        assert_eq!((trainer.streak, trainer.best_streak), (0, 5));
+        assert_eq!((trainer.score.streak(), trainer.score.best()), (0, 5));
 
         trainer.toggle_pool(&mut rng);
-        assert_eq!((trainer.streak, trainer.best_streak), (0, 5));
+        assert_eq!((trainer.score.streak(), trainer.score.best()), (0, 5));
 
         trainer.toggle_direction(&mut rng);
-        assert_eq!((trainer.streak, trainer.best_streak), (0, 5));
+        assert_eq!((trainer.score.streak(), trainer.score.best()), (0, 5));
 
         trainer.enter(&mut rng);
-        assert_eq!((trainer.streak, trainer.best_streak), (0, 5));
+        assert_eq!((trainer.score.streak(), trainer.score.best()), (0, 5));
     }
 
     /// The point of judging by pitch class: a learner who thinks in flats is never marked
@@ -1033,12 +1005,12 @@ mod tests {
 
         answer_and_advance(&mut trainer, &mut rng);
 
-        let before = (trainer.prompt, trainer.streak, trainer.best_streak);
+        let before = (trainer.prompt, trainer.score.streak(), trainer.score.best());
         trainer.toggle_spelling();
 
         assert_eq!(trainer.spelling, Spelling::Flats);
         assert_eq!(
-            (trainer.prompt, trainer.streak, trainer.best_streak),
+            (trainer.prompt, trainer.score.streak(), trainer.score.best()),
             before,
             "the spelling toggle disturbed the drill"
         );
@@ -1149,8 +1121,8 @@ mod tests {
         let app = note_trainer_app(1);
 
         assert_eq!(app.screen, Screen::NoteTrainer);
-        assert_eq!(app.note_trainer.streak, 0);
-        assert!(app.note_trainer.wrong.is_empty());
+        assert_eq!(app.note_trainer.score.streak(), 0);
+        assert!(app.note_trainer.score.wrong().is_empty());
     }
 
     /// The screen never reopens on what it last showed, exactly as the scale trainer never
@@ -1185,7 +1157,7 @@ mod tests {
             app.note_trainer.prompt.drill(),
             app.note_trainer.pool,
             app.note_trainer.spelling,
-            app.note_trainer.best_streak,
+            app.note_trainer.score.best(),
         );
 
         let _ = app.update(Message::GoBack);
@@ -1196,11 +1168,15 @@ mod tests {
                 app.note_trainer.prompt.drill(),
                 app.note_trainer.pool,
                 app.note_trainer.spelling,
-                app.note_trainer.best_streak,
+                app.note_trainer.score.best(),
             ),
             kept,
         );
-        assert_eq!(app.note_trainer.streak, 0, "the run outlived the visit");
+        assert_eq!(
+            app.note_trainer.score.streak(),
+            0,
+            "the run outlived the visit"
+        );
     }
 
     #[test]
@@ -1321,7 +1297,7 @@ mod tests {
 
         press_named(&mut app, Named::Enter);
 
-        assert_eq!(app.note_trainer.streak, 1, "Enter did not answer");
+        assert_eq!(app.note_trainer.score.streak(), 1, "Enter did not answer");
     }
 
     #[test]
@@ -1341,11 +1317,12 @@ mod tests {
 
         press_named(&mut app, Named::Space);
 
-        assert_eq!(app.note_trainer.streak, 0);
+        assert_eq!(app.note_trainer.score.streak(), 0);
         assert_eq!(app.note_trainer.prompt, standing);
         assert!(
             app.note_trainer
-                .wrong
+                .score
+                .wrong()
                 .contains(&Answer::Position { string, fret })
         );
 
@@ -1429,11 +1406,14 @@ mod tests {
         };
 
         let _ = app.update(Message::AnswerNote(pitch_class));
-        assert_eq!(app.note_trainer.correct, Some(Answer::Name(pitch_class)));
+        assert_eq!(
+            app.note_trainer.score.correct(),
+            Some(Answer::Name(pitch_class))
+        );
         let _ = app.view();
 
         let _ = app.update(Message::AdvancePrompt);
-        assert_eq!(app.note_trainer.correct, None);
+        assert_eq!(app.note_trainer.score.correct(), None);
     }
 
     /// The flash's tick is the clock talking, not the user, so it must not be spent
@@ -1471,7 +1451,7 @@ mod tests {
         let _ = app.update(Message::ChooseNotePosition(string, fret));
 
         assert_eq!(app.note_trainer.cursor, (string, fret), "the cursor lagged");
-        assert_eq!(app.note_trainer.streak, 1);
+        assert_eq!(app.note_trainer.score.streak(), 1);
     }
 
     #[test]
@@ -1540,8 +1520,8 @@ mod tests {
             t.prompt,
             t.pool,
             t.spelling,
-            t.streak,
-            t.best_streak,
+            t.score.streak(),
+            t.score.best(),
             t.cursor,
         )
     }
@@ -1604,7 +1584,7 @@ mod tests {
                 Answer::Position { string, fret } => Message::ChooseNotePosition(string, fret),
             };
             let _ = app.update(message);
-            assert!(!app.note_trainer.wrong.is_empty());
+            assert!(!app.note_trainer.score.wrong().is_empty());
             let _ = app.view();
 
             // ...and then the right one, so the flash is drawn on both surfaces too.
@@ -1613,7 +1593,7 @@ mod tests {
                 Answer::Position { string, fret } => Message::ChooseNotePosition(string, fret),
             };
             let _ = app.update(message);
-            assert!(app.note_trainer.correct.is_some());
+            assert!(app.note_trainer.score.correct().is_some());
             let _ = app.view();
 
             let _ = app.update(Message::ToggleDrillDirection);

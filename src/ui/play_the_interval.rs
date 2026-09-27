@@ -17,7 +17,7 @@
 
 use iced::{Color, Element, Length, Padding};
 
-use super::drill::{ANSWERS, choice_for, interval_label};
+use super::drill::{ANSWERS, Score, choice_for, interval_label};
 use super::focus::FocusTarget;
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
@@ -74,14 +74,7 @@ enum Gate {
 /// widget tree — and, because `Listener::apply` is the seam, without a capture device.
 pub(super) struct PlayTheInterval {
     prompt: Prompt,
-    streak: u32,
-    best_streak: u32,
-    /// Every wrong pitch class played against the current prompt, cleared when it advances
-    /// — a `Vec` for the reason the other drills' is one: replacing the last wrong answer
-    /// would un-mark the earlier ones.
-    wrong: Vec<PitchClass>,
-    /// The pitch class that scored, held while it is lit. `Some` is the paused state.
-    correct: Option<PitchClass>,
+    score: Score<PitchClass>,
     gate: Gate,
     listener: Listener,
 }
@@ -95,10 +88,7 @@ impl PlayTheInterval {
                 root: Position { string: 0, fret: 0 },
                 interval: Interval::Unison,
             },
-            streak: 0,
-            best_streak: 0,
-            wrong: Vec::new(),
-            correct: None,
+            score: Score::default(),
             gate: Gate::Deaf,
             listener: Listener::new(),
         };
@@ -140,8 +130,7 @@ impl PlayTheInterval {
             }
         }
 
-        self.wrong.clear();
-        self.correct = None;
+        self.score.next_prompt();
         // Deaf to whatever is sounding *now*, whatever the reason the prompt was drawn —
         // advanced after a flash, skipped, or the screen entered. Read off the device
         // rather than set flat, so the state says what is true: entering the screen in
@@ -180,7 +169,7 @@ impl PlayTheInterval {
 
         // A correct answer is on screen, so the drill is not asking anything. What is
         // sounding now is the tail of the note that scored.
-        if self.correct.is_some() || self.gate == Gate::Deaf {
+        if self.score.is_flashing() || self.gate == Gate::Deaf {
             return;
         }
 
@@ -203,23 +192,12 @@ impl PlayTheInterval {
     /// teach. The cost is that an octave error is never caught, which is the same trade
     /// the Interval Trainer's *Find it* already makes.
     fn judge(&mut self, played: PitchClass) {
-        if self.target() == Some(played) {
-            self.streak += 1;
-            self.best_streak = self.best_streak.max(self.streak);
-            // The prompt is *not* replaced here. It stands, with this answer lit, until
-            // `advance` retires it.
-            self.correct = Some(played);
-        } else {
-            if !self.wrong.contains(&played) {
-                self.wrong.push(played);
-            }
-            self.streak = 0;
-        }
+        self.score.mark(played, self.target() == Some(played));
     }
 
     /// Whether a correct answer is lit, which is the window the flash timer runs in.
     pub(super) fn is_flashing(&self) -> bool {
-        self.correct.is_some()
+        self.score.is_flashing()
     }
 
     /// Ends the flash and draws the next prompt.
@@ -228,19 +206,19 @@ impl PlayTheInterval {
     /// crossed a skip, or landed after the screen was left — cannot retire a prompt the
     /// learner is still reading.
     pub(super) fn advance(&mut self, rng: &mut Rng) {
-        if self.correct.is_some() {
+        if self.score.is_flashing() {
             self.draw_prompt(rng);
         }
     }
 
     pub(super) fn skip(&mut self, rng: &mut Rng) {
-        self.streak = 0;
+        self.score.break_streak();
         self.draw_prompt(rng);
     }
 
     /// Opening the screen: the best streak persists, the run does not.
     pub(super) fn enter(&mut self, rng: &mut Rng) {
-        self.streak = 0;
+        self.score.break_streak();
         self.draw_prompt(rng);
     }
 }
@@ -272,12 +250,14 @@ fn markers(drill: &PlayTheInterval) -> Vec<NoteMarker> {
         .listener
         .reading()
         .map(|(pitch, _)| pitch.pitch_class())
-        .filter(|played| drill.correct != Some(*played) && !drill.wrong.contains(played));
+        .filter(|played| {
+            drill.score.correct() != Some(*played) && !drill.score.wrong().contains(played)
+        });
 
     let colour_for = |pitch: PitchClass| -> Option<(Color, MarkerStyle)> {
-        if drill.correct == Some(pitch) {
+        if drill.score.correct() == Some(pitch) {
             Some((SUCCESS, MarkerStyle::Filled))
-        } else if drill.wrong.contains(&pitch) {
+        } else if drill.score.wrong().contains(&pitch) {
             Some((DANGER, MarkerStyle::Outlined))
         } else if sounding == Some(pitch) {
             Some((INK, MarkerStyle::Filled))
@@ -353,7 +333,7 @@ pub(super) fn ui_play_the_interval(
             row![
                 question,
                 Space::new().width(Length::Fill),
-                streak_readout(drill.streak, drill.best_streak),
+                streak_readout(drill.score.streak(), drill.score.best()),
             ],
             play_controls(focused),
             Space::new().height(Length::Fill),
@@ -512,8 +492,8 @@ mod tests {
             plays(&mut app, wrong);
         }
 
-        assert_eq!(app.play_the_interval.wrong.len(), 1);
-        assert_eq!(app.play_the_interval.streak, 0);
+        assert_eq!(app.play_the_interval.score.wrong().len(), 1);
+        assert_eq!(app.play_the_interval.score.streak(), 0);
     }
 
     #[test]
@@ -525,7 +505,7 @@ mod tests {
             plays(&mut app, right);
         }
 
-        assert_eq!(app.play_the_interval.streak, 1);
+        assert_eq!(app.play_the_interval.score.streak(), 1);
     }
 
     /// The whole reason `Gate` exists, and the one behaviour that would break silently.
@@ -535,21 +515,22 @@ mod tests {
         let right = correct_pitch(&app);
 
         plays(&mut app, right);
-        assert_eq!(app.play_the_interval.streak, 1);
+        assert_eq!(app.play_the_interval.score.streak(), 1);
 
         // The flash retires the prompt a second later — while the string is still ringing.
         let _ = app.update(Message::AdvancePlayPrompt);
         plays(&mut app, right);
 
         assert_eq!(
-            app.play_the_interval.streak, 1,
+            app.play_the_interval.score.streak(),
+            1,
             "the previous answer answered the next prompt"
         );
         assert!(
-            app.play_the_interval.wrong.is_empty(),
+            app.play_the_interval.score.wrong().is_empty(),
             "and was not judged wrong either"
         );
-        assert!(app.play_the_interval.correct.is_none());
+        assert!(app.play_the_interval.score.correct().is_none());
     }
 
     #[test]
@@ -562,7 +543,7 @@ mod tests {
 
         plays(&mut app, sounding);
         assert!(
-            app.play_the_interval.wrong.is_empty(),
+            app.play_the_interval.score.wrong().is_empty(),
             "a note ringing across a skip was judged against the fresh prompt"
         );
     }
@@ -578,7 +559,7 @@ mod tests {
 
         // Deduplicated in `wrong`, so what proves it was judged twice is that the second
         // sounding was judged at all — the gate re-armed on the silence between them.
-        assert_eq!(app.play_the_interval.wrong.len(), 1);
+        assert_eq!(app.play_the_interval.score.wrong().len(), 1);
         assert_eq!(app.play_the_interval.gate, Gate::Deaf);
     }
 
@@ -594,7 +575,7 @@ mod tests {
         let _ = app.update(Message::Heard(Heard::Unpitched));
         plays(&mut app, right);
 
-        assert_eq!(app.play_the_interval.streak, 1);
+        assert_eq!(app.play_the_interval.score.streak(), 1);
     }
 
     #[test]
@@ -605,9 +586,9 @@ mod tests {
             let _ = app.update(Message::Heard(Heard::Unpitched));
         }
 
-        assert!(app.play_the_interval.wrong.is_empty());
-        assert_eq!(app.play_the_interval.streak, 0);
-        assert!(app.play_the_interval.correct.is_none());
+        assert!(app.play_the_interval.score.wrong().is_empty());
+        assert_eq!(app.play_the_interval.score.streak(), 0);
+        assert!(app.play_the_interval.score.correct().is_none());
     }
 
     #[test]
@@ -620,8 +601,12 @@ mod tests {
         stops(&mut app);
         plays(&mut app, wrong);
 
-        assert_eq!(app.play_the_interval.streak, 1, "the flash was interrupted");
-        assert!(app.play_the_interval.wrong.is_empty());
+        assert_eq!(
+            app.play_the_interval.score.streak(),
+            1,
+            "the flash was interrupted"
+        );
+        assert!(app.play_the_interval.score.wrong().is_empty());
     }
 
     // ---- Judging ----
@@ -648,7 +633,8 @@ mod tests {
                 plays(&mut app, pitch);
 
                 assert_eq!(
-                    app.play_the_interval.streak, 1,
+                    app.play_the_interval.score.streak(),
+                    1,
                     "{pitch:?} sounds the answer and was judged wrong"
                 );
             }
@@ -677,7 +663,7 @@ mod tests {
             .expect("the neck sounds every pitch class");
 
         plays(&mut app, lowest);
-        assert_eq!(app.play_the_interval.streak, 1);
+        assert_eq!(app.play_the_interval.score.streak(), 1);
     }
 
     #[test]
@@ -687,8 +673,11 @@ mod tests {
 
         plays(&mut app, wrong);
 
-        assert_eq!(app.play_the_interval.streak, 0);
-        assert_eq!(app.play_the_interval.wrong, vec![wrong.pitch_class()]);
+        assert_eq!(app.play_the_interval.score.streak(), 0);
+        assert_eq!(
+            app.play_the_interval.score.wrong(),
+            vec![wrong.pitch_class()]
+        );
     }
 
     // ---- Prompts ----
@@ -732,13 +721,13 @@ mod tests {
         for expected in 1..=4 {
             let right = correct_pitch(&app);
             plays(&mut app, right);
-            assert_eq!(app.play_the_interval.streak, expected);
+            assert_eq!(app.play_the_interval.score.streak(), expected);
 
             let _ = app.update(Message::AdvancePlayPrompt);
             stops(&mut app);
         }
 
-        assert_eq!(app.play_the_interval.best_streak, 4);
+        assert_eq!(app.play_the_interval.score.best(), 4);
     }
 
     #[test]
@@ -752,8 +741,8 @@ mod tests {
 
         let _ = app.update(Message::SkipPlayPrompt);
 
-        assert_eq!(app.play_the_interval.streak, 0);
-        assert_eq!(app.play_the_interval.best_streak, 1);
+        assert_eq!(app.play_the_interval.score.streak(), 0);
+        assert_eq!(app.play_the_interval.score.best(), 1);
     }
 
     #[test]
@@ -764,14 +753,14 @@ mod tests {
         plays(&mut app, right);
         let _ = app.update(Message::AdvancePlayPrompt);
         stops(&mut app);
-        assert_eq!(app.play_the_interval.best_streak, 1);
+        assert_eq!(app.play_the_interval.score.best(), 1);
 
         app.play_the_interval.enter(&mut app.rng);
 
-        assert_eq!(app.play_the_interval.streak, 0);
-        assert_eq!(app.play_the_interval.best_streak, 1);
-        assert!(app.play_the_interval.wrong.is_empty());
-        assert!(app.play_the_interval.correct.is_none());
+        assert_eq!(app.play_the_interval.score.streak(), 0);
+        assert_eq!(app.play_the_interval.score.best(), 1);
+        assert!(app.play_the_interval.score.wrong().is_empty());
+        assert!(app.play_the_interval.score.correct().is_none());
     }
 
     // ---- The marks ----
@@ -1003,7 +992,7 @@ mod tests {
         }
 
         assert_eq!(app.play_the_interval.prompt, before);
-        assert_eq!(app.play_the_interval.streak, 0);
+        assert_eq!(app.play_the_interval.score.streak(), 0);
         assert!(!app.play_the_interval.listener().is_picking());
     }
 }

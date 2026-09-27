@@ -1,5 +1,5 @@
-//! What the drills share: which way a drill runs, and the twelve distances the two interval
-//! drills answer in.
+//! What the drills share: which way a drill runs, how a run is scored, and the twelve
+//! distances the two interval drills answer in.
 
 use iced::Color;
 
@@ -180,6 +180,99 @@ impl Drill {
     }
 }
 
+/// A drill's run: the streak, the best of the session, and what the current prompt has been
+/// answered with.
+///
+/// Generic over the answer rather than a trait the drills implement, because nothing here
+/// needs to ask an answer anything but whether it is the same one — `Copy + PartialEq` is
+/// the whole contract, and each drill keeps its own judging. The three trainers score by
+/// these rules; Walk the Scale does not, since its streak counts clean sequences rather than
+/// answers and its best outlives each run.
+pub(super) struct Score<A> {
+    streak: u32,
+    best: u32,
+    /// Every wrong answer given to the current prompt. A `Vec`, not an `Option`: the learner
+    /// may keep trying, and replacing the last wrong answer would un-mark the earlier ones.
+    wrong: Vec<A>,
+    /// The correct answer just given, held while it is lit. `Some` is the paused state —
+    /// one `Option` rather than a flag beside the answer, so "paused" cannot be set with
+    /// nothing to mark.
+    correct: Option<A>,
+}
+
+// Written out because `#[derive(Default)]` would require `A: Default`, which no answer type
+// has and none needs: an empty `Vec<A>` and a `None` exist for every `A`.
+impl<A> Default for Score<A> {
+    fn default() -> Self {
+        Score {
+            streak: 0,
+            best: 0,
+            wrong: Vec::new(),
+            correct: None,
+        }
+    }
+}
+
+impl<A: Copy + PartialEq> Score<A> {
+    /// Takes an answer the drill has judged, unless one is already lit.
+    ///
+    /// Answers arriving during the flash are the tail of the press that scored — a held key,
+    /// a double click — and counting them would inflate the streak or mark the learner wrong
+    /// for a question already answered. The prompt is *not* replaced on a right answer: it
+    /// stands, lit, until the drill's `advance` retires it.
+    pub(super) fn mark(&mut self, answer: A, right: bool) {
+        if self.correct.is_some() {
+            return;
+        }
+
+        if right {
+            self.streak += 1;
+            self.best = self.best.max(self.streak);
+            self.correct = Some(answer);
+        } else {
+            // Deduplicated so hammering one wrong button cannot grow this without bound.
+            if !self.wrong.contains(&answer) {
+                self.wrong.push(answer);
+            }
+            self.streak = 0;
+        }
+    }
+
+    /// Zeroes the run without touching the best of the session. A skip and a settings change
+    /// break it for the reason a wrong answer does: a streak that counted across them would
+    /// not measure recall.
+    pub(super) fn break_streak(&mut self) {
+        self.streak = 0;
+    }
+
+    /// Clears the marks for a fresh prompt. The streak carries on; that is what a streak is.
+    pub(super) fn next_prompt(&mut self) {
+        self.wrong.clear();
+        self.correct = None;
+    }
+
+    /// Whether a correct answer is lit, which is the window the flash timer runs in.
+    pub(super) fn is_flashing(&self) -> bool {
+        self.correct.is_some()
+    }
+
+    pub(super) fn streak(&self) -> u32 {
+        self.streak
+    }
+
+    pub(super) fn best(&self) -> u32 {
+        self.best
+    }
+
+    pub(super) fn wrong(&self) -> &[A] {
+        &self.wrong
+    }
+
+    pub(super) fn correct(&self) -> Option<A> {
+        self.correct
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,5 +357,51 @@ mod tests {
             assert_eq!(answer_at(index), Some(choice.interval));
         }
         assert_eq!(answer_at(ANSWERS.len()), None);
+    }
+
+    #[test]
+    fn a_right_answer_scores_and_holds_until_the_next_prompt() {
+        let mut score = Score::default();
+        score.mark('a', true);
+
+        assert_eq!((score.streak(), score.best()), (1, 1));
+        assert_eq!(score.correct(), Some('a'));
+        assert!(score.is_flashing());
+
+        // The tail of the press that scored: neither a second point nor a wrong mark.
+        score.mark('a', true);
+        score.mark('b', false);
+        assert_eq!(score.streak(), 1, "an answer during the flash counted");
+        assert!(
+            score.wrong().is_empty(),
+            "an answer during the flash was marked wrong"
+        );
+
+        score.next_prompt();
+        assert!(!score.is_flashing());
+        assert_eq!(score.streak(), 1, "a new prompt broke the run");
+    }
+
+    #[test]
+    fn wrong_answers_accumulate_once_each_and_break_only_the_run() {
+        let mut score = Score::default();
+        score.mark('a', true);
+        score.next_prompt();
+        score.mark('a', true);
+        score.next_prompt();
+
+        for wrong in ['x', 'y', 'x'] {
+            score.mark(wrong, false);
+        }
+
+        assert_eq!(
+            score.wrong(),
+            ['x', 'y'],
+            "a repeated wrong answer was marked twice"
+        );
+        assert_eq!((score.streak(), score.best()), (0, 2));
+
+        score.break_streak();
+        assert_eq!(score.best(), 2, "breaking the run touched the best");
     }
 }
