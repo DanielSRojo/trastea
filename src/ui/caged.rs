@@ -16,12 +16,15 @@ use iced::{Color, Element};
 
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::shapes::{Voicing, voicings};
+use super::style::{
+    BODY, CANVAS, INK, LINK, MUSIC_FONT, MUTE, ROOT_MARKER, SMUFL_FLAT, card_container,
+    control_button, control_glyph, control_label, control_shuffle, focus_ring, ghost_button,
+    selected_root_button,
+};
 use super::{
-    BODY, CAGED_NECK, CANVAS, FocusTarget, INK, LINK, MUSIC_FONT, MUTE, Message, Notation,
-    ROOT_MARKER, ROOT_SELECTOR_CARD_WIDTH, SELECTOR_CARD_HEIGHT, SMUFL_FLAT, SUMMARY_CARD_HEIGHT,
-    SUMMARY_NAME_SIZE, card_container, control_button, control_glyph, control_label,
-    control_shuffle, focus_ring, ghost_button, intervalic_text, marker_label, note_label,
-    root_row_spans, root_square, selected_root_button,
+    CAGED_NECK, FocusTarget, Message, Notation, ROOT_SELECTOR_CARD_WIDTH, SELECTOR_CARD_HEIGHT,
+    SUMMARY_CARD_HEIGHT, SUMMARY_NAME_SIZE, intervalic_text, marker_label, note_label,
+    root_row_spans, root_square,
 };
 
 /// The quality the window shows. Major because it is the only one whose shapes are a cycle:

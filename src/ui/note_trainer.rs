@@ -12,12 +12,14 @@
 use iced::{Color, Element, Padding};
 
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
+use super::style::{
+    BODY, CANVAS, CONTROL_SIZE, DANGER, INK, LINK, MUTE, SUCCESS, card_container,
+    control_accidental, control_button, control_label, control_shuffle, correct_answer_button,
+    focus_ring, ghost_button, spelling_glyph, streak_readout, wrong_answer_button,
+};
 use super::{
-    ANSWER_ROW_WIDTH, BODY, CANVAS, CONTROL_SIZE, CURSOR_HOME, DANGER, DRILL_NECK, Direction,
-    Drill, FocusTarget, INK, LINK, MUTE, Message, NECK_STRINGS, ROOT_BUTTON_SIZE,
-    SELECTOR_CARD_HEIGHT, SUCCESS, SUMMARY_CARD_HEIGHT, card_container, control_accidental,
-    control_button, control_label, control_shuffle, correct_answer_button, focus_ring,
-    ghost_button, note_label, spelling_glyph, streak_readout, wrong_answer_button,
+    ANSWER_ROW_WIDTH, CURSOR_HOME, DRILL_NECK, Direction, Drill, FocusTarget, Message,
+    NECK_STRINGS, ROOT_BUTTON_SIZE, SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT, note_label,
 };
 use crate::music::notes::{PitchClass, Spelling};
 use crate::rng::Rng;
@@ -656,10 +658,9 @@ fn note_answer_row(
 
 #[cfg(test)]
 mod tests {
+    use super::super::style::{SMUFL_FLAT, SMUFL_SHARP};
     use super::super::tests::{app_with_seed, every_screen, press_into, press_named};
-    use super::super::{
-        App, Notation, SMUFL_FLAT, SMUFL_SHARP, Screen, accelerators_for, translate_key,
-    };
+    use super::super::{App, Notation, Screen, accelerators_for, translate_key};
     use super::*;
     use crate::ui::WalkTheScale;
     use iced::keyboard;

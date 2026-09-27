@@ -19,10 +19,13 @@ use iced::{Color, Element, Length, Padding};
 
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
+use super::style::{
+    BODY, DANGER, INK, MUTE, ROOT_MARKER, SUCCESS, card_container, control_button, control_shuffle,
+    streak_readout,
+};
 use super::{
-    ANSWERS, BODY, DANGER, DRILL_NECK, FocusTarget, INK, MUTE, Message, Position, ROOT_MARKER,
-    SUCCESS, SUMMARY_CARD_HEIGHT, card_container, choice_for, control_button, control_shuffle,
-    interval_label, neck, streak_readout,
+    ANSWERS, DRILL_NECK, FocusTarget, Message, Position, SUMMARY_CARD_HEIGHT, choice_for,
+    interval_label, neck,
 };
 use crate::audio::detect::Heard;
 use crate::music::intervals::Interval;

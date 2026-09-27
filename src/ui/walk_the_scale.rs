@@ -22,10 +22,13 @@ use iced::{Color, Element, Length, Padding, Point, Rectangle, Renderer, Size, Th
 
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
+use super::style::{
+    BODY, CONTROL_SIZE, DANGER, INK, LINK, MUSIC_FONT, MUTE, SUCCESS, card_container,
+    control_button, control_label, control_shuffle,
+};
 use super::{
-    BODY, CONTROL_SIZE, CURSOR_HOME, DANGER, DRILL_NECK, Direction, FocusTarget, INK, LINK,
-    MUSIC_FONT, MUTE, Message, NECK_STRINGS, SUCCESS, card_container, control_button,
-    control_label, control_shuffle, kind_row_spans, note_label, scale_kind_row,
+    CURSOR_HOME, DRILL_NECK, Direction, FocusTarget, Message, NECK_STRINGS, kind_row_spans,
+    note_label, scale_kind_row,
 };
 use crate::audio::detect::Heard;
 use crate::music::intervals::Interval;

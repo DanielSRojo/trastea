@@ -21,10 +21,11 @@ use iced::{
 use crate::music::notes::Spelling;
 
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
-use super::{
-    BODY, FocusTarget, INK, MUSIC_FONT, MUTE, Message, SMUFL_FLAT, SMUFL_SHARP, SUCCESS,
-    control_accidental, control_button, note_label, spelling_glyph,
+use super::style::{
+    BODY, INK, MUSIC_FONT, MUTE, SMUFL_FLAT, SMUFL_SHARP, SUCCESS, control_accidental,
+    control_button, spelling_glyph,
 };
+use super::{FocusTarget, Message, note_label};
 
 /// How far from a pitch still counts as in tune.
 ///

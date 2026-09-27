@@ -22,9 +22,10 @@ use crate::audio::input::{
 };
 use crate::music::pitch::{Cents, Pitch};
 
-use super::{
-    BODY, FocusTarget, MUTE, Message, card_button, focus_ring, ghost_button, row_button,
-    selected_row_button,
+use super::{FocusTarget, Message};
+
+use super::style::{
+    BODY, MUTE, card_button, focus_ring, ghost_button, row_button, selected_row_button,
 };
 
 /// What the screen is doing, which is not the same question as what it is hearing.

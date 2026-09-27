@@ -11,12 +11,12 @@ use crate::music::notes::{PitchClass, Spelling};
 
 use super::chord_diagram::{ChordDiagram, FEATURE, STRIP, StringMark, chord_diagram};
 use super::shapes::{Voicing, position_label, voicings};
-use super::{
-    BODY, DRILL_NECK, FEEL_FONT, FocusTarget, HAIRLINE_INK, INK, MUSIC_FONT, MUTE, Message,
-    Notation, SMUFL_CSYM_AUGMENTED, SMUFL_CSYM_DIMINISHED, SMUFL_CSYM_HALF_DIMINISHED,
-    SMUFL_CSYM_MAJOR_SEVENTH, SMUFL_SHARP, SUCCESS, card_container, focus_ring, ghost_button,
-    hairline_rule, intervalic_text, note_label,
+use super::style::{
+    BODY, FEEL_FONT, HAIRLINE_INK, INK, MUSIC_FONT, MUTE, SMUFL_CSYM_AUGMENTED,
+    SMUFL_CSYM_DIMINISHED, SMUFL_CSYM_HALF_DIMINISHED, SMUFL_CSYM_MAJOR_SEVENTH, SMUFL_SHARP,
+    SUCCESS, card_container, focus_ring, ghost_button, hairline_rule,
 };
+use super::{DRILL_NECK, FocusTarget, Message, Notation, intervalic_text, note_label};
 
 /// The library's state: what has been typed, which root it settled on, and what is picked.
 ///

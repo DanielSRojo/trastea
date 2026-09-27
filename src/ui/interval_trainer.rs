@@ -16,13 +16,15 @@
 use iced::{Color, Element, Padding};
 
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
+use super::style::{
+    BODY, CANVAS, CONTROL_SIZE, DANGER, INK, LINK, MUTE, ROOT_MARKER, SUCCESS, card_container,
+    control_button, control_label, control_shuffle, correct_answer_button, focus_ring,
+    ghost_button, streak_readout, wrong_answer_button,
+};
 use super::{
-    ANSWER_ROW_WIDTH, ANSWERS, BODY, CANVAS, CONTROL_SIZE, CURSOR_HOME, DANGER, DRILL_NECK,
-    Direction, Drill, FocusTarget, INK, LINK, MUTE, Message, NECK_STRINGS, Position,
-    ROOT_BUTTON_SIZE, ROOT_MARKER, SELECTOR_CARD_HEIGHT, SUCCESS, SUMMARY_CARD_HEIGHT,
-    card_container, choice_for, control_button, control_label, control_shuffle,
-    correct_answer_button, focus_ring, ghost_button, interval_label, neck, streak_readout,
-    wrong_answer_button,
+    ANSWER_ROW_WIDTH, ANSWERS, CURSOR_HOME, DRILL_NECK, Direction, Drill, FocusTarget, Message,
+    NECK_STRINGS, Position, ROOT_BUTTON_SIZE, SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT,
+    choice_for, interval_label, neck,
 };
 use crate::music::intervals::Interval;
 use crate::rng::Rng;
