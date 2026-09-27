@@ -17,9 +17,8 @@ listens the same way two of the drills do: plug a guitar into an audio interface
 names what it hears. Everything is reachable
 from the keyboard — the mouse is optional.
 
-> **Status: early.** The four drills, the scale trainer, the chord library and the CAGED
-> window all work. The
-> library's shape table is the part still worth growing: five CAGED shapes and a handful of
+> **Status: early.** The four drills, the scale trainer, the chord library, the CAGED
+> window and the tuner all work. The library's shape table is the part still worth growing: five CAGED shapes and a handful of
 > reduced ones cover the fifteen qualities, and every chord it offers is one a hand can hold.
 > The CAGED window is a major-triad screen for the same reason — E and A are the only letters
 > the table carries for the sevenths.
@@ -70,7 +69,8 @@ same listener the played drill and the tuner use and the one the screen opens on
 about finding a degree on the instrument, and the neck is what you fall back to. The device is
 claimed on entering the screen rather than at startup, so an app that never opens this screen
 never listens. `t` sets a duration, after which the run
-stops and says how many sequences it completed; `n` hides the neck outright, offered only
+stops and says how many sequences it completed, and `p` starts another of the same length;
+`m`, `t` and `n` are offered only while a run is going. `n` hides the neck outright, offered only
 while playing, since in pressing mode the neck is the surface the answer is given on. `r`
 picks another scale to drill. `t` and `n` report what they are set to in the `?` overlay
 rather than only naming what the key does.
@@ -160,7 +160,7 @@ neck that ends on a marked fret looks deliberate. The screen states how many sha
 rather than promising five — five is what a major triad yields, and a minor one yields the
 three a guitarist is actually taught.
 
-**Tuner** — the one screen that listens. Plug a guitar into an audio interface, pick the
+**Tuner** — the one screen that listens without asking anything. Plug a guitar into an audio interface, pick the
 input, and it names the pitch it hears and says how far off it is in cents. It is chromatic
 rather than six-string: it names the nearest of all twelve pitch classes in whatever octave it
 hears, so a capo and an alternate tuning need nothing said about them and drop D is just D2.
@@ -173,7 +173,7 @@ flat at the ♭ to half a semitone sharp at the ♯, with a fixed mark at the to
 at, and it turns green where the name does. Which way to turn the peg is said in words under
 the dial — a learner reading the dot's side of centre has to hold "left means flat" as well,
 and the words are the same length either way. `d` picks the input device and `i` switches the
-name between its sharp and flat spellings.
+name between its sharp and flat spellings, which the ♯/♭ control under the dial also shows.
 
 Nothing is named unless the app is sure. A reading has to clear a confidence threshold *and*
 agree with the readings before it, which is what makes a strummed chord produce no name at all
@@ -300,12 +300,13 @@ focus stop for the arrows to be claimed on. A key that holds a setting rather th
 screen's `t` reads `timer: 5:00` and its `n` reads `neck: hidden`, which is why an
 accelerator's label is a `Cow<'static, str>` and not a `&'static str`.
 
-Three widgets claim the motion keys rather than letting them move the focus ring: a trainer's
+Four widgets claim the motion keys rather than letting them move the focus ring: a trainer's
 neck, which walks its cursor — Walk the Scale's does too, while it is being answered by
 pressing; the CAGED window's shape row, where `← →` change the selection
-outright so walking the cycle is one gesture rather than focus-then-activate; and the input
+outright so walking the cycle is one gesture rather than focus-then-activate; the library's
+chord list, where `↑ ↓` walk the chords and `← →` the selected chord's voicings; and the input
 list, which claims `↑ ↓` for the same reason while it is open, on whichever screen opened it.
-Tab is the way out of the first two, and `Esc` closes the third without leaving the screen —
+Tab is the way out of the first three, and `Esc` closes the fourth without leaving the screen —
 the same thing it does to the library's search box.
 
 The Chord Library adds the one modal thing in the app: a search box, opened with `/` or
@@ -350,7 +351,7 @@ src/
     play_the_interval.rs the played drill's, with the gate that decides when a reading is
                          an answer
     listener.rs          the capture device as the screens hold it: what it heard, the
-                         picker, and the four states — belonging to neither screen that listens
+                         picker, and the four states — belonging to none of the screens that listen
     fretboard.rs         the neck as an iced canvas widget: one Layout drives both drawing
                          and hit-testing, held together by a round-trip test
     chord_diagram.rs     one voicing as a canvas: a fret window, mutes, barres — its own
@@ -423,16 +424,16 @@ minor comes out fingered like E major with the third lifted, rather than renumbe
 The device took the same route the shapes did, one release later. `Listening`, the confirming
 tracker, the picker and the poll were fields of `Tuner` while the Tuner was the only screen
 that listened; the played drill wanting all four is what moved them into `listener.rs` rather
-than what made one screen import another. The two screens hold one each and only one ever has
+than what made one screen import another. The three screens that listen hold one each and only one ever has
 a stream open — `leaving_for` closes it on the way out, which is also what lets the audio
 messages be routed by the screen on show rather than carrying a screen's name. That routing
 would be wrong for the trainers' flash timers, where both can genuinely be mid-flash at once,
 and it is right here for exactly the reason it is wrong there.
 
-`note_trainer.rs`, `interval_trainer.rs`, `play_the_interval.rs`, `chord_library.rs` and
-`caged.rs` each keep their
-state and their views together so the state can keep its fields private — they are read all
-over those views and nowhere else. `App` drives all four through the methods they mark
+`walk_the_scale.rs`, `note_trainer.rs`, `interval_trainer.rs`, `play_the_interval.rs`,
+`chord_library.rs`, `caged.rs` and `tuner.rs` each keep their state and their views together
+so the state can keep its fields private — they are read all over those views and nowhere
+else. `App` drives them all through the methods they mark
 `pub(super)` and never reaches past them; what the neck *is* stays in `mod.rs`, since that is
 the instrument rather than the drill, and they all want it on the same terms. The CAGED window
 keeps only a root and an index into the shapes that root produced: the cycle itself is derived

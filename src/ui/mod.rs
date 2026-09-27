@@ -1162,8 +1162,8 @@ impl App {
 
     /// What a screen has to put down on the way out.
     ///
-    /// Only the Tuner has anything: it holds an open capture device, and an audio
-    /// interface is a device other programs want. Both navigation paths call this, which
+    /// The screens that listen hold an open capture device, and an audio interface is a
+    /// device other programs want. Both navigation paths call this, which
     /// is what stops the two from disagreeing about it.
     fn leaving_for(&mut self, next: &Screen) {
         if self.screen == *next {
@@ -2166,14 +2166,14 @@ fn accelerators_for(screen: &Screen, notation: Notation, drill: &WalkTheScale) -
             ('r', FocusTarget::RerollScale, "new scale".into()),
             ('i', FocusTarget::NotationToggle, "interval notation".into()),
         ],
-        // `r` and `i` mean here what they mean on the Scale Trainer. The rest belong to the
+        // `r` means here what it means on the Scale Trainer. The rest belong to the
         // drill, and three of them report the setting they hold rather than only naming what
         // the key does, which is why the label is a `Cow` and this arm is built rather than
         // listed.
         Screen::WalkTheScale => {
             // `[` and `]` rather than the arrows: the ring still has sixteen kinds to walk on
-            // this screen, and the three widgets elsewhere that claim the motion keys are all
-            // focus stops a Tab can leave. The root display is deliberately not one.
+            // this screen, and every other widget that claims the motion keys is either a focus
+            // stop a Tab can leave or a list `Esc` closes. The root display is neither.
             let mut keys: Vec<Accelerator> = vec![
                 ('r', FocusTarget::RerollDrillScale, "new scale".into()),
                 ('[', FocusTarget::DrillRootDown, "root down".into()),

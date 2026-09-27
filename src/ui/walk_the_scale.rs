@@ -116,7 +116,7 @@ enum Mode {
     },
 }
 
-/// The Scale Trainer's drill.
+/// The scale drill.
 ///
 /// No iced types, so the sequence, the gate and the streak rules are testable without a
 /// widget tree — and, because `Listener::apply` is the seam, without a capture device.
