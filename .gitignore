@@ -2,6 +2,7 @@ target/
 .agents/
 .claude/
 .codegraph/
+.direnv/
 .env*
 .omo/
 CLAUDE.md

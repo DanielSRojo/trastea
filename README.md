@@ -255,7 +255,9 @@ binary at compile time.
 **On Linux, `cpal` builds against ALSA**, so the headers have to be present:
 `libasound2-dev` on Debian and Ubuntu, `alsa-lib` on Arch, `alsa-lib-devel` on Fedora. This
 is the one thing here that is not satisfied by a Rust toolchain alone, and it applies to
-`cargo install trastea` as much as to a checkout. macOS needs no equivalent.
+`cargo install trastea` as much as to a checkout. macOS needs no equivalent. On NixOS there is
+no global place for headers to land, so `nix develop` enters a shell with ALSA, `pkg-config`,
+the libraries the window opens against, and the toolchain `rust-toolchain.toml` pins.
 
 Contributors can install [`just`](https://just.systems) and run `just` to see the repo's
 recipes; `just ci` runs the same gate CI runs, and needs those ALSA headers on Linux.
