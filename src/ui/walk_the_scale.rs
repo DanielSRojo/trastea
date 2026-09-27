@@ -108,7 +108,12 @@ struct Run {
 /// own rather than the absence of one, which is why this is not an `Option<Run>`.
 enum Mode {
     Running(Run),
-    Ended { completed: u32, best_streak: u32 },
+    Ended {
+        completed: u32,
+        best_streak: u32,
+        /// What the run was set to, so "again" means the same run again.
+        duration: Option<Duration>,
+    },
 }
 
 /// The Scale Trainer's drill.
@@ -326,8 +331,7 @@ impl WalkTheScale {
 
     /// Starts another run after one has ended on its duration.
     pub(super) fn restart(&mut self) {
-        let duration = self.run().and_then(|run| run.duration);
-        self.begin(duration);
+        self.begin(self.duration());
     }
 
     pub(super) fn is_flashing(&self) -> bool {
@@ -368,6 +372,7 @@ impl WalkTheScale {
             Mode::Ended {
                 completed,
                 best_streak,
+                ..
             } => Some((*completed, *best_streak)),
             _ => None,
         }
@@ -395,6 +400,7 @@ impl WalkTheScale {
         self.mode = Mode::Ended {
             completed: 0,
             best_streak: self.best_streak,
+            duration: self.duration(),
         };
         self.release();
     }
@@ -451,7 +457,10 @@ impl WalkTheScale {
     }
 
     pub(super) fn duration(&self) -> Option<Duration> {
-        self.run().and_then(|run| run.duration)
+        match &self.mode {
+            Mode::Running(run) => run.duration,
+            Mode::Ended { duration, .. } => *duration,
+        }
     }
 
     /// A position pressed on the neck. Inert in playing mode, where the answer is given on
@@ -572,14 +581,15 @@ impl WalkTheScale {
     /// One second of a timed run. Ends it when the duration is spent.
     pub(super) fn tick(&mut self) {
         let ended = match &self.mode {
-            Mode::Running(run) if run.is_over() => Some((run.completed, self.best_streak)),
+            Mode::Running(run) if run.is_over() => Some((run.completed, run.duration)),
             _ => None,
         };
 
-        if let Some((completed, best_streak)) = ended {
+        if let Some((completed, duration)) = ended {
             self.mode = Mode::Ended {
                 completed,
-                best_streak,
+                best_streak: self.best_streak,
+                duration,
             };
             self.release();
         }
@@ -2171,6 +2181,11 @@ mod tests {
 
         assert!(app.walk_the_scale.is_running());
         assert_eq!(app.walk_the_scale.progress(), Some((0, 7)));
+        assert_eq!(
+            app.walk_the_scale.duration(),
+            Some(Duration::from_secs(180)),
+            "another run forgot the duration of the last"
+        );
     }
 
     #[test]
