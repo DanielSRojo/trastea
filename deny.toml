@@ -41,6 +41,15 @@ ignore = [
     # turns into an actual vulnerability advisory rather than a maintenance one.
     "RUSTSEC-2026-0192",
 
+    # zvariant, zvariant_derive and zbus_names, unmaintained as standalone crates now that
+    # zbus 6 absorbs them, no safe upgrade. These ship on Linux: iced's default
+    # linux-theme-detection feature pulls in mundy, which reads the desktop colour scheme
+    # over D-Bus through zbus 5. mundy 0.2.3 and iced_winit 0.14.1 both still sit on zbus 5,
+    # so nothing inside iced 0.14 clears them. Gone when mundy moves to zbus 6.
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
+
     # A yanked version rather than an advisory, and Windows-only: uds_windows is in the
     # lockfile via zbus but is in the graph for neither target release.yaml builds. Ignored
     # by crate rather than by raising `yanked` to a warning, so a yanked crate that does
