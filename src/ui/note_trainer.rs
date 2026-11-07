@@ -1377,6 +1377,25 @@ mod tests {
         let _ = app.update(Message::GoBack);
         let _ = app.view();
 
+        // The Position Finder: a note heard, its groups shown, mid-walk, and with a picker up.
+        app.open(Screen::PositionFinder);
+        let _ = app.update(Message::Fitted(
+            crate::audio::detect::Heard::Pitch(crate::audio::detect::Detection::synthesized(
+                329.63, 0.999,
+            )),
+            None,
+        ));
+        let _ = app.view();
+        let _ = app.update(Message::TogglePositionGroups);
+        let _ = app.view();
+        let _ = app.update(Message::Calibrate);
+        let _ = app.view();
+        let _ = app.update(Message::OpenDevices);
+        let _ = app.view();
+        let _ = app.update(Message::GoBack);
+        let _ = app.update(Message::GoBack);
+        let _ = app.view();
+
         app.open(Screen::NoteTrainer);
 
         for _ in 0..2 {

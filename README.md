@@ -183,6 +183,34 @@ rather than a confident wrong one — measured on a real guitar, held notes scor
 where the best frame of a strum reaches 0.987. Silence is drawn as silence, and not as a dot
 resting at the top of the arc, which would read as a note perfectly in tune.
 
+**Position Finder** — the question a learner actually asks of a neck: *where did I just play
+that?* One pitch sits at up to four places on twelve frets, and those places sound the same
+note at the same frequency, so the Tuner cannot say which. What tells them apart is timbre: a
+stiff string's upper partials run sharp of whole multiples of its fundamental, by an amount
+that depends on the string's core and on how much of it is sounding. The screen measures that,
+compares it with what each candidate position predicts, and draws the answer on the neck — one
+position lit when one candidate stands clear of the rest, the positions it cannot split lit
+the same way with nothing ranked among them, and nothing lit when it can rule nothing out.
+The pitch and its octave are named above either way.
+
+A group is an honest answer rather than a failure. The A3 at the D string's 7th fret and the
+G string's 2nd is expected to be one on most guitars: the wound D's thicker core and the
+fret further up the plain G push in opposite directions and nearly cancel, and a recorded
+spike on a Stratocaster found the two indistinguishable on fresh strings and either pickup —
+while the A string's 12th fret, the third place A3 sits, separated from both by a wide margin.
+`g` shows every group the calibration predicts on the neck before anything is played, so a
+group drawn later is the one the screen said it would draw.
+
+It needs a calibration first. `c` walks the twelve readings it learns the guitar from — each
+string open and at its twelfth fret, low E first — and asks again for any it could not read
+cleanly or that was the wrong note. `Esc` leaves the walk and keeps whatever was kept before
+it; only a completed walk replaces it. Without a calibration the screen still names every pitch
+it hears and says what it lacks. It needs a clean signal, too: distortion turns the partial
+series into intermodulation and no gate can recover it. A bent or slid note is declined rather
+than placed, since it sounds the pitch of one fret with the inharmonicity of another. The drills
+still judge by pitch class — this screen answers rather than asks, and the drills adopt
+position judging, if ever, once it has been watched on real guitars for a while.
+
 ## Installing
 
 Two ways in: `cargo` builds it from source on any platform iced supports, and a tagged
@@ -292,8 +320,8 @@ two read as marks from different families.
 Per-screen accelerators are declared in one table alongside the label the `?` overlay shows
 for them, so a new accelerator documents itself. A key not claimed by the current screen is
 inert there — and one claimed by two screens is free to mean different things on each: `d`
-swaps a trainer's direction, picks the library's degrees, and opens the input list on both
-screens that listen. `r` is the one key that means the same thing everywhere it is bound —
+swaps a trainer's direction, picks the library's degrees, and opens the input list on every
+screen that listens. `r` is the one key that means the same thing everywhere it is bound —
 replace what is on screen — including on Walk the Scale, where it picks another scale to
 drill. That screen's `[` and `]` step its root down and up from wherever the ring is standing;
 they are brackets rather than `← →` because the arrows belong to the ring, which still has
@@ -322,6 +350,11 @@ without clearing it, and `gg` and `G` reach the ends of the list.
 `/` and `?` are the same physical key, which is the whole arrangement: search, and shift for
 help.
 
+The Position Finder claims three keys: `d` for the input list, as on every screen that listens;
+`c` to walk a calibration; and `g` to show the groups that calibration will not split. Its
+calibration walk is the second thing `Esc` leaves before the screen: the first press ends the
+walk without replacing the calibration already kept, and only a second leaves.
+
 ## Layout
 
 ```
@@ -338,7 +371,12 @@ src/
                          way scales are; the symbol grammar, read in both directions
   audio/                 samples in, hertz out; imports neither iced nor music/
     detect.rs            McLeod pitch detection — a difference function, not an FFT
-    input.rs             the capture device, and the only untestable file in the tree
+    fft.rs               a hand-rolled radix-2 transform, for the partials rather than f₀
+    inharmonicity.rs     how far a string's partials sit sharp of harmonic — a second
+                         analysis of the same audio, on a longer window, beside detection
+    input.rs             the capture device, and the only untestable file in the tree;
+                         keeps a fit window's worth of history beside detection's window,
+                         because the fit reads further back than detection drains
   ui/
     mod.rs               App, Screen, Message — update, view and the subscription — the
                          Home view, and the root buttons and formula tokens that three
@@ -347,6 +385,10 @@ src/
                          control and container styles every screen builds from
     neck.rs              the tuning, Neck and the two necks the screens draw, and a
                          Position on one — the instrument, shared by every screen
+    calibration.rs       the guitar in the room: each string's inharmonicity open and at
+                         the twelfth fret — instrument knowledge measured, not tabulated
+    position.rs          which of the positions carrying a pitch was played, from its
+                         inharmonicity and the calibration — named, narrowed, or not named
     drill.rs             which way a drill runs, and the twelve nameable distances both
                          interval drills ask for
     focus.rs             FocusTarget, each screen's focus grid, and how the ring steps
@@ -373,6 +415,8 @@ src/
     caged.rs             the CAGED window's state and the screen that draws it
     tuner.rs             the Tuner's spelling and correction, and the dial as a canvas — one
                          Dial places the arc the canvas draws and the name stacked over it
+    position_finder.rs   the Position Finder's state machine and the screen that draws it —
+                         one answer per note, and the calibration walk as a mode of it
 ```
 
 The split is load-bearing: `music/` never imports iced, and the UI holds no music theory of
@@ -380,7 +424,10 @@ its own. `audio/` holds the same line one step further out — it reports hertz 
 about notes, because naming a frequency is theory's job and `music/pitch.rs` already does it.
 That is also what makes the detector testable: a test asserting "82.41 Hz within a cent" needs
 a sine wave and no musical vocabulary at all, and every one of them runs with no device
-present. `input.rs` is the only file in the tree that cannot be tested, which is the whole
+present. The inharmonicity fit is a separate analysis rather than a field on detection's
+reading because it wants four times the window and runs a few times a note rather than every
+hop; folding it in would slow the path the Tuner and the drills read for nothing they use.
+`input.rs` is the only file in the tree that cannot be tested, which is the whole
 reason the seam sits where it does — opening a device, de-interleaving it and handing samples
 across a thread boundary is all it is allowed to do, and every decision lives on the other
 side of it. Scale spelling is arithmetic over degree numbers rather than a table of key
@@ -391,6 +438,18 @@ exactly level fall back to what the note is conventionally called. Chords are na
 same rule, which is why a group in the library can hold both spellings of one pitch class:
 `D♭ F A♭` costs two flats where `C♯ E♯ G♯` costs three sharps, so pitch class 1 is a `D♭`
 major triad and a `C♯` minor one.
+
+The position estimator sits beside `neck.rs` in `ui/` because it chooses among the positions
+`Neck` already holds, and like the tuning it is instrument knowledge — neither theory, nor
+audio, nor any one screen's. `neck.rs`, `shapes.rs`, `calibration.rs` and `position.rs` are
+now four files of that kind under `ui/`; whether they earn an `instrument/` module of their own
+is a later question, deferred because moving them changes no behaviour.
+
+A calibration belongs to one guitar and one set of strings. A string's inharmonicity follows
+its core, its tension and its length, so a string change, a string retuned — dropping the low E
+to D included — or simply strings ageing moves the coefficients the record holds, and the
+record has to be captured again. It is twelve numbers in plain text beside the remembered
+input device, and a record that cannot be read is the same as none.
 
 The shapes sit in `shapes.rs` rather than inside a screen because two screens place them. A
 movable shape is instrument knowledge, like the tuning and the neck itself, and a screen
@@ -435,7 +494,7 @@ minor comes out fingered like E major with the third lifted, rather than renumbe
 The device took the same route the shapes did, one release later. `Listening`, the confirming
 tracker, the picker and the poll were fields of `Tuner` while the Tuner was the only screen
 that listened; the played drill wanting all four is what moved them into `listener.rs` rather
-than what made one screen import another. The three screens that listen hold one each and only one ever has
+than what made one screen import another. The four screens that listen hold one each and only one ever has
 a stream open — `leaving_for` closes it on the way out, which is also what lets the audio
 messages be routed by the screen on show rather than carrying a screen's name. That routing
 would be wrong for the trainers' flash timers, where both can genuinely be mid-flash at once,

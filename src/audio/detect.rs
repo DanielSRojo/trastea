@@ -24,7 +24,7 @@ const MAX_HZ: f32 = 900.0;
 const PEAK_THRESHOLD: f32 = 0.97;
 
 /// Below this RMS, a window is silence rather than a quiet note.
-const LEVEL_GATE: f32 = 0.005;
+pub(super) const LEVEL_GATE: f32 = 0.005;
 
 /// How sure the detector must be before a reading is worth releasing.
 ///
@@ -40,6 +40,10 @@ const STABLE_RUN: usize = 3;
 ///
 /// Generous so a fast bend (about 7 cents per window) gets through; octave jumps miss by 1200.
 const STABLE_CENTS: f32 = 20.0;
+
+/// How far a note may move from where it began and still count as struck there: half a
+/// semitone, past which the pitch names a different fret than the one under the finger.
+const SLID_CENTS: f32 = 50.0;
 
 /// What one window of audio sounded like.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,17 +61,36 @@ pub struct Detection {
     hz: f32,
     /// 1.0 is a pure repeating waveform; a strummed chord sits near 0.5.
     clarity: f32,
+    /// Where the note began: the same as `hz` for one window, and set by [`Tracker`] to the
+    /// first reading of the run it releases, so a bend remembers the fret it left.
+    onset_hz: f32,
 }
 
 impl Detection {
     /// Builds a reading directly, for tests that drive a screen without a device.
     #[cfg(test)]
     pub fn synthesized(hz: f32, clarity: f32) -> Detection {
-        Detection { hz, clarity }
+        Detection {
+            hz,
+            clarity,
+            onset_hz: hz,
+        }
+    }
+
+    /// The same reading, as if the note had begun at `onset_hz` and moved here.
+    #[cfg(test)]
+    pub fn slid_from(self, onset_hz: f32) -> Detection {
+        Detection { onset_hz, ..self }
     }
 
     pub fn hz(self) -> f32 {
         self.hz
+    }
+
+    /// Whether the note got to this pitch through a run of moving readings — a bend or a
+    /// slide — rather than starting on it.
+    pub fn arrived_by_sliding(self) -> bool {
+        cents_between(self.onset_hz, self.hz).abs() > SLID_CENTS
     }
 }
 
@@ -97,13 +120,15 @@ fn analyse(samples: &[f32], sample_rate: f32, min_hz: f32, max_hz: f32) -> Heard
         return Heard::Unpitched;
     };
 
+    let hz = sample_rate / lag;
     Heard::Pitch(Detection {
-        hz: sample_rate / lag,
+        hz,
         clarity,
+        onset_hz: hz,
     })
 }
 
-fn rms(samples: &[f32]) -> f32 {
+pub(super) fn rms(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return 0.0;
     }
@@ -208,6 +233,8 @@ fn refine(nsdf: &[f32], lag: usize) -> f32 {
 pub struct Tracker {
     /// Consecutive confident readings, most recent last, at most `STABLE_RUN` long.
     run: Vec<Detection>,
+    /// The first reading since the run last restarted, which outlives the readings `run` drops.
+    onset_hz: Option<f32>,
 }
 
 impl Tracker {
@@ -219,12 +246,12 @@ impl Tracker {
     pub fn push(&mut self, heard: Heard) -> Heard {
         let Heard::Pitch(detection) = heard else {
             // so a stale reading cannot outlive its sound
-            self.run.clear();
+            self.restart();
             return heard;
         };
 
         if detection.clarity < CLARITY_GATE {
-            self.run.clear();
+            self.restart();
             return Heard::Unpitched;
         }
 
@@ -234,8 +261,14 @@ impl Tracker {
             .last()
             .is_some_and(|last| cents_between(last.hz, detection.hz).abs() > STABLE_CENTS)
         {
-            self.run.clear();
+            self.restart();
         }
+
+        let onset_hz = *self.onset_hz.get_or_insert(detection.hz);
+        let detection = Detection {
+            onset_hz,
+            ..detection
+        };
 
         self.run.push(detection);
         if self.run.len() > STABLE_RUN {
@@ -247,6 +280,11 @@ impl Tracker {
         }
 
         Heard::Pitch(detection)
+    }
+
+    fn restart(&mut self) {
+        self.run.clear();
+        self.onset_hz = None;
     }
 }
 
@@ -547,6 +585,74 @@ mod tests {
         assert!(
             travelled > 150.0,
             "the bend only travelled {travelled} cents of its two semitones"
+        );
+    }
+
+    /// A tone bent from `from` to `to` over `bend` samples, then held at `to` for `hold`.
+    fn bend_and_hold(from: f32, to: f32, bend: usize, hold: usize) -> Vec<f32> {
+        let mut phase = 0.0f32;
+        (0..bend + hold)
+            .map(|i| {
+                let hz = from + (to - from) * (i as f32 / bend as f32).min(1.0);
+                phase += TAU * hz / SR;
+                0.5 * phase.sin()
+            })
+            .collect()
+    }
+
+    fn released_detections(readings: &[Heard]) -> Vec<Detection> {
+        readings
+            .iter()
+            .filter_map(|heard| match heard {
+                Heard::Pitch(detection) => Some(*detection),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_pluck_at_a_fixed_pitch_is_released_as_struck() {
+        let released = released_detections(&track(&plucked(A2, WINDOW * 6), HOP));
+
+        assert!(!released.is_empty());
+        assert!(
+            released
+                .iter()
+                .all(|detection| !detection.arrived_by_sliding()),
+            "a plain pluck read as a slide"
+        );
+    }
+
+    #[test]
+    fn a_held_bend_is_released_as_having_slid_there() {
+        let to = D3 * 2.0f32.powf(1.0 / 12.0);
+        let bent = bend_and_hold(D3, to, (SR * 0.3) as usize, (SR * 0.5) as usize);
+        let released = released_detections(&track(&bent, HOP));
+
+        let last = released.last().expect("a held bend is released");
+        assert!(
+            cents_off(last.hz(), to) < 5.0,
+            "the bend settled on {} rather than {to}",
+            last.hz()
+        );
+        assert!(
+            last.arrived_by_sliding(),
+            "a note held after a semitone bend read as struck there"
+        );
+    }
+
+    #[test]
+    fn silence_forgets_where_the_last_note_began() {
+        let to = D3 * 2.0f32.powf(1.0 / 12.0);
+        let mut samples = bend_and_hold(D3, to, (SR * 0.3) as usize, (SR * 0.2) as usize);
+        samples.extend(vec![0.0; WINDOW * 2]);
+        samples.extend(plucked(to, WINDOW * 4));
+
+        let released = released_detections(&track(&samples, HOP));
+        let last = released.last().expect("the second note is released");
+        assert!(
+            !last.arrived_by_sliding(),
+            "a fresh pluck inherited the bend before the silence"
         );
     }
 

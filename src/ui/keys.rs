@@ -292,6 +292,23 @@ pub(super) fn accelerators_for(
                 "flat names".into(),
             ),
         ],
+        Screen::PositionFinder => vec![
+            (
+                'd',
+                Fires::Widget(FocusTarget::InputDevice),
+                "input device".into(),
+            ),
+            (
+                'c',
+                Fires::Widget(FocusTarget::Calibrate),
+                "calibrate".into(),
+            ),
+            (
+                'g',
+                Fires::Widget(FocusTarget::PositionGroups),
+                "show the groups".into(),
+            ),
+        ],
     }
 }
 

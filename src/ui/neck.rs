@@ -1,6 +1,6 @@
 //! The instrument: string tuning, neck length, and a place on one.
 
-use crate::music::notes::PitchClass;
+use crate::music::notes::{PitchClass, Spelling};
 use crate::music::pitch::Pitch;
 
 use super::focus::Direction;
@@ -51,7 +51,7 @@ impl Neck {
     }
 
     /// The pitch sounding at a position on this neck, or `None` off it.
-    fn pitch_at(&self, string: usize, fret: usize) -> Option<Pitch> {
+    pub(super) fn pitch_at(&self, string: usize, fret: usize) -> Option<Pitch> {
         (fret <= self.frets)
             .then(|| self.tuning.get(string))
             .flatten()
@@ -62,6 +62,24 @@ impl Neck {
     pub(super) fn pitch_class_at(&self, string: usize, fret: usize) -> Option<PitchClass> {
         self.pitch_at(string, fret).map(Pitch::pitch_class)
     }
+
+    /// Every position sounding `pitch`, found from [`Neck::pitch_at`] rather than listed.
+    pub(super) fn positions_of(&self, pitch: Pitch) -> impl Iterator<Item = Position> + '_ {
+        (0..NECK_STRINGS)
+            .flat_map(move |string| (0..=self.frets).map(move |fret| Position { string, fret }))
+            .filter(move |at| self.pitch_at(at.string, at.fret) == Some(pitch))
+    }
+}
+
+/// What a guitarist calls a string: its open note, with the two E strings told apart.
+pub(super) fn string_name(string: usize) -> Option<String> {
+    let letter = Spelling::Sharps.spell(STANDARD_TUNING.get(string)?.pitch_class());
+
+    Some(match string {
+        0 => format!("low {letter}"),
+        last if last == NECK_STRINGS - 1 => format!("high {letter}"),
+        _ => letter.to_string(),
+    })
 }
 
 /// Named fields so a root and target cannot be silently swapped.
@@ -240,6 +258,55 @@ mod tests {
 
     fn at(string: usize, fret: usize) -> Position {
         Position { string, fret }
+    }
+
+    #[test]
+    fn a_pitch_carried_three_times_is_found_at_all_three() {
+        let e4 = STANDARD_TUNING[5];
+        assert_eq!(
+            DRILL_NECK.positions_of(e4).collect::<Vec<_>>(),
+            vec![at(3, 9), at(4, 5), at(5, 0)]
+        );
+    }
+
+    #[test]
+    fn the_lowest_pitch_is_carried_once() {
+        assert_eq!(
+            DRILL_NECK
+                .positions_of(STANDARD_TUNING[0])
+                .collect::<Vec<_>>(),
+            vec![at(0, 0)]
+        );
+    }
+
+    #[test]
+    fn a_pitch_off_the_neck_has_no_positions() {
+        let above = STANDARD_TUNING[5]
+            .transpose(13)
+            .expect("a representable pitch");
+        assert_eq!(DRILL_NECK.positions_of(above).count(), 0);
+    }
+
+    #[test]
+    fn every_position_is_found_from_the_pitch_it_sounds() {
+        for string in 0..NECK_STRINGS {
+            for fret in 0..=DRILL_NECK.frets() {
+                let pitch = DRILL_NECK.pitch_at(string, fret).expect("on the neck");
+                assert!(
+                    DRILL_NECK
+                        .positions_of(pitch)
+                        .any(|found| found == at(string, fret)),
+                    "({string}, {fret}) is missing from the positions of its own pitch"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_strings_are_named_as_a_guitarist_names_them() {
+        let names: Vec<String> = (0..NECK_STRINGS).filter_map(string_name).collect();
+        assert_eq!(names, ["low E", "A", "D", "G", "B", "high E"]);
+        assert_eq!(string_name(NECK_STRINGS), None);
     }
 
     #[test]

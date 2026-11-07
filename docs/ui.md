@@ -291,6 +291,50 @@ list; a picker index is on the screen side of the line that keeps the detector t
 - `hz` is separate from `reading` because one is the measurement and the other the
   interpretation: a string being tuned up moves the hertz continuously while the name stays put.
 - The device list is modal and the screen behind it is not drawn.
+- `fitting` is opt-in, off by default: the inharmonicity fit is the slow path, and only the
+  Position Finder reads it. `poll_fitted` returns the fit beside the reading it belongs to so a
+  screen never holds one without the other; `poll` drops it, so the other screens did not change.
+- When a fit is due is `fit_due`, a pure function of the release and the hops since the note was
+  confirmed: on confirmation, then every `FIT_EVERY` (8) hops, about 85 ms, half a fit window, so
+  consecutive fits overlap rather than reading the same audio twice. A new note re-confirms
+  through the tracker's unpitched hops, which resets the count, so it is fitted on its own
+  confirmation.
+
+## The Position Finder
+
+- One answer per note. A note gathers fits until `FITS_PER_NOTE` (3) are accepted and is then
+  answered once from their median; later fits of the same note are not drawn. The first window
+  can still hold the attack, and a screen that lights one place and then moves it is the thing the
+  spec rules out — showing a pitch and then revising where it came from. A reading with no fit yet
+  leaves the previous answer up rather than showing a bare pitch. A note that ends with fewer
+  fits is answered from what it has, and one whose every fit was refused is named and not placed.
+- A slide and a missing calibration decide the answer without a fit, so those notes are answered
+  on their first reading.
+- The calibration walk takes the same median of three for each of its twelve readings, and asks
+  again — rather than skipping — when a note ends without them. A harmonic reading counts as
+  refused there, since a calibration needs a logarithm. The ringing tail of the reading just
+  recorded is ignored rather than reported as the wrong note for the next step.
+- Groups are linked through neighbours within `MARGIN`, not measured from the best match alone.
+  With three candidates where A–B and B–C are each inside the margin but A–C is not, measuring
+  from the best gives a different group depending on which one the note landed nearest, and no
+  list made before playing could match that. Linking makes the groups a partition, so
+  `position::groups` lists exactly what `estimate` will answer — a test checks every listed group
+  against the estimate at its midpoint.
+- A flagged string's positions join every group at their pitch, because a prediction that did not
+  follow the model cannot rule a candidate out; one is never named alone, even as the only
+  candidate.
+- `FIT_GATE` and `MARGIN` both start at 0.4 in log₂ B, four times run 3's widest take-to-take
+  spread, and are tuned on a real guitar. `RISE_TOLERANCE` starts at 0.5 and the drift constants at
+  0.3; none of them has been measured against a guitar yet.
+- Drift is judged on one miss per answered note — measured minus the nearest prediction, signed —
+  over the last five. Five misses on one side, at least 0.3 out and within 0.3 of each other, read
+  as the strings having moved together; scattered misses read as playing.
+- `calibration::kept_path` is `None` under test, so no test reads the learner's calibration or
+  replaces it on completing a walk. Persistence is tested through `read` and `write` with a
+  temporary path, as for the remembered device.
+- Calibration is a mode, `c`, rather than a screen: a tenth menu entry would sit past the digit
+  accelerators for something done once per string change, and the only screen that reads a
+  calibration is the one that captures it.
 
 ## Style
 
@@ -343,3 +387,5 @@ list; a picker index is on the screen side of the line that keeps the detector t
   and the drawing code needs no `expect`.
 - `Message::ChooseNotePosition` and its siblings take two loose `usize`s so the bare variant
   constructor fits `Fretboard::on_press`'s `fn(usize, usize) -> Message`.
+- `Neck::positions_of` filters every position through `pitch_at` rather than computing frets
+  from the pitch, so the candidates for a pitch and the pitch at a position cannot disagree.

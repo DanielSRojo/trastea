@@ -11,6 +11,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{ErrorKind, SampleFormat};
 
 use super::detect::{HOP, WINDOW};
+use super::inharmonicity::FIT_WINDOW;
 
 /// Why there is nothing to listen to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +131,17 @@ struct Shared {
     /// Set by the error callback. `Relaxed` because no other memory is ordered against it.
     lost: AtomicBool,
     reason: Mutex<Option<String>>,
+    /// The longer stretch the inharmonicity fit reads, which detection never drains.
+    history: Mutex<History>,
+}
+
+/// The newest frames, up to the fit's window and the most that can arrive past it.
+#[derive(Debug)]
+struct History {
+    frames: Vec<f32>,
+    /// Frames that landed after the last window handed to detection, which the fit window
+    /// stops short of so that both end on the same sample.
+    since_window: usize,
 }
 
 /// An open capture device; dropping it closes the stream.
@@ -204,8 +216,14 @@ impl Input {
 
     /// The most recent full window, or `None` if a hop has not arrived since the last call.
     pub fn take_window(&self) -> Option<Vec<f32>> {
-        let mut held = self.shared.samples.lock().ok()?;
-        take(&mut held, self.shared.channels)
+        self.shared.take_window()
+    }
+
+    /// The [`FIT_WINDOW`] frames ending where the last [`Input::take_window`] did, or `None`
+    /// until that many have arrived. Copies without draining; this and the retention behind it
+    /// are all `input.rs` gains, since when to fit is decided on the side that can be tested.
+    pub fn take_fit_window(&self) -> Option<Vec<f32>> {
+        self.shared.take_fit_window()
     }
 
     /// Whether the device has failed since it was opened, and what the host said.
@@ -270,6 +288,9 @@ fn build_stream(
 /// The most frames the buffer ever holds, reserved up front so the callback never allocates.
 const CAPACITY: usize = WINDOW * 2;
 
+/// The same for the history: the fit's window, plus room for what arrives past detection's.
+const HISTORY: usize = FIT_WINDOW + CAPACITY;
+
 impl Shared {
     fn new(channels: NonZeroUsize) -> Shared {
         Shared {
@@ -277,35 +298,67 @@ impl Shared {
             channels,
             lost: AtomicBool::new(false),
             reason: Mutex::new(None),
+            history: Mutex::new(History {
+                frames: Vec::with_capacity(HISTORY * channels.get()),
+                since_window: 0,
+            }),
         }
+    }
+
+    fn take_window(&self) -> Option<Vec<f32>> {
+        let mut held = self.samples.lock().ok()?;
+        let window = take(&mut held, self.channels)?;
+
+        // still under detection's lock, so no chunk can land between the window and this
+        if let Ok(mut history) = self.history.lock() {
+            history.since_window = 0;
+        }
+
+        Some(window)
+    }
+
+    fn take_fit_window(&self) -> Option<Vec<f32>> {
+        let history = self.history.lock().ok()?;
+        fit_window(&history.frames, history.since_window, self.channels)
     }
 }
 
 /// The body of the audio callback.
-///
-/// Room is made before a chunk lands so the buffer never outgrows `CAPACITY`.
 fn collect<S: Sample>(data: &[S], shared: &Shared) {
     let Ok(mut held) = shared.samples.try_lock() else {
         // the reader has it; drop the chunk rather than wait
         return;
     };
+    // both or neither, so the history never holds a chunk detection lost, or the reverse
+    let Ok(mut history) = shared.history.try_lock() else {
+        return;
+    };
 
-    // whole frames only, so the buffer never falls out of step with its channels
     let channels = shared.channels.get();
+    append(&mut held, data, channels, CAPACITY);
+    let incoming = append(&mut history.frames, data, channels, HISTORY);
+    history.since_window = history.since_window.saturating_add(incoming);
+}
+
+/// Appends `data`'s whole frames, making room first so `held` never outgrows `capacity`
+/// frames, and returns how many arrived. Whole frames only, so the buffer never falls out of
+/// step with its channels.
+fn append<S: Sample>(held: &mut Vec<f32>, data: &[S], channels: usize, capacity: usize) -> usize {
     let frames = data.chunks_exact(channels);
     let incoming = frames.len();
-    let keep = CAPACITY.saturating_sub(incoming);
+    let keep = capacity.saturating_sub(incoming);
 
-    // a local because two-phase borrows do not reach through the guard's `DerefMut`
     let excess = held.len().saturating_sub(keep * channels);
     held.drain(..excess);
 
     held.extend(
         frames
-            .skip(incoming.saturating_sub(CAPACITY))
+            .skip(incoming.saturating_sub(capacity))
             .flatten()
             .map(|s| s.to_f32()),
     );
+
+    incoming
 }
 
 /// The loudest channel of the newest `WINDOW` frames, keeping only the overlap the next
@@ -323,6 +376,19 @@ fn take(held: &mut Vec<f32>, channels: NonZeroUsize) -> Option<Vec<f32>> {
     let consumed = held.len() - (WINDOW - HOP) * width;
     held.drain(..consumed);
     Some(window)
+}
+
+/// The loudest channel of the [`FIT_WINDOW`] frames ending `since_window` frames before the
+/// newest, or `None` rather than a window padded with silence.
+fn fit_window(frames: &[f32], since_window: usize, channels: NonZeroUsize) -> Option<Vec<f32>> {
+    let width = channels.get();
+    let end = frames
+        .len()
+        .checked_sub(since_window.saturating_mul(width))?;
+    let start = end.checked_sub(FIT_WINDOW * width)?;
+
+    let frames = &frames[start..end];
+    Some(channel(frames, channels, loudest(frames, channels)).collect())
 }
 
 /// One channel of an interleaved buffer.
@@ -376,15 +442,20 @@ impl Sample for u16 {
     }
 }
 
-/// Where the chosen device id is kept between runs, under `$XDG_CONFIG_HOME` or `~/.config`.
-fn choice_path() -> Option<std::path::PathBuf> {
+/// Where the app keeps what it remembers between runs, under `$XDG_CONFIG_HOME` or `~/.config`.
+pub fn config_dir() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| {
             std::env::var_os("HOME").map(|home| std::path::Path::new(&home).join(".config"))
         })?;
 
-    Some(base.join("trastea").join("input-device"))
+    Some(base.join("trastea"))
+}
+
+/// Where the chosen device id is kept between runs.
+fn choice_path() -> Option<std::path::PathBuf> {
+    Some(config_dir()?.join("input-device"))
 }
 
 /// The device id chosen last time, if there was one and it can still be read.
@@ -637,6 +708,119 @@ mod tests {
             first[HOP..],
             "consecutive windows did not share their overlap"
         );
+    }
+
+    /// Feeds `frames` frames of a ramp — each sample its own index — in device-sized chunks.
+    fn feed(shared: &Shared, from: usize, frames: usize) {
+        let ramp: Vec<f32> = (from..from + frames).map(|i| i as f32).collect();
+        for chunk in ramp.chunks(480) {
+            collect(chunk, shared);
+        }
+    }
+
+    #[test]
+    fn the_fit_window_ends_where_detections_does() {
+        let shared = Shared::new(MONO);
+        feed(&shared, 0, FIT_WINDOW + WINDOW);
+
+        let window = shared.take_window().expect("a full window had arrived");
+        let fit = shared
+            .take_fit_window()
+            .expect("a full fit window had arrived");
+
+        assert_eq!(
+            fit.len(),
+            FIT_WINDOW,
+            "the fit window was not its specified length"
+        );
+        assert_eq!(
+            fit.last(),
+            window.last(),
+            "the two windows end on different samples"
+        );
+        assert!(
+            fit.windows(2).all(|pair| pair[1] == pair[0] + 1.0),
+            "the fit window is not one unbroken stretch"
+        );
+
+        // audio arriving before the fit is asked for does not move where it ends
+        feed(&shared, FIT_WINDOW + WINDOW, 300);
+        assert_eq!(
+            shared.take_fit_window().expect("still enough").last(),
+            window.last(),
+            "the fit window ran on past the note detection confirmed"
+        );
+    }
+
+    #[test]
+    fn taking_the_fit_window_leaves_detection_its_samples() {
+        let shared = Shared::new(MONO);
+        feed(&shared, 0, FIT_WINDOW + WINDOW);
+        let first = shared.take_window().expect("a full window had arrived");
+
+        let _ = shared.take_fit_window();
+        let _ = shared.take_fit_window();
+        feed(&shared, FIT_WINDOW + WINDOW, HOP);
+
+        let second = shared.take_window().expect("a hop had arrived");
+        assert_eq!(
+            second[..WINDOW - HOP],
+            first[HOP..],
+            "copying the fit window drained what detection reads"
+        );
+    }
+
+    #[test]
+    fn a_fit_window_asked_for_too_early_is_not_padded() {
+        let shared = Shared::new(MONO);
+        feed(&shared, 0, WINDOW);
+
+        assert!(shared.take_window().is_some(), "detection had its window");
+        assert_eq!(
+            shared.take_fit_window(),
+            None,
+            "a fit window was handed over before enough had arrived"
+        );
+    }
+
+    #[test]
+    fn the_callback_drops_its_chunk_rather_than_waiting_for_the_fit_window() {
+        let shared = Shared::new(MONO);
+
+        {
+            let history = shared.history.lock().expect("the test takes it first");
+            // a blocking callback would deadlock here rather than fail
+            collect(&[0.5f32; 64], &shared);
+            assert!(history.frames.is_empty());
+        }
+
+        assert!(
+            shared.samples.lock().expect("uncontended").is_empty(),
+            "detection kept a chunk the history dropped"
+        );
+    }
+
+    #[test]
+    fn the_history_never_outgrows_what_was_reserved() {
+        let shared = Shared::new(STEREO);
+        let reserved = shared
+            .history
+            .lock()
+            .expect("uncontended")
+            .frames
+            .capacity();
+
+        for frames in [480, 9000, 1, 30_000, 2048] {
+            collect(&vec![0.25f32; frames * 2], &shared);
+
+            let history = shared.history.lock().expect("uncontended");
+            assert!(history.frames.len() <= HISTORY * 2);
+            assert_eq!(
+                history.frames.capacity(),
+                reserved,
+                "{frames} frames reallocated"
+            );
+        }
     }
 
     #[test]

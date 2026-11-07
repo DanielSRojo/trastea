@@ -95,6 +95,75 @@ it does not filter. Silence and unpitched windows both clear the run, so a readi
 re-confirmed after either, and a jump beyond the tolerance restarts the run from the new reading
 rather than extending it.
 
+## Where a note began
+
+`Detection` carries the frequency the note began at as well as the one it sounds now. A single
+window began where it is; `Tracker` overwrites it with the first reading of the run it releases,
+and keeps that across the readings its three-window run drops, so a note bent up a semitone and
+held still remembers the fret it left. `arrived_by_sliding` compares the two against `SLID_CENTS`,
+half a semitone, which is where the nearest pitch name changes and so where the sounding pitch
+starts naming a fret other than the one under the finger. A hard pluck's attack glide and a held
+note's vibrato both stay well inside it.
+
+It is recorded as a physical fact rather than acted on, and only the Position Finder reads it: a
+bent note sounds the pitch of one fret with the inharmonicity of another, a wrong answer in a
+consistent direction that no averaging recovers, so that screen declines it. The Tuner and the
+drills still follow a bend as before. A slide fast enough to move more than `STABLE_CENTS`
+between windows restarts the run, and the note then reads as struck where it landed; that costs a
+wrong place on a fast slide, which is rarer than a bend and was not worth a second rule.
+
+## The inharmonicity fit
+
+`audio::inharmonicity` measures B in `f_n = n · f₀ · √(1 + B·n²)` — how far a stiff string's
+partials sit sharp of whole multiples of its fundamental. Squaring and rearranging makes the fit
+a one-parameter least squares through the origin, `B = Σxy / Σx²` over `x = n²` and
+`y = (f_n / n·f₀)² − 1`, so there is no solver and no matrix. Like detection it reports a physical
+quantity and names nothing; which string that B belongs to is the Position Finder's question.
+
+It needs the partials, which needs a spectrum. `detect.rs`'s argument against an FFT is about the
+fundamental — a bin is wider than a semitone at the low E — and does not carry over: partials sit
+a whole fundamental apart, already resolved at 4096 samples. `fft.rs` is a hand-rolled iterative
+radix-2 transform rather than `rustfft`, on `rng.rs`'s precedent: `rustfft` is better code, but a
+third dependency in a crate that has two, for about eighty lines tested against an impulse, a sine
+on a bin and a naive DFT, was the worse trade. A length that is not a power of two is refused
+before the buffer is touched.
+
+`FIT_WINDOW` is 8192 samples, 170.7 ms at 48 kHz, separate from detection's 2048. The length buys
+signal-to-noise and clean peaks, not resolution, and the comment on the constant says so in case
+someone copies `WINDOW`'s low-E reasoning onto it. The spike measured 8192 against 32768 and found
+them within about 0.15 in log₂ B wherever both fitted, and the shorter one answers sooner.
+
+The spectrum is Hann-windowed and zero-padded four times before the transform, and each peak is
+located by a parabola through the log magnitudes either side of it. Padding is what makes the
+parabola unbiased enough: every partial of a synthesized series is located within 0.1 Hz, which is
+the precision a coefficient within 0.1 in log₂ B needs at the top of the series.
+
+Three details are there because the obvious version got them wrong:
+
+- **Partial one is measured, not taken from detection.** The NSDF's period compromises across
+  every partial it sees, and the sharpened ones pull it; fitting B against that slightly wrong f₀
+  biases B. Detection's hertz only starts the search, within about 50 cents.
+- **The series is walked upward, refitting as it goes.** At high B the upper partials sit
+  hundreds of cents sharp, far outside a search centred on the harmonic guess, and a search wide
+  enough to reach them reaches the neighbouring partial too. Each prediction uses the coefficient
+  the partials below it agree on, and the whole walk runs four times against the last fit. Before
+  this, an 82 Hz series with B = 1e-4 was refused as scattered.
+- **A missing partial is left out.** A pickup null or a partial the pluck never excited is a real
+  hole, and a hole located anyway is an outlier dragging B. A partial must stand 15 dB above the
+  spectrum around it and within 50 dB of the strongest; what survives is fitted, partials more
+  than six robust deviations from the fit (never tighter than one cent) are dropped, and the fit
+  is taken again. The floors and the rejection rule are the spike's.
+
+A refusal is a `Result::Err`, distinct from a coefficient of zero, which is what an exactly
+harmonic series reads as — distortion, or a synthesizer. Silence, too few partials (a bare sine
+has one, and one partial fits every coefficient), a residual over 4 cents and a window shorter than
+`FIT_WINDOW` are each refused rather than fitted. A series that fits flat of harmonic is reported
+as harmonic, since no string is softer than a perfect one.
+
+One fit costs 0.88 ms in a release build and 1.25 ms in dev on a Ryzen 5 5600G, against a hop of
+10.7 ms, so it runs on the UI thread beside detection. It runs once a note is confirmed and every
+`FIT_EVERY` hops while it sustains — never every hop, and only on the screen that asks.
+
 ## The detector's vocabulary
 
 `detect::Heard` has three cases rather than wrapping an `Option`, because "heard nothing" and
@@ -145,9 +214,18 @@ few microseconds later.
 the oldest is the one worth losing. A chunk longer than the whole buffer keeps only its newest
 `CAPACITY` frames, and whole frames only, so the buffer never falls out of step with its channels.
 
-The length in `collect` is read into a local before `held.drain(..)`. `held` is a `MutexGuard`,
-so `drain` goes through `DerefMut`, and the two-phase borrow that makes `v.push(v.len())` legal on
-a plain `Vec` does not reach through an overloaded deref.
+The length in `append` is read into a local before `held.drain(..)`. When the buffer was still
+drained through its `MutexGuard`, `drain` went through `DerefMut`, and the two-phase borrow that
+makes `v.push(v.len())` legal on a plain `Vec` does not reach through an overloaded deref; the
+local stays because it reads better than the expression it replaced.
+
+`input::History` is the inharmonicity fit's stretch of the same audio, under its own lock and
+never drained by detection. The callback takes both locks or neither, so the two buffers always
+hold the same chunks, and `since_window` counts the frames that landed after detection's last
+window so `take_fit_window` ends on the same sample `take_window` did — the fit reads the note
+detection has just confirmed rather than whatever arrived a few milliseconds later. `HISTORY` is
+the fit window plus detection's `CAPACITY`, the most that can arrive between a window and the
+request for its fit. Detection's own buffer, window and hop did not move.
 
 ## Windows and channels
 

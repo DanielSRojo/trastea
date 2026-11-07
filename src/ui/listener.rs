@@ -5,6 +5,7 @@ use iced::widget::{Space, button, column, container, row, text};
 use iced::{Element, Length, Padding};
 
 use crate::audio::detect::{Heard, Tracker, detect};
+use crate::audio::inharmonicity::{Fit, fit};
 use crate::audio::input::{
     DeviceChoice, Input, InputError, devices, remember_device, remembered_device,
 };
@@ -17,6 +18,10 @@ use super::focus::FocusTarget;
 use super::style::{
     BODY, MUTE, card_button, focus_ring, ghost_button, row_button, selected_row_button,
 };
+
+/// How many hops apart a sustained note is fitted again: 85 ms at 48 kHz, half a fit window,
+/// so consecutive fits overlap rather than reading the same audio twice.
+const FIT_EVERY: usize = 8;
 
 /// What the screen is doing, as opposed to what it is hearing.
 /// No `Debug`: `cpal::Stream` has none.
@@ -39,6 +44,10 @@ pub(super) struct Listener {
     picking: Option<usize>,
     /// Set when the device asked for was absent and the default was opened instead.
     fell_back: bool,
+    /// Whether confirmed notes are also fitted for inharmonicity; only the Position Finder asks.
+    fits: bool,
+    /// Hops since the sounding note was confirmed, which is what [`fit_due`] schedules by.
+    confirmed_hops: usize,
 }
 
 impl Listener {
@@ -50,7 +59,19 @@ impl Listener {
             devices: Vec::new(),
             picking: None,
             fell_back: false,
+            fits: false,
+            confirmed_hops: 0,
         }
+    }
+
+    /// The same listener, also fitting the notes it confirms.
+    pub(super) fn fitting(self) -> Listener {
+        Listener { fits: true, ..self }
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_fitting(&self) -> bool {
+        self.fits
     }
 
     /// Opens the remembered device, or the default. Idempotent: a working device is left
@@ -75,6 +96,7 @@ impl Listener {
         };
         self.tracker = Tracker::new();
         self.heard = Heard::Silence;
+        self.confirmed_hops = 0;
     }
 
     /// Closes the device, if one is open. Dropping the `Input` is what stops the stream.
@@ -82,6 +104,7 @@ impl Listener {
         self.listening = Listening::Idle;
         self.tracker = Tracker::new();
         self.heard = Heard::Silence;
+        self.confirmed_hops = 0;
         self.picking = None;
         self.fell_back = false;
     }
@@ -94,6 +117,13 @@ impl Listener {
     /// Folds whatever audio has arrived into the reading and returns what was released.
     /// Analysis runs on the UI thread so a slow detector cannot glitch the audio callback.
     pub(super) fn poll(&mut self) -> Option<Heard> {
+        self.poll_fitted().map(|(heard, _)| heard)
+    }
+
+    /// [`Listener::poll`], with the note's fit when one was due, so a reading and its fit
+    /// arrive together. The fit is `None` on every hop it was not due, and always unless
+    /// this listener is [`Listener::fitting`].
+    pub(super) fn poll_fitted(&mut self) -> Option<(Heard, Option<Fit>)> {
         let Listening::Open(input) = &self.listening else {
             return None;
         };
@@ -108,8 +138,21 @@ impl Listener {
         let window = input.take_window()?;
 
         let heard = self.tracker.push(detect(&window, sample_rate));
+
+        let fitted = match heard {
+            Heard::Pitch(detection) if self.fits && fit_due(heard, self.confirmed_hops) => input
+                .take_fit_window()
+                .map(|longer| fit(&longer, sample_rate, detection.hz())),
+            _ => None,
+        };
+
+        self.confirmed_hops = match heard {
+            Heard::Pitch(_) => self.confirmed_hops + 1,
+            _ => 0,
+        };
+
         self.apply(heard);
-        Some(heard)
+        Some((heard, fitted))
     }
 
     /// Records a released reading. The seam the tests drive, so they need no device.
@@ -218,6 +261,12 @@ impl Listener {
             (Listening::Open(_), Heard::Pitch(_)) => State::Reading,
         }
     }
+}
+
+/// Whether a note `confirmed_hops` into its confirmation is due a fit: on confirmation, then
+/// every [`FIT_EVERY`] hops while it sustains, and never while nothing nameable sounds.
+fn fit_due(heard: Heard, confirmed_hops: usize) -> bool {
+    matches!(heard, Heard::Pitch(_)) && confirmed_hops.is_multiple_of(FIT_EVERY)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -332,6 +381,74 @@ fn card_button_container(theme: &iced::Theme) -> iced::widget::container::Style 
 }
 
 #[cfg(test)]
+mod schedule_tests {
+    use super::*;
+    use crate::audio::detect::Detection;
+
+    fn pitch() -> Heard {
+        Heard::Pitch(Detection::synthesized(196.0, 0.999))
+    }
+
+    /// Which hops of a stream of releases a listener would fit, counting as `poll_fitted` does.
+    fn fitted_hops(stream: &[Heard]) -> Vec<usize> {
+        stream
+            .iter()
+            .scan(0usize, |confirmed, &heard| {
+                let due = fit_due(heard, *confirmed);
+                *confirmed = if matches!(heard, Heard::Pitch(_)) {
+                    *confirmed + 1
+                } else {
+                    0
+                };
+                Some(due)
+            })
+            .enumerate()
+            .filter_map(|(hop, due)| due.then_some(hop))
+            .collect()
+    }
+
+    #[test]
+    fn a_note_is_fitted_on_confirmation_and_then_at_an_interval() {
+        let mut stream = vec![Heard::Silence, Heard::Unpitched, Heard::Unpitched];
+        stream.extend(std::iter::repeat_n(pitch(), FIT_EVERY * 2 + 1));
+
+        assert_eq!(
+            fitted_hops(&stream),
+            vec![3, 3 + FIT_EVERY, 3 + 2 * FIT_EVERY]
+        );
+    }
+
+    #[test]
+    fn a_note_is_never_fitted_on_every_hop() {
+        let stream = vec![pitch(); 64];
+        assert_eq!(fitted_hops(&stream).len(), 64 / FIT_EVERY);
+    }
+
+    #[test]
+    fn nothing_is_fitted_while_silent_or_unnameable() {
+        let mut stream = vec![Heard::Silence; 40];
+        stream.extend(vec![Heard::Unpitched; 40]);
+        assert!(fitted_hops(&stream).is_empty());
+    }
+
+    #[test]
+    fn a_new_note_is_fitted_on_its_own_confirmation() {
+        // the tracker releases nothing between two notes while it re-confirms
+        let mut stream = vec![pitch(); 3];
+        stream.extend([Heard::Unpitched, Heard::Unpitched]);
+        stream.extend(vec![pitch(); 2]);
+
+        assert_eq!(fitted_hops(&stream), vec![0, 5]);
+    }
+
+    #[test]
+    fn fitting_is_off_unless_asked_for() {
+        assert!(!Listener::new().is_fitting());
+        assert!(Listener::new().fitting().is_fitting());
+    }
+}
+
+#[cfg(test)]
 mod device_tests {
     use crate::ui::tests::every_screen;
     use crate::ui::*;
@@ -414,12 +531,22 @@ mod device_tests {
 
             let listens = matches!(
                 screen,
-                Screen::Tuner | Screen::PlayTheInterval | Screen::WalkTheScale
+                Screen::Tuner
+                    | Screen::PlayTheInterval
+                    | Screen::WalkTheScale
+                    | Screen::PositionFinder
             );
             assert_eq!(
                 app.listener_ref().is_some(),
                 listens,
                 "{screen:?} disagrees about whether it listens"
+            );
+
+            // only the Position Finder pays for the slow path
+            assert_eq!(
+                app.listener_ref().is_some_and(Listener::is_fitting),
+                screen == Screen::PositionFinder,
+                "{screen:?} disagrees about whether it fits"
             );
 
             // With no device on the machine the stream never opens and the poll does not tick.

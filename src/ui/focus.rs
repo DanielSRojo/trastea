@@ -25,6 +25,10 @@ pub enum FocusTarget {
     PoolToggle,
     NoteSpellingToggle,
     TunerSpellingToggle,
+    /// Starts the Position Finder's calibration walk.
+    Calibrate,
+    /// Shows the groups the Position Finder's calibration will not split.
+    PositionGroups,
     SkipPrompt,
     /// The Interval Trainer's neck, as its *Find it* answer surface. Claims the motion keys.
     IntervalFretboard,
@@ -110,6 +114,15 @@ impl App {
                 vec![Some(FocusTarget::Back)],
                 vec![Some(FocusTarget::InputDevice)],
                 vec![Some(FocusTarget::TunerSpellingToggle)],
+            ],
+            // the neck answers rather than asks, so it is not a focus target either
+            Screen::PositionFinder => vec![
+                vec![Some(FocusTarget::Back), None],
+                vec![
+                    Some(FocusTarget::Calibrate),
+                    Some(FocusTarget::PositionGroups),
+                ],
+                vec![Some(FocusTarget::InputDevice), None],
             ],
             // the neck takes no press here, so it is not a focus target
             Screen::PlayTheInterval => vec![
@@ -334,7 +347,8 @@ impl App {
             | Screen::ChordLibrary
             | Screen::Caged
             | Screen::WalkTheScale
-            | Screen::Tuner => vec![0..width],
+            | Screen::Tuner
+            | Screen::PositionFinder => vec![0..width],
         }
     }
 

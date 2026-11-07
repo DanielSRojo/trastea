@@ -1,4 +1,5 @@
 mod caged;
+mod calibration;
 mod chord_diagram;
 mod chord_library;
 mod drill;
@@ -10,6 +11,8 @@ mod listener;
 mod neck;
 mod note_trainer;
 mod play_the_interval;
+mod position;
+mod position_finder;
 mod scale_trainer;
 mod shapes;
 mod style;
@@ -22,6 +25,7 @@ use interval_trainer::{IntervalTrainer, ui_interval_trainer};
 use listener::Listener;
 use note_trainer::{NoteTrainer, ui_note_trainer};
 use play_the_interval::{PlayTheInterval, ui_play_the_interval};
+use position_finder::{PositionFinder, ui_position_finder};
 use scale_trainer::ui_scale_trainer;
 use tuner::{Tuner, ui_tuner};
 use walk_the_scale::{WalkTheScale, ui_walk_the_scale};
@@ -32,6 +36,8 @@ use iced::{Color, Element, Pixels, Subscription, Task, keyboard};
 
 #[cfg(test)]
 use crate::audio::detect::Heard;
+#[cfg(test)]
+use crate::audio::inharmonicity::Fit;
 use crate::music::{
     intervals::Interval,
     notes::{Accidental, Note, PitchClass},
@@ -85,6 +91,7 @@ pub struct App {
     walk_the_scale: WalkTheScale,
     /// Holds the open audio stream, which a subscription would drop whenever its hash changed.
     tuner: Tuner,
+    position_finder: PositionFinder,
 }
 
 /// What the fretboard's markers are labelled with: the notes' names, or their scale degrees.
@@ -109,6 +116,8 @@ pub enum Screen {
     Tuner,
     /// The drill that walks a scale by degree.
     WalkTheScale,
+    /// The answering screen that draws where on the neck a played note was.
+    PositionFinder,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -159,6 +168,14 @@ pub enum Message {
     /// A released reading, applied directly. The test seam in place of `AudioPoll`.
     #[cfg(test)]
     Heard(Heard),
+    /// A released reading and the fit that came with it, as the Position Finder's poll
+    /// delivers them together.
+    #[cfg(test)]
+    Fitted(Heard, Option<Fit>),
+    /// Starts the Position Finder's calibration walk from its first step.
+    Calibrate,
+    /// Shows or hides the groups the Position Finder's calibration will not split.
+    TogglePositionGroups,
     /// Opens the input device list.
     OpenDevices,
     /// Chooses a device by its place in the offered list.
@@ -222,7 +239,7 @@ struct MenuItem {
 const AUDIO_POLL: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// The Home menu, in draw order; its buttons, focus grid and digit accelerators derive from it.
-const HOME_MENU: [MenuItem; 8] = [
+const HOME_MENU: [MenuItem; 9] = [
     MenuItem {
         label: "Scale Trainer",
         caption: "Explore and learn guitar scales",
@@ -263,6 +280,11 @@ const HOME_MENU: [MenuItem; 8] = [
         caption: "Tune by ear against what the app hears",
         screen: Screen::Tuner,
     },
+    MenuItem {
+        label: "Position Finder",
+        caption: "Play a note and see where on the neck it was",
+        screen: Screen::PositionFinder,
+    },
 ];
 
 const HOME_MENU_ITEMS: usize = HOME_MENU.len();
@@ -290,6 +312,7 @@ impl App {
             caged: Caged::new(),
             walk_the_scale: WalkTheScale::new(),
             tuner: Tuner::new(),
+            position_finder: PositionFinder::new(),
         };
 
         (app, Task::none())
@@ -381,6 +404,13 @@ impl App {
                     listener.close_picker();
                 }
             }
+            // and leaves the calibration walk, keeping what was kept, before it leaves the screen
+            Message::GoBack
+                if self.screen == Screen::PositionFinder
+                    && self.position_finder.is_calibrating() =>
+            {
+                self.position_finder.leave_calibration();
+            }
             // and leaves the drill before it leaves the screen
             Message::GoBack
                 if self.screen == Screen::WalkTheScale && self.walk_the_scale.is_running() =>
@@ -438,6 +468,10 @@ impl App {
             Message::AudioPoll => {}
             #[cfg(test)]
             Message::Heard(heard) => self.hear(heard),
+            #[cfg(test)]
+            Message::Fitted(heard, fit) => self.hear_fitted(heard, fit),
+            Message::Calibrate => self.position_finder.start_calibration(),
+            Message::TogglePositionGroups => self.position_finder.toggle_groups(),
             Message::OpenDevices => {
                 if let Some(listener) = self.listener() {
                     listener.open_picker();
@@ -493,7 +527,11 @@ impl App {
         let wants_the_caged_window = screen == Screen::Caged;
         let wants_fresh_play = screen == Screen::PlayTheInterval;
         let wants_a_fresh_walk = screen == Screen::WalkTheScale;
-        let wants_to_listen = matches!(screen, Screen::Tuner | Screen::PlayTheInterval);
+        let wants_the_calibration = screen == Screen::PositionFinder;
+        let wants_to_listen = matches!(
+            screen,
+            Screen::Tuner | Screen::PlayTheInterval | Screen::PositionFinder
+        );
 
         self.navigate_to(screen);
 
@@ -533,6 +571,11 @@ impl App {
         // a reference, so it reopens on what it last showed
         if wants_the_caged_window {
             self.caged.enter();
+        }
+
+        // reads the kept calibration afresh, so one captured since is in use
+        if wants_the_calibration {
+            self.position_finder.enter();
         }
     }
 
@@ -576,6 +619,7 @@ impl App {
             Screen::Tuner => Some(self.tuner.listener_mut()),
             Screen::PlayTheInterval => Some(self.play_the_interval.listener_mut()),
             Screen::WalkTheScale => self.walk_the_scale.listener_mut(),
+            Screen::PositionFinder => Some(self.position_finder.listener_mut()),
             _ => None,
         }
     }
@@ -585,6 +629,7 @@ impl App {
             Screen::Tuner => Some(self.tuner.listener()),
             Screen::PlayTheInterval => Some(self.play_the_interval.listener()),
             Screen::WalkTheScale => self.walk_the_scale.listener(),
+            Screen::PositionFinder => Some(self.position_finder.listener()),
             _ => None,
         }
     }
@@ -621,6 +666,11 @@ impl App {
                     self.walk_the_scale.apply(heard);
                 }
             }
+            Screen::PositionFinder => {
+                if let Some((heard, fit)) = self.position_finder.listener_mut().poll_fitted() {
+                    self.position_finder.apply(heard, fit);
+                }
+            }
             _ => {}
         }
     }
@@ -640,7 +690,17 @@ impl App {
                 self.play_the_interval.listener_mut().apply(heard);
                 self.play_the_interval.apply(heard);
             }
+            Screen::PositionFinder => self.hear_fitted(heard, None),
             _ => {}
+        }
+    }
+
+    /// A released reading with its fit, handed to the Position Finder as its poll would.
+    #[cfg(test)]
+    fn hear_fitted(&mut self, heard: Heard, fit: Option<Fit>) {
+        if self.screen == Screen::PositionFinder {
+            self.position_finder.listener_mut().apply(heard);
+            self.position_finder.apply(heard, fit);
         }
     }
 
@@ -836,6 +896,8 @@ impl App {
             FocusTarget::PoolToggle => self.note_trainer.toggle_pool(&mut self.rng),
             FocusTarget::NoteSpellingToggle => self.note_trainer.toggle_spelling(),
             FocusTarget::TunerSpellingToggle => self.tuner.toggle_spelling(),
+            FocusTarget::Calibrate => self.position_finder.start_calibration(),
+            FocusTarget::PositionGroups => self.position_finder.toggle_groups(),
             FocusTarget::SkipPrompt => self.note_trainer.skip(&mut self.rng),
             FocusTarget::SearchBox => self.chord_library.focus_search(),
             FocusTarget::NotationChoice(index) => self.chord_library.set_notation(index),
@@ -902,6 +964,12 @@ impl App {
             Screen::Tuner => with_top_bar(
                 "Tuner",
                 ui_tuner(&self.tuner, self.focused),
+                true,
+                self.focused,
+            ),
+            Screen::PositionFinder => with_top_bar(
+                "Position Finder",
+                ui_position_finder(&self.position_finder, self.focused),
                 true,
                 self.focused,
             ),
@@ -1372,7 +1440,7 @@ mod tests {
     }
 
     /// Every screen, so a new one cannot quietly escape the checks that sweep them all.
-    pub(super) fn every_screen() -> [Screen; 9] {
+    pub(super) fn every_screen() -> [Screen; 10] {
         // no `_` arm, so a new `Screen` stops this compiling until it is listed
         match Screen::default() {
             Screen::Home
@@ -1383,7 +1451,8 @@ mod tests {
             | Screen::PlayTheInterval
             | Screen::ChordLibrary
             | Screen::Caged
-            | Screen::Tuner => {}
+            | Screen::Tuner
+            | Screen::PositionFinder => {}
         }
 
         [
@@ -1396,6 +1465,7 @@ mod tests {
             Screen::ChordLibrary,
             Screen::Caged,
             Screen::Tuner,
+            Screen::PositionFinder,
         ]
     }
 
