@@ -16,7 +16,7 @@ categories = ["gui"]
 publish = ["crates-io"]
 
 [dependencies]
-cpal = "0.18.2"
+cpal = { version = "0.18.2", features = ["pulseaudio"] }
 iced = { version = "0.14", features = ["canvas", "smol"] }
 
 # Unoptimised, the pitch detector alone needs more than a core to keep up with the tuner,

@@ -112,11 +112,15 @@ pub fn devices() -> Vec<DeviceChoice> {
     offered
 }
 
-/// Whether an id names real hardware rather than one of ALSA's software plugins.
+/// Whether an id names a real capture device rather than an ALSA plugin or a pulse monitor.
 ///
-/// Tests the id, not the translatable display name: ALSA hardware PCMs name a `CARD=`.
+/// Tests the id, not the translatable display name.
 fn is_hardware(id: &str) -> bool {
-    !id.starts_with("alsa:") || id.contains("CARD=")
+    match id.split_once(':') {
+        Some(("alsa", pcm)) => pcm.contains("CARD="),
+        Some(("pulseaudio", source)) => !source.ends_with(".monitor"),
+        _ => true,
+    }
 }
 
 /// The most recent window of audio, written by the audio thread and read by whoever asks.
@@ -916,6 +920,19 @@ mod device_tests {
         ] {
             assert!(is_hardware(hardware), "{hardware} was hidden");
         }
+    }
+
+    #[test]
+    fn a_sound_server_offers_its_sources_but_not_its_monitors() {
+        assert!(is_hardware(
+            "pulseaudio:alsa_input.usb-Focusrite_Scarlett_2i2_USB-00.pro-input-0"
+        ));
+        assert!(!is_hardware(
+            "pulseaudio:alsa_output.usb-Focusrite_Scarlett_2i2_USB-00.pro-output-0.monitor"
+        ));
+        assert!(!is_hardware(
+            "pulseaudio:alsa_output.pci-0000_03_00.1.hdmi-stereo.monitor"
+        ));
     }
 
     #[test]

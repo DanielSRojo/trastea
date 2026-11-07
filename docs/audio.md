@@ -254,13 +254,26 @@ parses prose. Its cases are distinct because their fixes are: no device is a sho
 busy device is a "quit your DAW" problem, and a tuner that renders all of them as an empty dial
 looks broken.
 
-`input::devices` turned 32 ALSA entries into 4 on the development machine, by three rules in
-order:
+On Linux, cpal is built with its `pulseaudio` feature, and `default_host` picks that host
+whenever a pulse socket exists — which PipeWire's `pipewire-pulse` provides — and ALSA
+otherwise. Through ALSA alone, an interface PipeWire holds cannot be opened: every PCM on the
+card returns `EBUSY`, so the list could not offer the Scarlett on the development machine at all,
+and only deleting the remembered choice reached it, through PipeWire's default. The pulse host
+lists every source by name and opens it through the server instead of competing with it. It was
+chosen over cpal's `pipewire` feature because the `pulseaudio` crate speaks the protocol in pure
+Rust, while `pipewire` binds libpipewire through bindgen, which would put libpipewire and libclang
+in every Linux build. One cost: an id remembered from the ALSA host no longer matches anything,
+so the first launch after the switch falls back once and says so.
+
+`input::devices` turned 32 ALSA entries into 4 on the development machine, and three pulse
+sources into one, by three rules in order:
 
 - `is_hardware` drops ALSA's software plugins — `null`, `pulse`, `pipewire`, `speexrate`,
-  `upmix` and a dozen more. It tests the id for `CARD=` rather than the display name, which is
-  translatable prose ("Rate Converter Plugin Using Speex Resampler"). No other backend's ids
-  contain `CARD=` or start with `alsa:`, so CoreAudio, WASAPI and ASIO devices are unaffected.
+  `upmix` and a dozen more — and the sound server's monitor sources, which loop an output back
+  and would let the tuner listen to the speakers. It tests the id rather than the display name,
+  which is translatable prose ("Rate Converter Plugin Using Speex Resampler", "Monitor of …"):
+  ALSA hardware names a `CARD=`, and a monitor source is its sink's name plus `.monitor`. Other
+  hosts' ids pass untouched, so CoreAudio, WASAPI and ASIO devices are unaffected.
 - A device whose default config cannot be read is dropped; offering it is offering a failure.
   This also removes ALSA's `usbstream:` entries, which enumerate but never open.
 - One entry per name. The interface on the development machine appears four times, as
