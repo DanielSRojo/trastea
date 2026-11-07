@@ -50,6 +50,11 @@ ignore = [
     "RUSTSEC-2026-0371",
     "RUSTSEC-2026-0372",
 
+    # pin-utils, unmaintained and archived, no safe upgrade. Reached only through wasmtimer,
+    # which iced_futures pulls in for wasm32 alone, so it is in the graph for neither target
+    # release.yaml builds. Gone when wasmtimer swaps pin_mut! for core::pin::pin!.
+    "RUSTSEC-2026-0441",
+
     # A yanked version rather than an advisory, and Windows-only: uds_windows is in the
     # lockfile via zbus but is in the graph for neither target release.yaml builds. Ignored
     # by crate rather than by raising `yanked` to a warning, so a yanked crate that does
