@@ -187,6 +187,8 @@ the same reason: the card's own row is full of its controls.
   456px against the 440px the card gets at the default 1280-wide window, so Diminished was cut
   off. Of every contiguous five-row shape only two fit, with 10px and 0px to spare. The chosen
   six-row shape has 73px spare on its widest row and stays a palindrome, as the old 4-3-2-3-4 did.
+- Walk the Scale has its own seven-row shape, `DRILL_KIND_ROW_WIDTHS`, ending in pairs so its
+  selector column can be narrower; see `drills.md`.
 - The root rows are derived from `PitchClass::ALL`; the kind rows are ragged, so their widths
   are spelled out. Both views and the focus grid read these.
 - The Note Trainer's answer grid is four columns: four divides the twelve pitch classes. The

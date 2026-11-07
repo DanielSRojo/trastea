@@ -9,7 +9,7 @@ use iced::widget::canvas::{self, Canvas};
 use iced::{Color, Element, Length, Padding, Point, Rectangle, Renderer, Size, Theme};
 
 use super::calibration;
-use super::focus::{Direction, FocusTarget, kind_row_spans};
+use super::focus::{Direction, FocusTarget, drill_kind_row_spans};
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
 use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS, Position};
@@ -660,21 +660,22 @@ pub(super) fn ui_walk_the_scale(
             .center_y(Length::Fill),
     ];
 
-    let centre = column![
-        // two above to three below puts the pair a little above the column's middle
-        Space::new().height(Length::FillPortion(2)),
-        container(root)
-            .width(Length::Fill)
-            .height(Length::Fixed(ROOT_ROW_HEIGHT)),
-        container(sequence_text(drill))
-            .width(Length::Fill)
-            .center_x(Length::Fill),
-        Space::new().height(Length::FillPortion(3)),
-    ]
-    .width(Length::Fill)
-    .height(Length::Fill);
+    // equal fills above and below centre the root, not root and sequence, in the band
+    let centre = on_root_line(
+        column![
+            Space::new().height(Length::Fill),
+            container(root)
+                .width(Length::Fill)
+                .height(Length::Fixed(ROOT_ROW_HEIGHT)),
+            container(sequence_text(drill))
+                .width(Length::Fill)
+                .center_x(Length::Fill),
+            Space::new().height(Length::Fill),
+        ]
+        .height(Length::Fill),
+    );
 
-    let kind_card = container(kind_row_spans().fold(
+    let kind_card = container(drill_kind_row_spans().fold(
         column![].spacing(10),
         |rows, (start, len)| {
             rows.push(scale_kind_row(
@@ -688,17 +689,18 @@ pub(super) fn ui_walk_the_scale(
         },
     ))
     .width(Length::Fill)
-    .padding(24)
+    .padding(KIND_CARD_PADDING)
     .style(card_container);
 
-    let selector = column![
-        kind_card,
-        Space::new().height(Length::Fill),
-        drill_panel(drill, focused),
+    let selector = stack![
+        on_root_line(kind_card),
+        column![
+            Space::new().height(Length::Fill),
+            drill_panel(drill, focused)
+        ],
     ]
     .width(Length::Fixed(SELECTOR_COLUMN_WIDTH))
-    .height(Length::Fill)
-    .spacing(16);
+    .height(Length::Fill);
 
     container(row![neck, centre, selector].spacing(32))
         .width(Length::Fill)
@@ -712,6 +714,27 @@ pub(super) fn ui_walk_the_scale(
         .into()
 }
 
+/// Places `content` centred in a band at the same height in every column that uses it, so
+/// the root glyph and the kind card share one horizontal line.
+fn on_root_line<'a>(content: impl Into<Element<'a, Message>>) -> iced::widget::Column<'a, Message> {
+    use iced::widget::{Space, column, container};
+
+    // one above to two below puts the band a little above the column's middle
+    column![
+        Space::new().height(Length::FillPortion(1)),
+        container(content)
+            .width(Length::Fill)
+            .height(Length::Fixed(ROOT_BAND_HEIGHT))
+            .align_y(iced::Alignment::Center),
+        Space::new().height(Length::FillPortion(2)),
+    ]
+    .width(Length::Fill)
+    .height(Length::Fill)
+}
+
+/// Tall enough for the kind card's seven rows, which is the taller of the two bands' contents.
+const ROOT_BAND_HEIGHT: f32 = 420.0;
+
 const ROOT_DISPLAY_SIZE: f32 = 120.0;
 
 const SEQUENCE_SIZE: f32 = 34.0;
@@ -720,8 +743,10 @@ const SEQUENCE_SIZE: f32 = 34.0;
 /// this window's height plus its padding.
 const NECK_COLUMN_WIDTH: f32 = 340.0;
 
-/// Fixed so the kind pills are not clipped; fits the widest `kind_row_spans` row plus padding.
-const SELECTOR_COLUMN_WIDTH: f32 = 470.0;
+/// Fixed so the kind pills are not clipped; fits the widest `drill_kind_row_spans` row plus padding.
+const SELECTOR_COLUMN_WIDTH: f32 = 390.0;
+
+const KIND_CARD_PADDING: f32 = 24.0;
 
 /// How far the pointer travels, or the wheel scrolls, for one semitone.
 const STEP_DISTANCE: f32 = 40.0;
@@ -1178,9 +1203,8 @@ mod tests {
         const BUTTON_PADDING_X: f32 = 12.0;
         const FOCUS_RING_PADDING: f32 = 3.0;
         const ROW_SPACING: f32 = 8.0;
-        const CARD_PADDING: f32 = 24.0;
 
-        let widest = kind_row_spans()
+        let widest = drill_kind_row_spans()
             .map(|(start, len)| {
                 let kinds = &ScaleKind::ALL[start..start + len];
                 let text: f32 = kinds
@@ -1192,12 +1216,33 @@ mod tests {
             })
             .fold(0.0_f32, f32::max);
 
-        let available = SELECTOR_COLUMN_WIDTH - 2.0 * CARD_PADDING;
+        let available = SELECTOR_COLUMN_WIDTH - 2.0 * KIND_CARD_PADDING;
 
         assert!(
             available >= widest,
             "the selector column leaves {available} for a kind row that needs {widest}; the \
              longest row would be drawn past the card's edge"
+        );
+    }
+
+    #[test]
+    fn the_kind_card_fits_the_root_band() {
+        // iced's default line height, the card's `.spacing(10)`, and a pill's `.padding([8, 12])`
+        // inside its 3px `focus_ring`
+        const TEXT_LINE_HEIGHT: f32 = 1.3;
+        const ROW_SPACING: f32 = 10.0;
+        const BUTTON_PADDING_Y: f32 = 8.0;
+        const FOCUS_RING_PADDING: f32 = 3.0;
+
+        let rows = drill_kind_row_spans().count() as f32;
+        let pill =
+            KIND_BUTTON_SIZE * TEXT_LINE_HEIGHT + 2.0 * BUTTON_PADDING_Y + 2.0 * FOCUS_RING_PADDING;
+        let needed = rows * pill + (rows - 1.0) * ROW_SPACING + 2.0 * KIND_CARD_PADDING;
+
+        assert!(
+            ROOT_BAND_HEIGHT >= needed,
+            "the root band is {ROOT_BAND_HEIGHT} tall but the kind card needs {needed}; an \
+             overflowing card would no longer be centred on the root"
         );
     }
 

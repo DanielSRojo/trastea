@@ -325,15 +325,23 @@ that a slip on the glyph does not walk the scale, narrow enough that all twelve 
 - `NECK_COLUMN_WIDTH` is fixed at 340 because the fretboard canvas caps its own width off its
   height to keep a twelve-fret neck's aspect ratio; a share of the window would leave the slack
   beside the neck. The number is what the neck draws at this window height plus its padding.
-- `SELECTOR_COLUMN_WIDTH` is 470, the widest `kind_row_spans` row — `Spanish Gypsy`,
-  `Whole Tone` and `Diminished` — plus the card's padding. A narrower column drew that row past
-  the card's edge. `the_widest_kind_row_fits_the_selector_column` guards it with a deliberately
+- `SELECTOR_COLUMN_WIDTH` is 390, the widest `drill_kind_row_spans` row — `Melodic Minor`
+  and `Minor Pentatonic` — plus the card's padding. From `Major Pentatonic` on the kinds sit in
+  pairs rather than the Scale Trainer's threes, which took the column down from 470; the cost is
+  a seventh row, which this column has the height for and the Scale Trainer's card does not. A
+  narrower column draws the widest row past the card's edge. `the_widest_kind_row_fits_the_selector_column` guards it with a deliberately
   generous estimate of 0.58 em per glyph, since no font is available to measure in a test; the
   Scale Trainer never hits this because its kind card is half the window wide.
 - The middle column has no card, since a card is a boundary and the root is the one thing the
-  screen is saying. Root and sequence are centred together with free space split two above to
-  three below, which puts the pair a tenth of the column's free height above its middle, nearer where the eye
-  reads the neck.
+  screen is saying.
+- The root and the kind card share a horizontal line: each is centred in a `ROOT_BAND_HEIGHT`
+  band that `on_root_line` places identically in both columns, with free space split one above
+  to two below so the line sits a little above the middle, nearer where the eye reads the neck.
+  It is the root that is centred, not root and sequence together as before; the sequence hangs
+  below it. The band is fixed rather than measured because iced cannot align across columns,
+  so it must be at least the card's height — `the_kind_card_fits_the_root_band` guards that.
+  The drill panel is stacked over the column's foot instead of following the card, so its
+  height does not move the line.
 - The sequence is the progress readout: found degrees lit, the current one bright, the rest
   muted. A `2 of 5` beside it would be a second description of the same fact, and the drill
   panel does not repeat the degree being asked for for the same reason.

@@ -87,6 +87,9 @@ const ROOT_ROW_WIDTH: usize = 3;
 /// Six rows because no five-row shape fits the 440px card at the default window width.
 pub(super) const KIND_ROW_WIDTHS: [usize; 6] = [3, 3, 2, 2, 3, 3];
 
+/// Walk the Scale's own shape: pairs at the end let its selector column be narrower.
+const DRILL_KIND_ROW_WIDTHS: [usize; 7] = [3, 3, 2, 2, 2, 2, 2];
+
 /// Columns in the trainers' answer grids: four divides the twelve answers.
 pub(super) const ANSWER_ROW_WIDTH: usize = 4;
 
@@ -100,7 +103,16 @@ pub(super) fn root_row_spans() -> impl Iterator<Item = (usize, usize)> {
 
 /// Yields the `(start, len)` of each row of the scale-kind selector.
 pub(super) fn kind_row_spans() -> impl Iterator<Item = (usize, usize)> {
-    KIND_ROW_WIDTHS.into_iter().scan(0, |start, len| {
+    spans(KIND_ROW_WIDTHS)
+}
+
+/// Yields the `(start, len)` of each row of Walk the Scale's scale-kind selector.
+pub(super) fn drill_kind_row_spans() -> impl Iterator<Item = (usize, usize)> {
+    spans(DRILL_KIND_ROW_WIDTHS)
+}
+
+fn spans<const N: usize>(widths: [usize; N]) -> impl Iterator<Item = (usize, usize)> {
+    widths.into_iter().scan(0, |start, len| {
         let span = (*start, len);
         *start += len;
         Some(span)
@@ -209,7 +221,7 @@ impl App {
             Screen::WalkTheScale => {
                 let mut grid: Vec<FocusRow> = vec![vec![Some(FocusTarget::Back)]];
 
-                for (start, len) in kind_row_spans() {
+                for (start, len) in drill_kind_row_spans() {
                     grid.push(
                         (0..len)
                             .map(|i| Some(FocusTarget::DrillKind(start + i)))
@@ -546,6 +558,15 @@ mod tests {
         );
 
         let covered: usize = kinds.iter().map(|&(_, len)| len).sum();
+        assert_eq!(covered, ScaleKind::ALL.len());
+
+        let drill_kinds: Vec<_> = drill_kind_row_spans().collect();
+        assert_eq!(
+            drill_kinds,
+            vec![(0, 3), (3, 3), (6, 2), (8, 2), (10, 2), (12, 2), (14, 2)]
+        );
+
+        let covered: usize = drill_kinds.iter().map(|&(_, len)| len).sum();
         assert_eq!(covered, ScaleKind::ALL.len());
     }
 
