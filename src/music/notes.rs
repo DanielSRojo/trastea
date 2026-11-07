@@ -52,6 +52,11 @@ impl PitchClass {
     }
 
     /// How many semitones up from `self` to `other`, within the octave: always 0..=11.
+    /// The name it goes by with no key to spell it in: the conventional one for a black key.
+    pub fn conventional_name(self) -> Note {
+        Spelling::conventional_for(self).spell(self)
+    }
+
     pub fn semitones_up_to(self, other: PitchClass) -> u8 {
         (other.0 + 12 - self.0) % 12
     }
@@ -244,8 +249,8 @@ impl Spelling {
 
     /// What a black key is usually called — `C♯`, `E♭`, `F♯`, `A♭`, `B♭`.
     ///
-    /// Only a tie-breaker for `Scale::new` when both spellings are equally economical;
-    /// it never spells anything itself.
+    /// A tie-breaker for `Scale::new` when both spellings are equally economical, and the
+    /// whole answer for a pitch class named with no key at all.
     pub fn conventional_for(pitch_class: PitchClass) -> Spelling {
         match pitch_class.semitone() {
             1 | 6 => Spelling::Sharps,
@@ -257,6 +262,21 @@ impl Spelling {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_lone_pitch_class_takes_its_conventional_name() {
+        let names: Vec<String> = PitchClass::ALL
+            .iter()
+            .map(|pitch_class| pitch_class.conventional_name().to_string())
+            .collect();
+
+        assert_eq!(
+            names,
+            [
+                "C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"
+            ]
+        );
+    }
 
     #[test]
     fn the_distance_up_is_what_transposing_by_it_undoes() {

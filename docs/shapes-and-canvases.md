@@ -178,7 +178,11 @@ caption is computed for the same reason.
   the change.
 - The root is filled and the third and fifth ringed, because finding the root inside a shape is
   the skill CAGED teaches and it should not wait on reading a label.
-- The neck is display-only; shapes are walked with the pills and the arrows.
+- The neck is display-only; shapes are walked with the pills and the arrows. The pills are a
+  column in cycle order, which is the order the shapes sit down the vertical neck beside it.
+- The root is set on the glyph shared with the Scale Trainer and Walk the Scale. The triad under
+  it follows the notation the dots do, notes or degrees, so `i` changes everything that names
+  a note at once; a formula fixed in degrees beside dots in note names read as a second setting.
 
 `neck::CAGED_NECK` has fifteen frets because on twelve, eight of the twelve roots cannot complete
 the cycle. The four that can are D, E, G and A — the roots of the open shapes themselves.

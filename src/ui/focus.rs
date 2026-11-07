@@ -19,7 +19,6 @@ pub enum FocusTarget {
     Back,
     NotationToggle,
     RerollScale,
-    Root(usize),
     ScaleKind(usize),
     /// The Note Trainer's neck, as the *Find it* answer surface. Claims the motion keys.
     Fretboard,
@@ -51,8 +50,6 @@ pub enum FocusTarget {
     /// The Chord Library's chord list. Claims all four motion keys: up and down walk the
     /// chords, left and right the selected chord's voicings.
     ChordList,
-    /// The CAGED window's root grid, indexed like the Scale Trainer's.
-    CagedRoot(usize),
     /// A new root for the CAGED window, not a new scale.
     RerollCagedRoot,
     /// The scale drill's kind grid, indexed like the Scale Trainer's.
@@ -66,7 +63,7 @@ pub enum FocusTarget {
     ScaleNeck,
     /// The scale drill's neck, as its answer surface while pressing. Claims the motion keys.
     ScaleFretboard,
-    /// One shape pill in the CAGED window. Claims the horizontal motion keys.
+    /// One shape pill in the CAGED window. Claims up and down while the cycle goes further.
     CagedShape(usize),
 }
 
@@ -81,38 +78,20 @@ pub(super) enum Direction {
 /// One row of a screen's focus grid. `None` cells keep neighbouring cards' columns aligned.
 pub(super) type FocusRow = Vec<Option<FocusTarget>>;
 
-/// Row shapes of the scale trainer's selector grids, shared by the views and the focus grid.
-const ROOT_ROW_WIDTH: usize = 3;
+/// The kind card's row shape, shared by its views and the focus grid. Pairs at the end are
+/// what let the selector column be as narrow as it is.
+const KIND_ROW_WIDTHS: [usize; 7] = [3, 3, 2, 2, 2, 2, 2];
 
-/// Six rows because no five-row shape fits the 440px card at the default window width.
-pub(super) const KIND_ROW_WIDTHS: [usize; 6] = [3, 3, 2, 2, 3, 3];
-
-/// Walk the Scale's own shape: pairs at the end let its selector column be narrower.
-const DRILL_KIND_ROW_WIDTHS: [usize; 7] = [3, 3, 2, 2, 2, 2, 2];
-
-/// Columns in the trainers' answer grids: four divides the twelve answers.
+/// Columns in the Note Trainer's answer grid: four divides the twelve answers.
 pub(super) const ANSWER_ROW_WIDTH: usize = 4;
 
-/// Yields the `(start, len)` of each row of the root selector.
-pub(super) fn root_row_spans() -> impl Iterator<Item = (usize, usize)> {
-    let total = PitchClass::ALL.len();
-    (0..total)
-        .step_by(ROOT_ROW_WIDTH)
-        .map(move |start| (start, ROOT_ROW_WIDTH.min(total - start)))
-}
+/// Columns in the Interval Trainer's: three also divides twelve, and four tritone-wide buttons
+/// do not fit the selector column.
+pub(super) const INTERVAL_ROW_WIDTH: usize = 3;
 
 /// Yields the `(start, len)` of each row of the scale-kind selector.
 pub(super) fn kind_row_spans() -> impl Iterator<Item = (usize, usize)> {
-    spans(KIND_ROW_WIDTHS)
-}
-
-/// Yields the `(start, len)` of each row of Walk the Scale's scale-kind selector.
-pub(super) fn drill_kind_row_spans() -> impl Iterator<Item = (usize, usize)> {
-    spans(DRILL_KIND_ROW_WIDTHS)
-}
-
-fn spans<const N: usize>(widths: [usize; N]) -> impl Iterator<Item = (usize, usize)> {
-    widths.into_iter().scan(0, |start, len| {
+    KIND_ROW_WIDTHS.into_iter().scan(0, |start, len| {
         let span = (*start, len);
         *start += len;
         Some(span)
@@ -150,78 +129,37 @@ impl App {
             ],
             // drawn and hit-tested by this grid, but the arrows go through `home::step`
             Screen::Home => home::focus_grid(self.focused),
+            // the pills are stacked as the shapes sit up the neck, and the controls sit under them
             Screen::Caged => {
-                let mut back_row: FocusRow = vec![None; ROOT_ROW_WIDTH];
-                back_row[0] = Some(FocusTarget::Back);
-
-                let mut controls: FocusRow = vec![None; ROOT_ROW_WIDTH];
-                for (cell, target) in controls
-                    .iter_mut()
-                    .zip([FocusTarget::NotationToggle, FocusTarget::RerollCagedRoot])
-                {
-                    *cell = Some(target);
-                }
-
-                let mut grid = vec![back_row, controls];
-
-                // as wide as the cycle, which may be fewer than five shapes
-                let shapes = self.caged.shapes().len();
-                if shapes > 0 {
-                    grid.push(
-                        (0..shapes)
-                            .map(|i| Some(FocusTarget::CagedShape(i)))
-                            .collect(),
-                    );
-                }
-
-                for (start, len) in root_row_spans() {
-                    grid.push(
-                        (0..len)
-                            .map(|i| Some(FocusTarget::CagedRoot(start + i)))
-                            .collect(),
-                    );
-                }
-
+                let mut grid: Vec<FocusRow> = vec![vec![Some(FocusTarget::Back)]];
+                grid.extend(
+                    (0..self.caged.shapes().len()).map(|i| vec![Some(FocusTarget::CagedShape(i))]),
+                );
+                grid.push(vec![
+                    Some(FocusTarget::NotationToggle),
+                    Some(FocusTarget::RerollCagedRoot),
+                ]);
                 grid
             }
+            // its root is set on the glyph, so the kinds and the controls are all there is
             Screen::ScaleTrainer => {
-                // Back gets its own row: a fourth column in the button row would fall in the
-                // kinds card's band and Tab would reach it only after all the kinds
-                let mut back_row: FocusRow = vec![None; ROOT_ROW_WIDTH];
-                back_row[0] = Some(FocusTarget::Back);
-
-                // zipped so a narrower ROOT_ROW_WIDTH drops buttons instead of panicking
-                let mut card_buttons: FocusRow = vec![None; ROOT_ROW_WIDTH];
-                for (cell, target) in card_buttons
-                    .iter_mut()
-                    .zip([FocusTarget::NotationToggle, FocusTarget::RerollScale])
-                {
-                    *cell = Some(target);
-                }
-
-                let root_rows: Vec<_> = root_row_spans().collect();
-                let kind_rows: Vec<_> = kind_row_spans().collect();
-
-                let mut grid = vec![back_row, card_buttons];
-                for r in 0..root_rows.len().max(kind_rows.len()) {
-                    let mut row: FocusRow = vec![None; ROOT_ROW_WIDTH];
-                    if let Some(&(start, len)) = root_rows.get(r) {
-                        for (col, cell) in row.iter_mut().enumerate().take(len) {
-                            *cell = Some(FocusTarget::Root(start + col));
-                        }
-                    }
-                    if let Some(&(start, len)) = kind_rows.get(r) {
-                        row.extend((0..len).map(|i| Some(FocusTarget::ScaleKind(start + i))));
-                    }
-                    grid.push(row);
-                }
+                let mut grid: Vec<FocusRow> = vec![vec![Some(FocusTarget::Back)]];
+                grid.extend(kind_row_spans().map(|(start, len)| {
+                    (0..len)
+                        .map(|i| Some(FocusTarget::ScaleKind(start + i)))
+                        .collect()
+                }));
+                grid.push(vec![
+                    Some(FocusTarget::NotationToggle),
+                    Some(FocusTarget::RerollScale),
+                ]);
                 grid
             }
             // the last row holds only the controls the run currently shows
             Screen::WalkTheScale => {
                 let mut grid: Vec<FocusRow> = vec![vec![Some(FocusTarget::Back)]];
 
-                for (start, len) in drill_kind_row_spans() {
+                for (start, len) in kind_row_spans() {
                     grid.push(
                         (0..len)
                             .map(|i| Some(FocusTarget::DrillKind(start + i)))
@@ -306,42 +244,26 @@ impl App {
 
                 grid
             }
+            // the answers sit level with the root and the controls at the column's foot
             Screen::IntervalTrainer => {
-                let mut back_row: FocusRow = vec![None; ANSWER_ROW_WIDTH];
-                back_row[0] = Some(FocusTarget::Back);
-
-                let mut controls: FocusRow = vec![None; ANSWER_ROW_WIDTH];
-                for (cell, target) in controls.iter_mut().zip([
-                    FocusTarget::IntervalDirectionToggle,
-                    FocusTarget::SkipIntervalPrompt,
-                ]) {
-                    *cell = Some(target);
-                }
-
-                let mut grid = vec![back_row, controls];
+                let mut grid: Vec<FocusRow> = vec![vec![Some(FocusTarget::Back)]];
 
                 match self.interval_trainer.drill() {
                     Drill::NameIt => {
-                        let total = ANSWER_COUNT;
-
-                        for start in (0..total).step_by(ANSWER_ROW_WIDTH) {
-                            let len = ANSWER_ROW_WIDTH.min(total - start);
-                            let mut row: FocusRow = vec![None; ANSWER_ROW_WIDTH];
-
-                            for (col, cell) in row.iter_mut().enumerate().take(len) {
-                                *cell = Some(FocusTarget::IntervalAnswer(start + col));
-                            }
-                            grid.push(row);
-                        }
+                        grid.extend((0..ANSWER_COUNT).step_by(INTERVAL_ROW_WIDTH).map(|start| {
+                            (start..ANSWER_COUNT.min(start + INTERVAL_ROW_WIDTH))
+                                .map(|index| Some(FocusTarget::IntervalAnswer(index)))
+                                .collect()
+                        }));
                     }
                     // one cell; the cursor, not the ring, walks the neck's positions
-                    Drill::FindIt => {
-                        let mut row: FocusRow = vec![None; ANSWER_ROW_WIDTH];
-                        row[0] = Some(FocusTarget::IntervalFretboard);
-                        grid.push(row);
-                    }
+                    Drill::FindIt => grid.push(vec![Some(FocusTarget::IntervalFretboard)]),
                 }
 
+                grid.push(vec![
+                    Some(FocusTarget::IntervalDirectionToggle),
+                    Some(FocusTarget::SkipIntervalPrompt),
+                ]);
                 grid
             }
             // the voicing strip is browsed from the list, not a stop of its own
@@ -367,9 +289,9 @@ impl App {
     )]
     fn card_bands(&self, width: usize) -> Vec<Range<usize>> {
         match &self.screen {
-            Screen::ScaleTrainer => vec![0..ROOT_ROW_WIDTH, ROOT_ROW_WIDTH..width],
             // single-card screens: one band spans the whole width
             Screen::Home
+            | Screen::ScaleTrainer
             | Screen::NoteTrainer
             | Screen::IntervalTrainer
             | Screen::PlayTheInterval
@@ -489,35 +411,10 @@ mod tests {
     }
 
     #[test]
-    fn scale_trainer_reaches_every_widget_exactly_once() {
-        let targets = app_on(Screen::ScaleTrainer).focusables();
-        // Back, and the summary card's two buttons
-        assert_eq!(
-            targets.len(),
-            3 + PitchClass::ALL.len() + ScaleKind::ALL.len()
-        );
-
-        for i in 0..PitchClass::ALL.len() {
-            assert!(targets.contains(&FocusTarget::Root(i)), "missing root {i}");
-        }
-        for i in 0..ScaleKind::ALL.len() {
-            assert!(
-                targets.contains(&FocusTarget::ScaleKind(i)),
-                "missing kind {i}"
-            );
-        }
-        assert!(targets.contains(&FocusTarget::NotationToggle));
-    }
-
-    #[test]
-    fn tab_walks_one_card_at_a_time() {
-        let mut expected = vec![
-            FocusTarget::Back,
-            FocusTarget::NotationToggle,
-            FocusTarget::RerollScale,
-        ];
-        expected.extend((0..PitchClass::ALL.len()).map(FocusTarget::Root));
+    fn scale_trainer_walks_back_the_kinds_then_the_controls() {
+        let mut expected = vec![FocusTarget::Back];
         expected.extend((0..ScaleKind::ALL.len()).map(FocusTarget::ScaleKind));
+        expected.extend([FocusTarget::NotationToggle, FocusTarget::RerollScale]);
 
         assert_eq!(app_on(Screen::ScaleTrainer).focusables(), expected);
     }
@@ -527,6 +424,7 @@ mod tests {
         for screen in [
             Screen::Home,
             Screen::ScaleTrainer,
+            Screen::Caged,
             Screen::NoteTrainer,
             Screen::IntervalTrainer,
         ] {
@@ -547,26 +445,14 @@ mod tests {
     }
 
     #[test]
-    fn selector_row_spans_cover_their_arrays() {
-        let roots: Vec<_> = root_row_spans().collect();
-        assert_eq!(roots, vec![(0, 3), (3, 3), (6, 3), (9, 3)]);
-
+    fn kind_row_spans_cover_every_kind() {
         let kinds: Vec<_> = kind_row_spans().collect();
         assert_eq!(
             kinds,
-            vec![(0, 3), (3, 3), (6, 2), (8, 2), (10, 3), (13, 3)]
-        );
-
-        let covered: usize = kinds.iter().map(|&(_, len)| len).sum();
-        assert_eq!(covered, ScaleKind::ALL.len());
-
-        let drill_kinds: Vec<_> = drill_kind_row_spans().collect();
-        assert_eq!(
-            drill_kinds,
             vec![(0, 3), (3, 3), (6, 2), (8, 2), (10, 2), (12, 2), (14, 2)]
         );
 
-        let covered: usize = drill_kinds.iter().map(|&(_, len)| len).sum();
+        let covered: usize = kinds.iter().map(|&(_, len)| len).sum();
         assert_eq!(covered, ScaleKind::ALL.len());
     }
 
@@ -597,63 +483,18 @@ mod tests {
     }
 
     #[test]
-    fn arrows_walk_within_the_root_grid() {
-        // C C# D / D# E F / F# G G# / A A# B
-        assert_eq!(
-            arrow(FocusTarget::Root(0), Direction::Right),
-            FocusTarget::Root(1)
-        );
-        assert_eq!(
-            arrow(FocusTarget::Root(1), Direction::Left),
-            FocusTarget::Root(0)
-        );
-        assert_eq!(
-            arrow(FocusTarget::Root(1), Direction::Down),
-            FocusTarget::Root(4)
-        );
-        assert_eq!(
-            arrow(FocusTarget::Root(4), Direction::Up),
-            FocusTarget::Root(1)
-        );
-    }
-
-    #[test]
-    fn right_edge_of_root_grid_crosses_into_the_kinds_card() {
-        // D is the last root in its row; Ionian is the first kind in the same row.
-        assert_eq!(
-            arrow(FocusTarget::Root(2), Direction::Right),
-            FocusTarget::ScaleKind(0)
-        );
-        assert_eq!(
-            arrow(FocusTarget::ScaleKind(0), Direction::Left),
-            FocusTarget::Root(2)
-        );
-    }
-
-    #[test]
     fn arrows_stop_at_the_outer_edges() {
-        assert_eq!(
-            arrow(FocusTarget::Root(0), Direction::Left),
-            FocusTarget::Root(0)
-        );
         assert_eq!(arrow(FocusTarget::Back, Direction::Up), FocusTarget::Back);
+        assert_eq!(
+            arrow(FocusTarget::Back, Direction::Right),
+            FocusTarget::Back
+        );
 
         // ScaleKind(2) ends the widest kind row, so nothing is to its right.
         assert_eq!(
             arrow(FocusTarget::ScaleKind(2), Direction::Right),
             FocusTarget::ScaleKind(2)
         );
-    }
-
-    #[test]
-    fn down_past_the_root_grid_does_not_jump_into_the_taller_kinds_card() {
-        for last_row_root in [
-            FocusTarget::Root(9),
-            FocusTarget::Root(10),
-            FocusTarget::Root(11),
-        ] {
-            assert_eq!(arrow(last_row_root, Direction::Down), last_row_root);
-        }
     }
 
     #[test]
@@ -671,48 +512,23 @@ mod tests {
     }
 
     #[test]
-    fn the_card_buttons_line_up_with_the_columns_below_them() {
-        // the button row's third cell is empty, so `Root(2)` has nothing above it
+    fn the_controls_sit_under_the_kinds() {
         assert_eq!(
             arrow(FocusTarget::Back, Direction::Down),
+            FocusTarget::ScaleKind(0)
+        );
+        assert_eq!(
+            arrow(FocusTarget::ScaleKind(14), Direction::Down),
             FocusTarget::NotationToggle
         );
         assert_eq!(
-            arrow(FocusTarget::NotationToggle, Direction::Up),
-            FocusTarget::Back
+            arrow(FocusTarget::ScaleKind(15), Direction::Down),
+            FocusTarget::RerollScale
         );
-
-        for (button, root) in [
-            (FocusTarget::NotationToggle, FocusTarget::Root(0)),
-            (FocusTarget::RerollScale, FocusTarget::Root(1)),
-        ] {
-            assert_eq!(arrow(button, Direction::Down), root, "down from {button:?}");
-            assert_eq!(arrow(root, Direction::Up), button, "up from {root:?}");
-        }
-    }
-
-    #[test]
-    fn the_card_button_row_walks_notation_reroll() {
         assert_eq!(
             arrow(FocusTarget::NotationToggle, Direction::Right),
             FocusTarget::RerollScale
         );
-        assert_eq!(
-            arrow(FocusTarget::RerollScale, Direction::Left),
-            FocusTarget::NotationToggle
-        );
-        // the row's third cell is empty
-        assert_eq!(
-            arrow(FocusTarget::RerollScale, Direction::Right),
-            FocusTarget::RerollScale
-        );
-
-        // Back is alone on its row
-        assert_eq!(
-            arrow(FocusTarget::Back, Direction::Right),
-            FocusTarget::Back
-        );
-        assert_eq!(arrow(FocusTarget::Back, Direction::Left), FocusTarget::Back);
     }
 
     #[test]

@@ -1,19 +1,22 @@
 //! The Interval Trainer: the drill's state machine and the screen that draws it.
-//! No note is named or spelled on screen, so judging compares semitone distance.
+//! Only the root is named on screen; the target never is, and judging compares semitone
+//! distance.
 
-use iced::{Color, Element, Padding};
+use iced::{Color, Element};
 
 use super::drill::{ANSWERS, Drill, Score, choice_for, interval_label};
-use super::focus::{ANSWER_ROW_WIDTH, Direction, FocusTarget};
+use super::focus::{Direction, FocusTarget, INTERVAL_ROW_WIDTH};
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::neck::{CURSOR_HOME, DRILL_NECK, Position, neck};
+use super::root_stage::{CARD_PADDING, root_column, selector_column, stage, still_root_glyph};
 use super::style::{
     BODY, CANVAS, CONTROL_SIZE, DANGER, INK, LINK, MUTE, ROOT_MARKER, SUCCESS, card_container,
     control_button, control_label, control_shuffle, correct_answer_button, focus_ring,
     ghost_button, streak_readout, wrong_answer_button,
 };
-use super::{Message, ROOT_BUTTON_SIZE, SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT};
+use super::{Message, ROOT_BUTTON_SIZE};
 use crate::music::intervals::Interval;
+use crate::music::notes::Note;
 use crate::rng::Rng;
 
 /// What the Interval Trainer is asking right now. `NameIt` stores no interval, so judging
@@ -177,6 +180,11 @@ impl IntervalTrainer {
         self.prompt.drill()
     }
 
+    /// What the big glyph says: the root's name, and never the target's.
+    fn root_name(&self) -> Option<Note> {
+        Some(self.prompt.root().pitch_class()?.conventional_name())
+    }
+
     /// Ends the flash and draws the next prompt. A no-op when nothing is being marked, so
     /// a stale tick cannot retire the prompt on screen.
     pub(super) fn advance(&mut self, rng: &mut Rng) {
@@ -215,6 +223,8 @@ impl IntervalTrainer {
 
 /// Wider than `ROOT_BUTTON_SIZE` to fit the twinned tritone labels.
 const ANSWER_BUTTON_WIDTH: f32 = 76.0;
+const ANSWER_COLUMN_SPACING: f32 = 20.0;
+const ANSWER_ROW_SPACING: f32 = 16.0;
 
 pub(super) fn ui_interval_trainer(
     trainer: &IntervalTrainer,
@@ -245,60 +255,54 @@ pub(super) fn ui_interval_trainer(
 
     let question: Element<'static, Message> = match trainer.prompt {
         Prompt::NameIt { .. } => column![
-            text("How far is this?").size(32).color(INK),
-            text("Measure up from the amber root").size(16).color(MUTE),
+            text("how far is this?").size(26).color(BODY),
+            text("measure up from the amber root").size(16).color(MUTE),
         ]
         .spacing(6)
+        .align_x(iced::Alignment::Center)
         .into(),
         Prompt::FindIt { interval, .. } => column![
             row![
-                text("Find").size(26).color(BODY),
+                text("find").size(26).color(BODY),
                 interval_label(&choice_for(interval), 34, INK),
             ]
-            .spacing(12),
-            text("Press any fret that far above the root")
+            .spacing(12)
+            .align_y(iced::Alignment::Center),
+            text("press any fret that far above it")
                 .size(16)
                 .color(MUTE),
         ]
         .spacing(6)
+        .align_x(iced::Alignment::Center)
         .into(),
     };
 
-    let prompt_card = container(
-        column![
-            row![
-                question,
-                Space::new().width(Length::Fill),
-                streak_readout(trainer.score.streak(), trainer.score.best()),
-            ],
-            interval_trainer_controls(trainer, focused),
-        ]
-        .spacing(20),
-    )
-    .width(Length::Fill)
-    .height(Length::Fixed(SUMMARY_CARD_HEIGHT))
-    .padding(32)
-    .style(card_container);
+    let glyph = match trainer.root_name() {
+        Some(root) => still_root_glyph(root),
+        None => Space::new().into(),
+    };
 
-    // Only *Name it* has a second card; in *Find it* the neck is the answer surface.
-    let details = match trainer.prompt {
-        Prompt::NameIt { .. } => column![prompt_card, interval_answer_card(trainer, focused)],
-        Prompt::FindIt { .. } => column![prompt_card],
-    }
-    .width(Length::Fill)
-    .spacing(16);
+    let centre = root_column(glyph, question, None);
 
-    container(row![fretboard(neck), details].spacing(32))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(Padding {
-            top: 24.0,
-            right: 64.0,
-            bottom: 48.0,
-            left: 64.0,
-        })
-        .center_y(Length::Fill)
-        .into()
+    // only *Name it* has a card; in *Find it* the neck is the answer surface
+    let card: Element<'static, Message> = match trainer.prompt {
+        Prompt::NameIt { .. } => interval_answer_card(trainer, focused),
+        Prompt::FindIt { .. } => Space::new().into(),
+    };
+
+    let foot = column![
+        interval_trainer_controls(trainer, focused),
+        streak_readout(trainer.score.streak(), trainer.score.best()),
+    ]
+    .spacing(12)
+    .align_x(iced::Alignment::Center);
+
+    let selector = selector_column(
+        card,
+        container(foot).width(Length::Fill).center_x(Length::Fill),
+    );
+
+    stage(fretboard(neck), centre, selector)
 }
 
 /// The prompt's marks: the root always, and in *Name it* the target too. Unfilled rings,
@@ -378,7 +382,7 @@ fn interval_trainer_controls(
     .into()
 }
 
-/// The twelve answer buttons, in three rows of `ANSWER_ROW_WIDTH`.
+/// The twelve answer buttons, in rows of `INTERVAL_ROW_WIDTH`.
 fn interval_answer_card(
     trainer: &IntervalTrainer,
     focused: FocusTarget,
@@ -386,31 +390,24 @@ fn interval_answer_card(
     use iced::Length;
     use iced::widget::{column, container};
 
-    let rows =
-        (0..ANSWERS.len())
-            .step_by(ANSWER_ROW_WIDTH)
-            .fold(column![].spacing(16), |rows, start| {
-                let len = ANSWER_ROW_WIDTH.min(ANSWERS.len() - start);
+    let rows = (0..ANSWERS.len()).step_by(INTERVAL_ROW_WIDTH).fold(
+        column![].spacing(ANSWER_ROW_SPACING),
+        |rows, start| {
+            let len = INTERVAL_ROW_WIDTH.min(ANSWERS.len() - start);
 
-                rows.push(
-                    container(interval_answer_row(start, len, trainer, focused))
-                        .width(Length::Fill)
-                        .center_x(Length::Fill),
-                )
-            });
+            rows.push(
+                container(interval_answer_row(start, len, trainer, focused))
+                    .width(Length::Fill)
+                    .center_x(Length::Fill),
+            )
+        },
+    );
 
-    container(
-        container(rows)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill),
-    )
-    .width(Length::Fill)
-    .height(Length::Fixed(SELECTOR_CARD_HEIGHT))
-    .padding(32)
-    .style(card_container)
-    .into()
+    container(rows)
+        .width(Length::Fill)
+        .padding(CARD_PADDING)
+        .style(card_container)
+        .into()
 }
 
 fn interval_answer_row(
@@ -425,7 +422,7 @@ fn interval_answer_row(
     ANSWERS[start_index..start_index + len]
         .iter()
         .enumerate()
-        .fold(row![].spacing(20), |acc, (i, choice)| {
+        .fold(row![].spacing(ANSWER_COLUMN_SPACING), |acc, (i, choice)| {
             let answer = Answer::Interval(choice.interval);
             let was_wrong = trainer.score.wrong().contains(&answer);
             let was_right = trainer.score.correct() == Some(answer);
@@ -1282,5 +1279,50 @@ mod tests {
 
         let _ = app.update(Message::GoBack);
         assert_eq!(app.screen, Screen::Home);
+    }
+
+    #[test]
+    fn the_answer_card_fits_the_selector_column_and_the_root_band() {
+        // each button sits in a 3px `focus_ring`
+        const FOCUS_RING_PADDING: f32 = 3.0;
+
+        let columns = INTERVAL_ROW_WIDTH as f32;
+        let rows = ANSWERS.len().div_ceil(INTERVAL_ROW_WIDTH) as f32;
+        let width = columns * (ANSWER_BUTTON_WIDTH + 2.0 * FOCUS_RING_PADDING)
+            + (columns - 1.0) * ANSWER_COLUMN_SPACING
+            + 2.0 * CARD_PADDING;
+        let height = rows * (ROOT_BUTTON_SIZE + 2.0 * FOCUS_RING_PADDING)
+            + (rows - 1.0) * ANSWER_ROW_SPACING
+            + 2.0 * CARD_PADDING;
+
+        assert!(
+            width <= crate::ui::root_stage::SELECTOR_COLUMN_WIDTH,
+            "the answer card needs {width}; its last column would draw past the card's edge"
+        );
+        assert!(
+            height <= crate::ui::root_stage::ROOT_BAND_HEIGHT,
+            "the answer card needs {height}; it would no longer be centred on the root"
+        );
+    }
+
+    #[test]
+    fn the_glyph_names_the_root_and_nothing_names_the_target() {
+        let mut app = app_with_seed(0x1a7);
+        app.open(Screen::IntervalTrainer);
+
+        for _ in 0..32 {
+            let trainer = &app.interval_trainer;
+            let root = trainer
+                .prompt
+                .root()
+                .pitch_class()
+                .expect("the root is on the neck");
+            assert_eq!(trainer.root_name(), Some(root.conventional_name()));
+
+            // the rings stay unlabelled, so the name above is the only one on screen
+            assert!(prompt_markers(trainer).iter().all(|m| m.label.is_empty()));
+
+            let _ = app.update(Message::SkipIntervalPrompt);
+        }
     }
 }

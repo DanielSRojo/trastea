@@ -1,31 +1,30 @@
-//! The Scale Trainer: the lit neck and the two selector grids that choose what it lights.
+//! The Scale Trainer: the lit neck, the root it is built on, and the kinds that choose it.
 //! Keeps no state; the `Scale` and `Notation` live on `App`.
 
-use iced::{Element, Padding, font};
+use iced::{Color, Element, font};
 
-use super::focus::{FocusTarget, kind_row_spans, root_row_spans};
+use super::focus::FocusTarget;
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::neck::{DRILL_NECK, NECK_STRINGS};
+use super::root_stage::{formula, kind_card, root_column, root_glyph, selector_column, stage};
 use super::style::{
-    BODY, FEEL_FONT, INK, LINK, MUSIC_FONT, MUTE, SMUFL_FLAT, card_container, control_button,
-    control_glyph, control_label, control_shuffle,
+    BODY, FEEL_FONT, INK, LINK, MUSIC_FONT, MUTE, SMUFL_FLAT, control_button, control_glyph,
+    control_label, control_shuffle,
 };
-use super::{
-    Message, Notation, ROOT_SELECTOR_CARD_WIDTH, SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT,
-    SUMMARY_NAME_SIZE, SUMMARY_ROOT_SIZE, intervalic_text, marker_label, note_label, root_note_row,
-    scale_kind_row,
-};
-use crate::music::notes::PitchClass;
-use crate::music::scales::{Scale, ScaleKind};
-use iced::Color;
+use super::{Message, Notation, marker_label};
+use crate::music::scales::Scale;
+
+/// Caps the feel and usage lines, which would otherwise run the width of the centre column.
+const EXPLANATION_WIDTH: f32 = 340.0;
 
 pub(super) fn ui_scale_trainer(
     scale: Scale,
     notation: Notation,
+    dragging: bool,
     focused: FocusTarget,
 ) -> Element<'static, Message> {
     use iced::Length;
-    use iced::widget::{Space, column, container, row, text};
+    use iced::widget::{column, row, text};
 
     // Display only: no press handler and no cursor.
     let fb = Fretboard {
@@ -34,141 +33,69 @@ pub(super) fn ui_scale_trainer(
         ..Fretboard::default()
     };
 
-    let current_scale_card = container(
-        column![
-            row![
-                note_label(scale.root_note(), SUMMARY_ROOT_SIZE, INK),
-                Space::new().width(Length::Fill),
-                // One degree, not `1♭3`, which crowded the header row. Glyph and digit are
-                // separate texts because one `text` cannot carry both fonts.
-                control_button(
-                    control_glyph(
-                        row![
-                            control_label(text(SMUFL_FLAT.to_string()).font(MUSIC_FONT), 20.0),
-                            control_label(text("3"), 20.0),
-                        ]
-                        .spacing(0)
-                    ),
-                    Message::ToggleNotation,
-                    focused == FocusTarget::NotationToggle,
-                ),
-                control_button(
-                    control_shuffle(),
-                    Message::RerollScale,
-                    focused == FocusTarget::RerollScale,
-                ),
-            ]
-            .spacing(8),
-            text(scale.kind().name()).size(SUMMARY_NAME_SIZE).color(INK),
-            intervalic_text(scale.kind().intervals()),
-        ]
-        .spacing(10),
-    )
-    .width(Length::Fixed(ROOT_SELECTOR_CARD_WIDTH))
-    .height(Length::Fixed(SUMMARY_CARD_HEIGHT))
-    .padding(32)
-    .style(card_container);
-
-    let root_selector_content = container(root_row_spans().fold(
-        column![].spacing(16),
-        |rows, (start, len)| {
-            rows.push(
-                container(root_note_row(
-                    &PitchClass::ALL[start..start + len],
-                    scale,
-                    start,
-                    focused,
-                    Message::SelectRoot,
-                    FocusTarget::Root,
-                ))
-                .width(Length::Fill)
-                .center_x(Length::Fill),
-            )
-        },
-    ))
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .center_x(Length::Fill)
-    .center_y(Length::Fill);
-
-    let root_selector_card = container(root_selector_content)
-        .width(Length::Fixed(ROOT_SELECTOR_CARD_WIDTH))
-        .height(Length::Fixed(SELECTOR_CARD_HEIGHT))
-        .padding(32)
-        .style(card_container);
-
-    let scale_selector_content = container(kind_row_spans().fold(
-        column![].spacing(12),
-        |rows, (start, len)| {
-            rows.push(scale_kind_row(
-                &ScaleKind::ALL[start..start + len],
-                scale.kind(),
-                start,
-                focused,
-                Message::SelectScaleKind,
-                FocusTarget::ScaleKind,
-            ))
-        },
-    ))
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .center_y(Length::Fill);
-
-    let scale_selector_card = container(scale_selector_content)
-        .width(Length::Fill)
-        .height(Length::Fixed(SELECTOR_CARD_HEIGHT))
-        .padding(32)
-        .style(card_container);
-
     let explanation_font = iced::Font {
         family: font::Family::Cursive,
         style: font::Style::Italic,
         ..iced::Font::DEFAULT
     };
 
-    let explanation_card = container(
-        column![
-            text(scale.kind().feel())
-                .size(22)
-                .font(FEEL_FONT)
-                .color(BODY)
-                .width(Length::Fill),
-            text(scale.kind().common_usage())
-                .size(18)
-                .font(explanation_font)
-                .color(MUTE)
-                .width(Length::Fill),
-        ]
-        .spacing(12),
-    )
-    .width(Length::Fill)
-    .height(Length::Fixed(SUMMARY_CARD_HEIGHT))
-    .padding(32)
-    .style(card_container);
+    let explanation = column![
+        text(scale.kind().feel())
+            .size(20)
+            .font(FEEL_FONT)
+            .color(BODY)
+            .center(),
+        text(scale.kind().common_usage())
+            .size(16)
+            .font(explanation_font)
+            .color(MUTE)
+            .center(),
+    ]
+    .spacing(10)
+    .max_width(EXPLANATION_WIDTH)
+    .align_x(iced::Alignment::Center);
 
-    let summary_cards = row![current_scale_card, explanation_card]
-        .width(Length::Fill)
-        .spacing(16);
+    let centre = root_column(
+        root_glyph(scale.root_note(), dragging),
+        formula(scale.kind().intervals(), |_| INK),
+        Some(explanation.into()),
+    );
 
-    let selector_cards = row![root_selector_card, scale_selector_card]
-        .width(Length::Fill)
-        .spacing(16);
+    // One degree, not `1♭3`, which crowded the old header row. Glyph and digit are separate
+    // texts because one `text` cannot carry both fonts.
+    let controls = row![
+        control_button(
+            control_glyph(
+                row![
+                    control_label(text(SMUFL_FLAT.to_string()).font(MUSIC_FONT), 20.0),
+                    control_label(text("3"), 20.0),
+                ]
+                .spacing(0)
+            ),
+            Message::ToggleNotation,
+            focused == FocusTarget::NotationToggle,
+        ),
+        control_button(
+            control_shuffle(),
+            Message::RerollScale,
+            focused == FocusTarget::RerollScale,
+        ),
+    ]
+    .spacing(8);
 
-    let details = column![summary_cards, selector_cards]
-        .width(Length::Fill)
-        .spacing(16);
+    let selector = selector_column(
+        kind_card(
+            scale.kind(),
+            focused,
+            Message::SelectScaleKind,
+            FocusTarget::ScaleKind,
+        ),
+        iced::widget::container(controls)
+            .width(Length::Fill)
+            .center_x(Length::Fill),
+    );
 
-    container(row![fretboard(fb), details].spacing(32))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(Padding {
-            top: 24.0,
-            right: 64.0,
-            bottom: 48.0,
-            left: 64.0,
-        })
-        .center_y(Length::Fill)
-        .into()
+    stage(fretboard(fb), centre, selector)
 }
 
 fn scale_markers(scale: Scale, notation: Notation) -> Vec<NoteMarker> {
@@ -209,6 +136,8 @@ fn scale_markers(scale: Scale, notation: Notation) -> Vec<NoteMarker> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::music::notes::PitchClass;
+    use crate::music::scales::ScaleKind;
     use crate::ui::neck::STANDARD_TUNING;
     use std::collections::HashSet;
 

@@ -1,4 +1,4 @@
-//! The CAGED window: one root's five shapes tiled along one neck.
+//! The CAGED window: one root's five shapes tiled along one neck, the root set on its glyph.
 //! Holds no shape data; it shows `super::shapes::voicings` filtered and ordered.
 
 use crate::music::chords::{Chord, ChordQuality};
@@ -7,25 +7,28 @@ use crate::music::notes::PitchClass;
 use iced::widget::text;
 use iced::{Color, Element};
 
-use super::focus::{FocusTarget, root_row_spans};
+use super::focus::FocusTarget;
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::neck::CAGED_NECK;
+use super::root_stage::{
+    CARD_PADDING, FORMULA_SIZE, formula, root_column, root_glyph, selector_column, stage,
+};
 use super::shapes::{Voicing, voicings};
 use super::style::{
-    BODY, CANVAS, INK, LINK, MUSIC_FONT, MUTE, ROOT_MARKER, SMUFL_FLAT, card_container,
-    control_button, control_glyph, control_label, control_shuffle, focus_ring, ghost_button,
-    selected_root_button,
+    BODY, INK, LINK, MUSIC_FONT, MUTE, ROOT_MARKER, SMUFL_FLAT, card_container, control_button,
+    control_glyph, control_label, control_shuffle, focus_ring, ghost_button, selected_root_button,
 };
-use super::{
-    Message, Notation, ROOT_SELECTOR_CARD_WIDTH, SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT,
-    SUMMARY_NAME_SIZE, intervalic_text, marker_label, note_label, root_square,
-};
+use super::{Message, Notation, marker_label, note_label};
+use crate::music::intervals::Interval;
+use crate::music::notes::Note;
 
 /// Major, because it is the only quality whose shapes form a cycle.
 const QUALITY: ChordQuality = ChordQuality::Major;
 
-/// Twice the root selector's width, which is what the row of shape pills needs.
-const DETAILS_WIDTH: f32 = ROOT_SELECTOR_CARD_WIDTH * 2.0 + 16.0;
+/// Named so the fit test budgets the shape card against what it draws.
+const SHAPE_PILL_SIZE: f32 = 16.0;
+const COUNT_SIZE: f32 = 14.0;
+const SHAPE_CARD_SPACING: f32 = 10.0;
 
 /// Which root is shown and which of its shapes is picked.
 /// The cycle is derived from `root` rather than cached, so it cannot disagree with it.
@@ -79,21 +82,29 @@ impl Caged {
         self.clamp();
     }
 
+    /// Steps the root `steps` semitones, wrapping in both directions.
+    pub(super) fn step_root(&mut self, steps: i32) {
+        self.select_root(self.root.shift(steps));
+    }
+
     pub(super) fn select_shape(&mut self, index: usize) {
         if index < self.shapes().len() {
             self.selected = index;
         }
     }
 
-    /// Walks the cycle, stopping at the ends rather than wrapping.
-    pub(super) fn move_selection(&mut self, delta: isize) {
+    /// Walks the cycle, stopping at the ends rather than wrapping. Says whether it moved, so
+    /// an arrow at either end can leave the pills instead.
+    pub(super) fn move_selection(&mut self, delta: isize) -> bool {
         let count = self.shapes().len();
         if count == 0 {
-            return;
+            return false;
         }
 
-        let next = (self.selected as isize + delta).clamp(0, count as isize - 1);
-        self.selected = next as usize;
+        let next = (self.selected as isize + delta).clamp(0, count as isize - 1) as usize;
+        let moved = next != self.selected;
+        self.selected = next;
+        moved
     }
 
     /// Called when the screen opens; the root and selection survive leaving it.
@@ -254,13 +265,29 @@ fn count_caption(shapes: &[Voicing]) -> String {
     }
 }
 
+/// What the line under the root spells the triad with: whatever the markers say.
+#[derive(Debug, PartialEq)]
+enum Spelled {
+    Notes(Vec<Note>),
+    Degrees(&'static [Interval]),
+}
+
+fn spelled(chord: Chord, notation: Notation) -> Spelled {
+    match notation {
+        Notation::Notes => Spelled::Notes(chord.notes()),
+        // a triad has no fingering of its own here, so this never holds `Fingers`
+        Notation::Intervals | Notation::Fingers => Spelled::Degrees(chord.degrees()),
+    }
+}
+
 pub(super) fn ui_caged(
     caged: &Caged,
     notation: Notation,
+    dragging: bool,
     focused: FocusTarget,
 ) -> Element<'static, Message> {
-    use iced::widget::{Space, button, column, container, row};
-    use iced::{Length, Padding};
+    use iced::Length;
+    use iced::widget::{button, column, container, row};
 
     let chord = Chord::new(caged.root(), QUALITY);
     let shapes = caged.shapes();
@@ -272,15 +299,33 @@ pub(super) fn ui_caged(
         ..Fretboard::default()
     };
 
-    let pills = shapes
-        .iter()
-        .enumerate()
-        .fold(row![].spacing(6), |pills, (index, shape)| {
+    let triad: Element<'static, Message> = match spelled(chord, notation) {
+        Spelled::Notes(notes) => notes
+            .into_iter()
+            .fold(row![].spacing(14), |tokens, note| {
+                tokens.push(note_label(note, FORMULA_SIZE, INK))
+            })
+            .into(),
+        Spelled::Degrees(degrees) => formula(degrees, |_| INK).into(),
+    };
+
+    let below = column![triad, text(shape_caption(caged)).size(16).color(BODY),]
+        .spacing(12)
+        .align_x(iced::Alignment::Center);
+
+    let centre = root_column(root_glyph(chord.root_note(), dragging), below, None);
+
+    // stacked in cycle order, so the pills run the way the shapes sit down the neck
+    let pills = shapes.iter().enumerate().fold(
+        column![text(count_caption(&shapes)).size(COUNT_SIZE).color(MUTE)]
+            .spacing(SHAPE_CARD_SPACING),
+        |pills, (index, shape)| {
             let chosen = index == caged.selected();
 
             pills.push(focus_ring(
-                button(text(shape.shape_name()).size(14))
-                    .padding([6, 14])
+                button(text(shape.shape_name()).size(SHAPE_PILL_SIZE))
+                    .width(Length::Fill)
+                    .padding([8, 14])
                     .style(if chosen {
                         selected_root_button
                     } else {
@@ -289,112 +334,42 @@ pub(super) fn ui_caged(
                     .on_press(Message::SelectCagedShape(index)),
                 focused == FocusTarget::CagedShape(index),
             ))
-        });
-
-    let summary_card = container(
-        column![
-            row![
-                note_label(chord.root_note(), SUMMARY_NAME_SIZE, INK),
-                Space::new().width(Length::Fill),
-                text(count_caption(&shapes)).size(16).color(MUTE),
-                control_button(
-                    control_glyph(
-                        row![
-                            control_label(text(SMUFL_FLAT.to_string()).font(MUSIC_FONT), 20.0),
-                            control_label(text("3"), 20.0),
-                        ]
-                        .spacing(0)
-                    ),
-                    Message::ToggleNotation,
-                    focused == FocusTarget::NotationToggle,
-                ),
-                control_button(
-                    control_shuffle(),
-                    Message::RerollCagedRoot,
-                    focused == FocusTarget::RerollCagedRoot,
-                ),
-            ]
-            .spacing(8)
-            .align_y(iced::Alignment::Center),
-            intervalic_text(chord.degrees()),
-            text(shape_caption(caged)).size(16).color(BODY),
-            pills,
-        ]
-        .spacing(14),
-    )
-    .width(Length::Fill)
-    .height(Length::Fixed(SUMMARY_CARD_HEIGHT))
-    .padding(32)
-    .style(card_container);
-
-    let root_selector_content = container(root_row_spans().fold(
-        column![].spacing(16),
-        |rows, (start, len)| {
-            rows.push(
-                container(caged_root_row(
-                    &PitchClass::ALL[start..start + len],
-                    caged.root(),
-                    start,
-                    focused,
-                ))
-                .width(Length::Fill)
-                .center_x(Length::Fill),
-            )
         },
-    ))
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .center_x(Length::Fill)
-    .center_y(Length::Fill);
+    );
 
-    let root_selector_card = container(root_selector_content)
+    let shape_card = container(pills)
         .width(Length::Fill)
-        .height(Length::Fixed(SELECTOR_CARD_HEIGHT))
-        .padding(32)
+        .padding(CARD_PADDING)
         .style(card_container);
 
-    // One capped width for both cards so the roots do not float in a window-wide card.
-    let details = column![summary_card, root_selector_card]
-        .width(Length::Fixed(DETAILS_WIDTH))
-        .spacing(16);
+    let controls = row![
+        control_button(
+            control_glyph(
+                row![
+                    control_label(text(SMUFL_FLAT.to_string()).font(MUSIC_FONT), 20.0),
+                    control_label(text("3"), 20.0),
+                ]
+                .spacing(0)
+            ),
+            Message::ToggleNotation,
+            focused == FocusTarget::NotationToggle,
+        ),
+        control_button(
+            control_shuffle(),
+            Message::RerollCagedRoot,
+            focused == FocusTarget::RerollCagedRoot,
+        ),
+    ]
+    .spacing(8);
 
-    container(row![fretboard(fb), details].spacing(32))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(Padding {
-            top: 24.0,
-            right: 64.0,
-            bottom: 48.0,
-            left: 64.0,
-        })
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .into()
-}
+    let selector = selector_column(
+        shape_card,
+        container(controls)
+            .width(Length::Fill)
+            .center_x(Length::Fill),
+    );
 
-/// One root-selector row, named by the major triad a press builds, so pitch class 1 reads `D♭`.
-fn caged_root_row(
-    pitch_classes: &[PitchClass],
-    root: PitchClass,
-    start_index: usize,
-    focused: FocusTarget,
-) -> iced::widget::Row<'static, Message> {
-    use iced::widget::row;
-
-    pitch_classes
-        .iter()
-        .enumerate()
-        .fold(row![].spacing(28), |row, (i, pitch_class)| {
-            let is_selected = *pitch_class == root;
-            let color = if is_selected { CANVAS } else { INK };
-
-            row.push(root_square(
-                note_label(Chord::new(*pitch_class, QUALITY).root_note(), 24, color),
-                is_selected,
-                focused == FocusTarget::CagedRoot(start_index + i),
-                Message::SelectCagedRoot(*pitch_class),
-            ))
-        })
+    stage(fretboard(fb), centre, selector)
 }
 
 #[cfg(test)]
@@ -617,15 +592,15 @@ mod tests {
         let mut caged = Caged::new();
         assert_eq!(caged.selected(), 0);
 
-        caged.move_selection(-1);
+        assert!(!caged.move_selection(-1));
         assert_eq!(caged.selected(), 0, "walked off the low end");
 
         for expected in 1..5 {
-            caged.move_selection(1);
+            assert!(caged.move_selection(1));
             assert_eq!(caged.selected(), expected);
         }
 
-        caged.move_selection(1);
+        assert!(!caged.move_selection(1));
         assert_eq!(caged.selected(), 4, "walked off the high end");
     }
 
@@ -662,5 +637,57 @@ mod tests {
                 assert!(caged.selected_shape().is_some(), "{next:?} after {root:?}");
             }
         }
+    }
+
+    #[test]
+    fn stepping_the_root_wraps_and_keeps_the_selection() {
+        let mut caged = Caged::new();
+        caged.move_selection(2);
+
+        caged.step_root(-1);
+        assert_eq!(caged.root(), PitchClass::new(11), "C did not wrap to B");
+        assert_eq!(caged.selected(), 2);
+
+        caged.step_root(13);
+        assert_eq!(caged.root(), PitchClass::new(0));
+    }
+
+    #[test]
+    fn the_shape_card_fits_the_root_band() {
+        // iced's default line height, and a pill's `.padding([8, 14])` inside its 3px `focus_ring`
+        const TEXT_LINE_HEIGHT: f32 = 1.3;
+        const BUTTON_PADDING_Y: f32 = 8.0;
+        const FOCUS_RING_PADDING: f32 = 3.0;
+
+        for root in PitchClass::ALL {
+            let shapes = cycle(root).len() as f32;
+            let pill = SHAPE_PILL_SIZE * TEXT_LINE_HEIGHT
+                + 2.0 * BUTTON_PADDING_Y
+                + 2.0 * FOCUS_RING_PADDING;
+            let needed = COUNT_SIZE * TEXT_LINE_HEIGHT
+                + shapes * (pill + SHAPE_CARD_SPACING)
+                + 2.0 * CARD_PADDING;
+
+            assert!(
+                crate::ui::root_stage::ROOT_BAND_HEIGHT >= needed,
+                "{root:?}'s shape card needs {needed}, more than the root band holds"
+            );
+        }
+    }
+
+    #[test]
+    fn the_line_under_the_root_follows_the_notation() {
+        let chord = Chord::new(PitchClass::new(2), QUALITY);
+
+        let Spelled::Notes(notes) = spelled(chord, Notation::Notes) else {
+            panic!("notes notation spelled degrees");
+        };
+        let names: Vec<String> = notes.iter().map(Note::to_string).collect();
+        assert_eq!(names, ["D", "F#", "A"]);
+
+        assert_eq!(
+            spelled(chord, Notation::Intervals),
+            Spelled::Degrees(chord.degrees())
+        );
     }
 }

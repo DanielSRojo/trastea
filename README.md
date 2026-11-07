@@ -25,12 +25,14 @@ from the keyboard — the mouse is optional.
 
 ## Screens
 
-**Scale Trainer** — pick a root and one of sixteen scale kinds (the seven diatonic modes,
+**Scale Trainer** — set a root and pick one of sixteen scale kinds (the seven diatonic modes,
 harmonic and melodic minor, the two pentatonics, blues, voodoo, Spanish gypsy, whole tone,
 diminished) and see every degree lit on the neck. The scale names itself the way it would
 be taught — pitch class 10 under Ionian is B♭ major, not the A♯ major that would put three
 double sharps on the fretboard — so there is nothing to choose and no ♯/♭ setting to get
-wrong. `i` toggles the markers between note names and scale degrees; `r` rerolls a random
+wrong. The root stands in 120-point type beside the neck with the kind's formula under it,
+set the way Walk the Scale's is, and the kind's feel and usual home sit at the foot of the
+column. `i` toggles the markers between note names and scale degrees; `r` rerolls a random
 scale.
 
 **Walk the Scale** — the Scale Trainer's picture, asked as a question. Pick a kind here too,
@@ -51,11 +53,13 @@ otherwise move a screen you are not on.
 
 The root is the one control that is also what the screen is saying. It is set on the glyph
 that names it — dragged left or right, or scrolled over, a semitone every forty pixels and
-wrapping past B to C — rather than on a grid of twelve buttons like the Scale Trainer's and
-the CAGED window's. A screen that states the scale in 120-point type and then restates it as
-twelve buttons is spending a card and twelve stops in the focus ring to say something it has
-already said, so the drill spends neither: its ring is Back, the sixteen kinds, and the run's
-controls.
+wrapping past B to C — rather than on a grid of twelve buttons. A screen that states the scale
+in 120-point type and then restates it as twelve buttons is spending a card and twelve stops in
+the focus ring to say something it has already said, so the drill spends neither: its ring is
+Back, the sixteen kinds, and the run's controls. The drill was the first screen built this way;
+the Scale Trainer and the CAGED window followed, so all three share one stage — the neck, the
+root, and a card level with it — and the two interval drills stand on it too, with a root the
+drill chooses rather than one you drag.
 
 Completing the last degree is what scores, and only that — a flash after every note would cost
 seven seconds to walk a seven-note scale. A degree is judged by the pitch class it sounds, so
@@ -98,22 +102,24 @@ asks for a note and string that calibration cannot tell from another place on th
 for a string it flags. The streak survives the swap and the direction is kept for coming back.
 While playing, `d` opens the input list, as on every screen that listens.
 
-**Interval Trainer** — the same two directions, with nothing on screen named. A lit position
-stands in for the tonal center instead of a key, and no note name appears anywhere, so a
-prompt is answerable by measuring the distance between two marks and by nothing else. *Name
+**Interval Trainer** — the same two directions, measured rather than named. A lit position
+stands in for the tonal center instead of a key, and its name stands beside the neck in
+120-point type, as the root does on the scale screens; the target is never named, so a prompt
+is answered by measuring the distance from the root rather than by reading a second name. *Name
 it* lights a root and a target and asks what interval separates them; *Find it* lights a root,
 names an interval, and asks you to click or walk to a position carrying it. Twelve buttons
 cover the octave rather than thirteen: with no key established, the augmented fourth and the
 diminished fifth are the same six frets, so the drill judges by semitone distance instead of
-pretending to tell them apart. `d` swaps the direction, `r` skips the current prompt.
+pretending to tell them apart. The root is the drill's to choose, so its glyph does not drag.
+`d` swaps the direction, `r` skips the current prompt.
 
 **Play the Interval** — the same prompt as the Interval Trainer's *Find it*, answered on the
-guitar instead of with a click. A lit position stands for the root, an interval is named, and
-the screen waits to hear it. Plug in, play the note, and it is judged by the pitch class it
+guitar instead of with a click. A lit position stands for the root, named large beside the neck,
+an interval is asked for under it, and the screen waits to hear it. Plug in, play the note, and it is judged by the pitch class it
 sounds — so the interval is correct in any octave and at any position carrying it, which is the
-rule *Find it* already applies to a press. Nothing is named here either: what it heard is drawn
-as marks where it was played, never as a note name, because a screen that printed "you played
-C♯" could be answered by hunting for a name rather than by measuring a distance. With a
+rule *Find it* already applies to a press. The root is the only note named: what it heard is
+drawn as marks where it was played, never as a note name, because a screen that printed "you
+played C♯" could be answered by hunting for a name rather than by measuring a distance. With a
 calibration kept on the Position Finder, an answer is marked at the position it was placed at,
 or at the few it cannot be told apart from; without one, or for a note slid into, it is marked
 at every position sounding that pitch — two or three places, since the octave is heard even
@@ -162,12 +168,14 @@ of the same entry. A placement that would fall below the nut, outrun a hand, run
 or need a fifth finger is refused rather than shown.
 
 **CAGED** — one root's five shapes tiled along a single neck, rather than five separate
-diagrams. Pick a root and the screen places every CAGED shape of its major triad, orders them
+diagrams. Set a root on its glyph and the screen places every CAGED shape of its major triad, orders them
 up the neck, and draws them together: the selected one in blue, its neighbours grey, and the
 frets where two of them meet in orange, because a note that belongs to both shapes is the
 thing worth seeing. Roots are filled and thirds and fifths ringed, since finding the root
-inside a shape is the skill the system is for. `← →` walk the cycle, `r` picks another root and
-`i` switches the dots between note names and degrees.
+inside a shape is the skill the system is for. The triad is spelled under the root, in notes or
+degrees as the dots are. `↑ ↓` walk the cycle down a column of shapes ordered as they sit on the
+neck, `[ ]` step the root, `r` picks another root and `i` switches the dots and the triad between
+note names and degrees.
 
 Nothing here is tabulated. The screen asks the same placement arithmetic the chord library
 asks, keeps the lowest placement of each shape, and orders them by fret — and the letters come
@@ -350,17 +358,18 @@ screen that listens — including the Note Trainer while it is played, where a n
 have no direction for it to swap. `m` swaps pressing and playing wherever a drill can be
 answered both ways, and the overlay says which is in force: `answer: press` or `answer: play`. `r` is the one key that means the same thing everywhere it is bound —
 replace what is on screen — including on Walk the Scale, where it picks another scale to
-drill. That screen's `[` and `]` step its root down and up from wherever the ring is standing;
-they are brackets rather than `← →` because the arrows belong to the ring, which still has
-sixteen kinds to walk there, and because the root display they step is deliberately not a
-focus stop for the arrows to be claimed on. A key that holds a setting rather than firing an action says so in the overlay: that
+drill. On every screen with a root glyph, `[` and `]` step the root down and up from wherever
+the ring is standing; they are brackets rather than `← →` because the arrows belong to the ring,
+which still has kinds or shapes to walk there, and because the glyph they step is deliberately
+not a focus stop for the arrows to be claimed on. A key that holds a setting rather than firing an action says so in the overlay: that
 screen's `t` reads `timer: 5:00` and its `n` reads `neck: hidden`, which is why an
 accelerator's label is a `Cow<'static, str>` and not a `&'static str`.
 
 Four widgets claim the motion keys rather than letting them move the focus ring: a trainer's
 neck, which walks its cursor — Walk the Scale's does too, while it is being answered by
-pressing; the CAGED window's shape row, where `← →` change the selection
-outright so walking the cycle is one gesture rather than focus-then-activate; the library's
+pressing; the CAGED window's shape column, where `↑ ↓` change the selection
+outright so walking the cycle is one gesture rather than focus-then-activate, and hand the ring
+on once the cycle ends; the library's
 chord list, where `↑ ↓` walk the chords and `← →` the selected chord's voicings; and the input
 list, which claims `↑ ↓` for the same reason while it is open, on whichever screen opened it.
 Tab is the way out of the first three, and `Esc` closes the fourth without leaving the screen —
@@ -406,7 +415,7 @@ src/
                          because the fit reads further back than detection drains
   ui/
     mod.rs               App, Screen, Message — update, view and the subscription — and
-                         the root buttons and formula tokens that three screens share
+                         the kind pills and formula tokens the screens share
     home.rs              the Home menu: the screens grouped into categories, the open
                          one's entries beside them, opened by wherever the ring stands
     style.rs             the palette, the faces and the glyphs drawn from them, and the
@@ -425,7 +434,9 @@ src/
                          across it
     keys.rs              key translation, the per-screen accelerator table, and the `?`
                          overlay drawn from that table
-    scale_trainer.rs     the Scale Trainer: the lit neck and the grids that choose it
+    root_stage.rs        the big root: the glyph a drag or the wheel steps, the gesture
+                         behind it, and the neck–root–card stage five screens stand on
+    scale_trainer.rs     the Scale Trainer: the lit neck, its root, and the kinds that choose it
     walk_the_scale.rs    the scale drill's state machine and the screen that draws it —
                          its own scale, its sequence, and the gate that decides when a
                          reading is an answer
@@ -542,6 +553,13 @@ else. `App` drives them all through the methods they mark
 the instrument rather than the drill, and they all want it on the same terms. The CAGED window
 keeps only a root and an index into the shapes that root produced: the cycle itself is derived
 wherever it is wanted, since a cached list is a field free to disagree with the root beside it.
+
+The root glyph moved out of `walk_the_scale.rs` the way the shapes and the listener moved out
+of theirs: a second screen wanted it. `root_stage.rs` holds the glyph, its gesture canvas and
+the stage around it, and nothing about any one screen's root. The gesture's state — a drag's
+anchor and the wheel's remainder — is one `RootDial` on `App` rather than one per screen, since
+only the screen on show has a glyph to drag; a gesture yields steps, and `App` routes them by
+the screen on show, as it does the audio messages, and drops the dial on the way out.
 
 Key translation is the one thing that moved out of the subscription. It was a stateless
 function of a key press until the library gained a text box, and iced hashes a subscription

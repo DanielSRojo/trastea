@@ -113,7 +113,7 @@ pub(super) fn accelerators_for(
     match screen {
         // the table at rest, with the ring on the categories
         Screen::Home => home::accelerators(FocusTarget::HomeCategory(home::Category::Scales)),
-        Screen::ScaleTrainer => vec![
+        Screen::ScaleTrainer => [
             (
                 'r',
                 Fires::Widget(FocusTarget::RerollScale),
@@ -124,26 +124,17 @@ pub(super) fn accelerators_for(
                 Fires::Widget(FocusTarget::NotationToggle),
                 "interval notation".into(),
             ),
-        ],
+        ]
+        .into_iter()
+        .chain(root_steps())
+        .collect(),
         Screen::WalkTheScale => {
-            // brackets rather than arrows: the root display is neither a focus stop nor a closable list
-            let mut keys: Vec<Accelerator> = vec![
-                (
-                    'r',
-                    Fires::Widget(FocusTarget::RerollDrillScale),
-                    "new scale".into(),
-                ),
-                (
-                    '[',
-                    Fires::Message(Message::StepDrillRoot(-1)),
-                    "root down".into(),
-                ),
-                (
-                    ']',
-                    Fires::Message(Message::StepDrillRoot(1)),
-                    "root up".into(),
-                ),
-            ];
+            let mut keys: Vec<Accelerator> = vec![(
+                'r',
+                Fires::Widget(FocusTarget::RerollDrillScale),
+                "new scale".into(),
+            )];
+            keys.extend(root_steps());
 
             if !drill.is_running() {
                 keys.push((
@@ -252,7 +243,7 @@ pub(super) fn accelerators_for(
                 ),
             ]
         }
-        Screen::Caged => vec![
+        Screen::Caged => [
             (
                 'r',
                 Fires::Widget(FocusTarget::RerollCagedRoot),
@@ -263,7 +254,10 @@ pub(super) fn accelerators_for(
                 Fires::Widget(FocusTarget::NotationToggle),
                 "interval notation".into(),
             ),
-        ],
+        ]
+        .into_iter()
+        .chain(root_steps())
+        .collect(),
         Screen::Tuner => vec![
             (
                 'd',
@@ -294,6 +288,18 @@ pub(super) fn accelerators_for(
             ),
         ],
     }
+}
+
+/// Brackets rather than arrows: the root glyph is neither a focus stop nor a closable list.
+fn root_steps() -> [Accelerator; 2] {
+    [
+        (
+            '[',
+            Fires::Message(Message::StepRoot(-1)),
+            "root down".into(),
+        ),
+        (']', Fires::Message(Message::StepRoot(1)), "root up".into()),
+    ]
 }
 
 fn note_trainer_accelerators(answering: note_trainer::Answering) -> Vec<Accelerator> {

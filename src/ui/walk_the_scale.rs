@@ -4,21 +4,20 @@
 
 use std::time::{Duration, Instant};
 
-use iced::mouse::ScrollDelta;
-use iced::widget::canvas::{self, Canvas};
-use iced::{Color, Element, Length, Padding, Point, Rectangle, Renderer, Size, Theme};
+use iced::{Color, Element, Length};
 
+use super::Message;
 use super::calibration;
-use super::focus::{Direction, FocusTarget, drill_kind_row_spans};
+use super::focus::{Direction, FocusTarget};
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
 use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS, Position};
 use super::placement::{Placed, Placement, Placer};
+use super::root_stage::{formula, kind_card, root_column, root_glyph, selector_column, stage};
 use super::style::{
-    BODY, CONTROL_SIZE, DANGER, INK, LINK, MUSIC_FONT, MUTE, SUCCESS, card_container,
-    control_button, control_label, control_shuffle,
+    BODY, CONTROL_SIZE, DANGER, INK, LINK, MUTE, SUCCESS, control_button, control_label,
+    control_shuffle,
 };
-use super::{Message, note_label, scale_kind_row};
 use crate::audio::detect::Heard;
 use crate::audio::inharmonicity::Fit;
 use crate::music::intervals::Interval;
@@ -93,11 +92,6 @@ pub(super) struct WalkTheScale {
     /// A preference that survives leaving the drill, unlike the `Listener`.
     answering: Answering,
     best_streak: u32,
-    /// Where a drag of the root display was last measured from, in window coordinates.
-    drag: Option<f32>,
-    /// Wheel travel that has not yet made a semitone. Kept between gestures so a nudge
-    /// and a nudge back cancel.
-    scroll: f32,
     /// The capture device, held only while a run is listening.
     listener: Option<Listener>,
     placer: Placer,
@@ -177,8 +171,6 @@ impl WalkTheScale {
             // the device is not claimed here; `enter` opens it
             answering: Answering::Playing { neck_hidden: false },
             best_streak: 0,
-            drag: None,
-            scroll: 0.0,
             listener: None,
             placer: Placer::default(),
             mode: Mode::Running(Run::new(None, Gate::Listening)),
@@ -202,48 +194,6 @@ impl WalkTheScale {
         }
 
         self.select_root(self.scale.root().shift(steps));
-    }
-
-    pub(super) fn is_dragging(&self) -> bool {
-        self.drag.is_some()
-    }
-
-    pub(super) fn grab_root(&mut self, x: f32) {
-        self.drag = Some(x);
-    }
-
-    /// A drag that has reached `x`. Whole steps are consumed off the anchor, so the pointer
-    /// must return to where it was to undo a step.
-    pub(super) fn drag_root(&mut self, x: f32) {
-        let Some(anchor) = self.drag else {
-            return;
-        };
-
-        let steps = ((x - anchor) / STEP_DISTANCE).trunc();
-
-        if steps != 0.0 {
-            self.drag = Some(anchor + steps * STEP_DISTANCE);
-            self.step_root(steps as i32);
-        }
-    }
-
-    pub(super) fn drop_root(&mut self) {
-        self.drag = None;
-    }
-
-    /// The wheel, in steps. Ignored while a drag is going.
-    pub(super) fn scroll_root(&mut self, steps: f32) {
-        if self.drag.is_some() {
-            return;
-        }
-
-        self.scroll += steps;
-        let whole = self.scroll.trunc();
-
-        if whole != 0.0 {
-            self.scroll -= whole;
-            self.step_root(whole as i32);
-        }
     }
 
     pub(super) fn select_kind(&mut self, kind: ScaleKind) {
@@ -599,9 +549,10 @@ impl WalkTheScale {
 /// controls on the right.
 pub(super) fn ui_walk_the_scale(
     drill: &WalkTheScale,
+    dragging: bool,
     focused: FocusTarget,
 ) -> Element<'static, Message> {
-    use iced::widget::{Space, column, container, row, stack, text};
+    use iced::widget::{container, text};
 
     // modal while it is up: nothing is drawn behind it
     if let Some(listener) = drill.listener()
@@ -632,281 +583,46 @@ pub(super) fn ui_walk_the_scale(
                 .size(13)
                 .color(MUTE),
         )
-        .width(Length::Fixed(NECK_COLUMN_WIDTH))
+        .width(Length::Fill)
         .height(Length::Fill)
         .center_x(Length::Fill)
         .center_y(Length::Fill)
         .into()
     } else {
-        // the canvas caps its width to the neck's aspect ratio, so centre it in the column
-        container(fretboard(fb))
-            .width(Length::Fixed(NECK_COLUMN_WIDTH))
-            .height(Length::Fill)
-            .into()
+        fretboard(fb)
     };
 
-    // a `Frame` cannot measure text, so the glyph is a widget stacked over the canvas that
-    // takes the drag and the wheel
-    let root = stack![
-        Canvas::new(RootGrip {
-            dragging: drill.is_dragging(),
-        })
-        .width(Length::Fill)
-        .height(Length::Fill),
-        container(note_label(scale.root_note(), ROOT_DISPLAY_SIZE, INK))
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill),
-    ];
-
-    // equal fills above and below centre the root, not root and sequence, in the band
-    let centre = on_root_line(
-        column![
-            Space::new().height(Length::Fill),
-            container(root)
-                .width(Length::Fill)
-                .height(Length::Fixed(ROOT_ROW_HEIGHT)),
-            container(sequence_text(drill))
-                .width(Length::Fill)
-                .center_x(Length::Fill),
-            Space::new().height(Length::Fill),
-        ]
-        .height(Length::Fill),
+    let centre = root_column(
+        root_glyph(scale.root_note(), dragging),
+        sequence_text(drill),
+        None,
     );
 
-    let kind_card = container(drill_kind_row_spans().fold(
-        column![].spacing(10),
-        |rows, (start, len)| {
-            rows.push(scale_kind_row(
-                &ScaleKind::ALL[start..start + len],
-                scale.kind(),
-                start,
-                focused,
-                Message::SelectDrillKind,
-                FocusTarget::DrillKind,
-            ))
-        },
-    ))
-    .width(Length::Fill)
-    .padding(KIND_CARD_PADDING)
-    .style(card_container);
+    let selector = selector_column(
+        kind_card(
+            scale.kind(),
+            focused,
+            Message::SelectDrillKind,
+            FocusTarget::DrillKind,
+        ),
+        drill_panel(drill, focused),
+    );
 
-    let selector = stack![
-        on_root_line(kind_card),
-        column![
-            Space::new().height(Length::Fill),
-            drill_panel(drill, focused)
-        ],
-    ]
-    .width(Length::Fixed(SELECTOR_COLUMN_WIDTH))
-    .height(Length::Fill);
-
-    container(row![neck, centre, selector].spacing(32))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(Padding {
-            top: 24.0,
-            right: 64.0,
-            bottom: 48.0,
-            left: 64.0,
-        })
-        .into()
-}
-
-/// Places `content` centred in a band at the same height in every column that uses it, so
-/// the root glyph and the kind card share one horizontal line.
-fn on_root_line<'a>(content: impl Into<Element<'a, Message>>) -> iced::widget::Column<'a, Message> {
-    use iced::widget::{Space, column, container};
-
-    // one above to two below puts the band a little above the column's middle
-    column![
-        Space::new().height(Length::FillPortion(1)),
-        container(content)
-            .width(Length::Fill)
-            .height(Length::Fixed(ROOT_BAND_HEIGHT))
-            .align_y(iced::Alignment::Center),
-        Space::new().height(Length::FillPortion(2)),
-    ]
-    .width(Length::Fill)
-    .height(Length::Fill)
-}
-
-/// Tall enough for the kind card's seven rows, which is the taller of the two bands' contents.
-const ROOT_BAND_HEIGHT: f32 = 420.0;
-
-const ROOT_DISPLAY_SIZE: f32 = 120.0;
-
-const SEQUENCE_SIZE: f32 = 34.0;
-
-/// Fixed because the canvas caps its own width off its height; this is what the neck draws at
-/// this window's height plus its padding.
-const NECK_COLUMN_WIDTH: f32 = 340.0;
-
-/// Fixed so the kind pills are not clipped; fits the widest `drill_kind_row_spans` row plus padding.
-const SELECTOR_COLUMN_WIDTH: f32 = 390.0;
-
-const KIND_CARD_PADDING: f32 = 24.0;
-
-/// How far the pointer travels, or the wheel scrolls, for one semitone.
-const STEP_DISTANCE: f32 = 40.0;
-
-/// Fixed so the canvas under the glyph, and its arrows, do not move with the window.
-const ROOT_ROW_HEIGHT: f32 = ROOT_DISPLAY_SIZE * 1.3;
-
-/// Where the root's glyph sits, and what counts as a press on it.
-struct RootDisplay {
-    center: Point,
-    half_width: f32,
-    half_height: f32,
-}
-
-impl RootDisplay {
-    /// Half the width of the widest glyph. Not measured per note, so the box does not change
-    /// size under the hand mid-drag.
-    const GLYPH_HALF_WIDTH: f32 = 80.0;
-
-    fn new(size: Size) -> RootDisplay {
-        RootDisplay {
-            center: Point::new(size.width / 2.0, size.height / 2.0),
-            // never wider than the canvas, or it would claim presses beside it
-            half_width: (size.width / 2.0).min(Self::GLYPH_HALF_WIDTH),
-            half_height: size.height.min(ROOT_DISPLAY_SIZE) / 2.0,
-        }
-    }
-
-    fn grab_box(&self) -> Rectangle {
-        Rectangle {
-            x: self.center.x - self.half_width,
-            y: self.center.y - self.half_height,
-            width: 2.0 * self.half_width,
-            height: 2.0 * self.half_height,
-        }
-    }
-
-    fn grabs(&self, point: Point) -> bool {
-        self.grab_box().contains(point)
-    }
-}
-
-/// A scroll, in steps. A notch is one step and pixels are worth what drag pixels are worth.
-/// Only the vertical axis is read, so a diagonal flick does not step twice.
-fn steps_from(delta: ScrollDelta) -> f32 {
-    match delta {
-        ScrollDelta::Lines { y, .. } => y,
-        ScrollDelta::Pixels { y, .. } => y / STEP_DISTANCE,
-    }
-}
-
-/// The root display's gesture surface. A canvas rather than a `mouse_area` because `update`
-/// sees every event, so a drag continues past the glyph's edge.
-struct RootGrip {
-    /// Whether a drag is already going. Read off the drill so `App::update` owns the gesture.
-    dragging: bool,
-}
-
-impl canvas::Program<Message> for RootGrip {
-    type State = ();
-
-    /// Nothing; the glyph is the widget stacked over this canvas.
-    fn draw(
-        &self,
-        _state: &(),
-        _renderer: &Renderer,
-        _theme: &Theme,
-        _bounds: Rectangle,
-        _cursor: iced::mouse::Cursor,
-    ) -> Vec<canvas::Geometry> {
-        Vec::new()
-    }
-
-    fn update(
-        &self,
-        _state: &mut (),
-        event: &canvas::Event,
-        bounds: Rectangle,
-        cursor: iced::mouse::Cursor,
-    ) -> Option<canvas::Action<Message>> {
-        let display = RootDisplay::new(bounds.size());
-        let over = cursor
-            .position_in(bounds)
-            .is_some_and(|point| display.grabs(point));
-
-        match event {
-            // carries the window's x: `position_in` is `None` once the pointer leaves
-            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left))
-                if over =>
-            {
-                let x = cursor.position()?.x;
-                Some(canvas::Action::publish(Message::GrabDrillRoot(x)).and_capture())
-            }
-            iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) if self.dragging => {
-                Some(canvas::Action::publish(Message::DragDrillRoot(position.x)).and_capture())
-            }
-            iced::Event::Mouse(iced::mouse::Event::ButtonReleased(iced::mouse::Button::Left))
-                if self.dragging =>
-            {
-                Some(canvas::Action::publish(Message::DropDrillRoot).and_capture())
-            }
-            // captured whether or not it stepped, so a wheel over the glyph never falls through
-            iced::Event::Mouse(iced::mouse::Event::WheelScrolled { delta }) if over => Some(
-                canvas::Action::publish(Message::ScrollDrillRoot(steps_from(*delta))).and_capture(),
-            ),
-            _ => None,
-        }
-    }
-
-    fn mouse_interaction(
-        &self,
-        _state: &(),
-        bounds: Rectangle,
-        cursor: iced::mouse::Cursor,
-    ) -> iced::mouse::Interaction {
-        if self.dragging {
-            iced::mouse::Interaction::Grabbing
-        } else if cursor
-            .position_in(bounds)
-            .is_some_and(|point| RootDisplay::new(bounds.size()).grabs(point))
-        {
-            iced::mouse::Interaction::Grab
-        } else {
-            iced::mouse::Interaction::default()
-        }
-    }
+    stage(neck, centre, selector)
 }
 
 /// The scale's formula, with the drill's place in it marked: found degrees lit, the current
 /// one bright, the rest muted.
 fn sequence_text(drill: &WalkTheScale) -> iced::widget::Row<'static, Message> {
-    use iced::widget::{row, text};
-
-    let scale = drill.scale();
     let at = drill.progress().map_or(usize::MAX, |(found, _)| found);
 
-    scale.kind().intervals().iter().enumerate().fold(
-        row![].spacing(14),
-        |tokens, (index, interval)| {
-            let color = match index.cmp(&at) {
-                std::cmp::Ordering::Less => SUCCESS,
-                std::cmp::Ordering::Equal => INK,
-                std::cmp::Ordering::Greater => MUTE,
-            };
-
-            let (glyph, digit) = super::interval_token(*interval);
-            let mut token = row![].spacing(0);
-
-            if let Some(glyph) = glyph {
-                token = token.push(
-                    text(glyph.to_string())
-                        .size(SEQUENCE_SIZE)
-                        .font(MUSIC_FONT)
-                        .color(color),
-                );
-            }
-
-            tokens.push(token.push(text(digit.to_string()).size(SEQUENCE_SIZE).color(color)))
-        },
-    )
+    formula(drill.scale().kind().intervals(), |index| {
+        match index.cmp(&at) {
+            std::cmp::Ordering::Less => SUCCESS,
+            std::cmp::Ordering::Equal => INK,
+            std::cmp::Ordering::Greater => MUTE,
+        }
+    })
 }
 
 /// The run's controls and its numbers, at the foot of the right column.
@@ -1071,15 +787,13 @@ mod tests {
     use super::super::{App, Message, Screen};
     use super::*;
     use crate::audio::detect::Detection;
-    use crate::ui::KIND_BUTTON_SIZE;
     use crate::ui::calibration::Calibration;
     use crate::ui::calibration::tests::spike_guitar;
     use crate::ui::placement::FITS_PER_NOTE;
     use crate::ui::placement::tests::{measured, pluck};
     use crate::ui::position::{Estimate, estimate};
-    // `as _` brings `Program` into scope for `update` without binding the name
+    use crate::ui::root_stage::STEP_DISTANCE;
     use iced::keyboard;
-    use iced::widget::canvas::Program as _;
 
     /// An app on the drill with a known scale and a run going. `navigate_to` rather than
     /// `open`, so nothing is rerolled.
@@ -1159,198 +873,15 @@ mod tests {
             .expect("the neck sounds every pitch class")
     }
 
-    /// Widths the root display is plausibly drawn at; the height is fixed.
-    const ROOT_SIZES: [Size; 4] = [
-        Size::new(220.0, ROOT_ROW_HEIGHT),
-        Size::new(278.0, ROOT_ROW_HEIGHT),
-        Size::new(360.0, ROOT_ROW_HEIGHT),
-        Size::new(520.0, ROOT_ROW_HEIGHT),
-    ];
-
-    #[test]
-    fn the_grab_box_is_centred_and_stays_inside_the_canvas() {
-        for size in ROOT_SIZES {
-            let display = RootDisplay::new(size);
-            let grab_box = display.grab_box();
-
-            assert!(
-                display.grabs(display.center),
-                "{size:?} does not grab its own centre"
-            );
-
-            // A point just outside each edge belongs to nothing.
-            for outside in [
-                Point::new(grab_box.x - 1.0, display.center.y),
-                Point::new(grab_box.x + grab_box.width + 1.0, display.center.y),
-                Point::new(display.center.x, grab_box.y - 1.0),
-                Point::new(display.center.x, grab_box.y + grab_box.height + 1.0),
-            ] {
-                assert!(!display.grabs(outside), "{size:?} grabs {outside:?}");
-            }
-
-            assert!(
-                grab_box.x >= 0.0 && grab_box.x + grab_box.width <= size.width,
-                "{size:?} puts the box past the canvas edge"
-            );
-        }
-    }
-
-    /// The glyph width is a generous estimate, since there is no font to measure here.
-    #[test]
-    fn the_widest_kind_row_fits_the_selector_column() {
-        // a conservative average advance for the body font at `KIND_BUTTON_SIZE`
-        const GLYPH_WIDTH: f32 = 0.58;
-        const BUTTON_PADDING_X: f32 = 12.0;
-        const FOCUS_RING_PADDING: f32 = 3.0;
-        const ROW_SPACING: f32 = 8.0;
-
-        let widest = drill_kind_row_spans()
-            .map(|(start, len)| {
-                let kinds = &ScaleKind::ALL[start..start + len];
-                let text: f32 = kinds
-                    .iter()
-                    .map(|kind| kind.name().chars().count() as f32 * KIND_BUTTON_SIZE * GLYPH_WIDTH)
-                    .sum();
-                let pills = len as f32 * 2.0 * (BUTTON_PADDING_X + FOCUS_RING_PADDING);
-                text + pills + (len as f32 - 1.0) * ROW_SPACING
-            })
-            .fold(0.0_f32, f32::max);
-
-        let available = SELECTOR_COLUMN_WIDTH - 2.0 * KIND_CARD_PADDING;
-
-        assert!(
-            available >= widest,
-            "the selector column leaves {available} for a kind row that needs {widest}; the \
-             longest row would be drawn past the card's edge"
-        );
-    }
-
-    #[test]
-    fn the_kind_card_fits_the_root_band() {
-        // iced's default line height, the card's `.spacing(10)`, and a pill's `.padding([8, 12])`
-        // inside its 3px `focus_ring`
-        const TEXT_LINE_HEIGHT: f32 = 1.3;
-        const ROW_SPACING: f32 = 10.0;
-        const BUTTON_PADDING_Y: f32 = 8.0;
-        const FOCUS_RING_PADDING: f32 = 3.0;
-
-        let rows = drill_kind_row_spans().count() as f32;
-        let pill =
-            KIND_BUTTON_SIZE * TEXT_LINE_HEIGHT + 2.0 * BUTTON_PADDING_Y + 2.0 * FOCUS_RING_PADDING;
-        let needed = rows * pill + (rows - 1.0) * ROW_SPACING + 2.0 * KIND_CARD_PADDING;
-
-        assert!(
-            ROOT_BAND_HEIGHT >= needed,
-            "the root band is {ROOT_BAND_HEIGHT} tall but the kind card needs {needed}; an \
-             overflowing card would no longer be centred on the root"
-        );
-    }
-
-    // ---- The root display ----
-
-    #[test]
-    fn a_notch_and_a_step_of_pixels_are_each_one_step() {
-        assert_eq!(steps_from(ScrollDelta::Lines { x: 0.0, y: 1.0 }), 1.0);
-        assert_eq!(
-            steps_from(ScrollDelta::Pixels {
-                x: 0.0,
-                y: STEP_DISTANCE
-            }),
-            1.0,
-            "a trackpad steps at a different rate from a drag"
-        );
-        assert_eq!(
-            steps_from(ScrollDelta::Lines { x: 4.0, y: 0.0 }),
-            0.0,
-            "sideways scrolling stepped the root"
-        );
-    }
-
-    const GRIP_BOUNDS: Rectangle = Rectangle {
-        x: 0.0,
-        y: 0.0,
-        width: 278.0,
-        height: ROOT_ROW_HEIGHT,
-    };
-
-    /// Whether the canvas acts on an event; what it publishes is sealed inside a `canvas::Action`.
-    fn acts_on(dragging: bool, event: &canvas::Event, at: Point) -> bool {
-        RootGrip { dragging }
-            .update(
-                &mut (),
-                event,
-                GRIP_BOUNDS,
-                iced::mouse::Cursor::Available(at),
-            )
-            .is_some()
-    }
-
-    #[test]
-    fn the_wheel_is_only_the_drills_over_the_glyph() {
-        let wheel = iced::Event::Mouse(iced::mouse::Event::WheelScrolled {
-            delta: ScrollDelta::Lines { x: 0.0, y: 1.0 },
-        });
-
-        let display = RootDisplay::new(GRIP_BOUNDS.size());
-        let corner = Point::new(2.0, 2.0);
-        assert!(!display.grabs(corner), "the corner is inside the box");
-
-        assert!(
-            !acts_on(false, &wheel, corner),
-            "a scroll off the glyph reached the drill"
-        );
-        assert!(
-            acts_on(false, &wheel, display.center),
-            "a scroll on the glyph did not"
-        );
-    }
-
-    /// A press has to land on the glyph; the rest of the drag is claimed wherever it goes.
-    #[test]
-    fn the_press_is_placed_and_the_rest_of_the_drag_is_not() {
-        let display = RootDisplay::new(GRIP_BOUNDS.size());
-        let corner = Point::new(2.0, 2.0);
-
-        let press =
-            iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left));
-        let moved = iced::Event::Mouse(iced::mouse::Event::CursorMoved { position: corner });
-        let release = iced::Event::Mouse(iced::mouse::Event::ButtonReleased(
-            iced::mouse::Button::Left,
-        ));
-
-        assert!(acts_on(false, &press, display.center));
-        assert!(
-            !acts_on(false, &press, corner),
-            "a press off the glyph began a drag"
-        );
-
-        assert!(
-            !acts_on(false, &moved, display.center),
-            "a cursor move with no drag going was claimed"
-        );
-        assert!(
-            acts_on(true, &moved, corner),
-            "a drag stopped at the canvas edge"
-        );
-        assert!(
-            acts_on(true, &release, corner),
-            "the drag could not be released outside the glyph"
-        );
-        assert!(
-            !acts_on(false, &release, display.center),
-            "a release with no drag going was claimed"
-        );
-    }
-
     // ---- The root, as the drill holds it ----
 
     fn root(app: &App) -> PitchClass {
         app.walk_the_scale.scale().root()
     }
 
-    /// Steps of drag travel, as the x a `DragDrillRoot` carries. The press is at zero.
+    /// Steps of drag travel, as the x a `DragRoot` carries. The press is at zero.
     fn drags(app: &mut App, steps: f32) {
-        let _ = app.update(Message::DragDrillRoot(steps * STEP_DISTANCE));
+        let _ = app.update(Message::DragRoot(steps * STEP_DISTANCE));
     }
 
     #[test]
@@ -1366,7 +897,7 @@ mod tests {
     #[test]
     fn a_drag_steps_a_semitone_for_each_step_of_travel() {
         let mut app = drill_app(0, ScaleKind::Ionian);
-        let _ = app.update(Message::GrabDrillRoot(0.0));
+        let _ = app.update(Message::GrabRoot(0.0));
 
         drags(&mut app, 1.0);
         assert_eq!(root(&app), PitchClass::new(1));
@@ -1382,7 +913,7 @@ mod tests {
     #[test]
     fn a_drag_left_lowers_the_root() {
         let mut app = drill_app(5, ScaleKind::Ionian);
-        let _ = app.update(Message::GrabDrillRoot(0.0));
+        let _ = app.update(Message::GrabRoot(0.0));
 
         drags(&mut app, -2.0);
         assert_eq!(root(&app), PitchClass::new(3));
@@ -1391,7 +922,7 @@ mod tests {
     #[test]
     fn a_drag_back_to_the_press_point_returns_the_root() {
         let mut app = drill_app(9, ScaleKind::Ionian);
-        let _ = app.update(Message::GrabDrillRoot(0.0));
+        let _ = app.update(Message::GrabRoot(0.0));
 
         drags(&mut app, 3.0);
         assert_eq!(root(&app), PitchClass::new(0));
@@ -1408,11 +939,11 @@ mod tests {
     fn a_press_that_goes_nowhere_changes_nothing() {
         let mut app = drill_app(9, ScaleKind::Ionian);
 
-        let _ = app.update(Message::GrabDrillRoot(120.0));
+        let _ = app.update(Message::GrabRoot(120.0));
         // Short of a step, in both directions.
-        let _ = app.update(Message::DragDrillRoot(120.0 + STEP_DISTANCE * 0.9));
-        let _ = app.update(Message::DragDrillRoot(120.0 - STEP_DISTANCE * 0.9));
-        let _ = app.update(Message::DropDrillRoot);
+        let _ = app.update(Message::DragRoot(120.0 + STEP_DISTANCE * 0.9));
+        let _ = app.update(Message::DragRoot(120.0 - STEP_DISTANCE * 0.9));
+        let _ = app.update(Message::DropRoot);
 
         assert_eq!(root(&app), PitchClass::new(9));
     }
@@ -1427,8 +958,8 @@ mod tests {
     #[test]
     fn a_drop_ends_the_gesture() {
         let mut app = drill_app(9, ScaleKind::Ionian);
-        let _ = app.update(Message::GrabDrillRoot(0.0));
-        let _ = app.update(Message::DropDrillRoot);
+        let _ = app.update(Message::GrabRoot(0.0));
+        let _ = app.update(Message::DropRoot);
 
         drags(&mut app, 4.0);
         assert_eq!(
@@ -1442,10 +973,10 @@ mod tests {
     fn the_wheel_steps_the_root() {
         let mut app = drill_app(0, ScaleKind::Ionian);
 
-        let _ = app.update(Message::ScrollDrillRoot(1.0));
+        let _ = app.update(Message::ScrollRoot(1.0));
         assert_eq!(root(&app), PitchClass::new(1));
 
-        let _ = app.update(Message::ScrollDrillRoot(-2.0));
+        let _ = app.update(Message::ScrollRoot(-2.0));
         assert_eq!(
             root(&app),
             PitchClass::new(11),
@@ -1458,14 +989,14 @@ mod tests {
     fn two_half_steps_of_scroll_make_one_semitone() {
         let mut app = drill_app(0, ScaleKind::Ionian);
 
-        let _ = app.update(Message::ScrollDrillRoot(0.5));
+        let _ = app.update(Message::ScrollRoot(0.5));
         assert_eq!(
             root(&app),
             PitchClass::new(0),
             "half a step is not a semitone"
         );
 
-        let _ = app.update(Message::ScrollDrillRoot(0.5));
+        let _ = app.update(Message::ScrollRoot(0.5));
         assert_eq!(root(&app), PitchClass::new(1));
     }
 
@@ -1473,8 +1004,8 @@ mod tests {
     fn a_scroll_and_its_reverse_leave_the_root_alone() {
         let mut app = drill_app(0, ScaleKind::Ionian);
 
-        let _ = app.update(Message::ScrollDrillRoot(0.6));
-        let _ = app.update(Message::ScrollDrillRoot(-0.6));
+        let _ = app.update(Message::ScrollRoot(0.6));
+        let _ = app.update(Message::ScrollRoot(-0.6));
 
         assert_eq!(root(&app), PitchClass::new(0));
     }
@@ -1482,9 +1013,9 @@ mod tests {
     #[test]
     fn the_wheel_is_ignored_mid_drag() {
         let mut app = drill_app(0, ScaleKind::Ionian);
-        let _ = app.update(Message::GrabDrillRoot(0.0));
+        let _ = app.update(Message::GrabRoot(0.0));
 
-        let _ = app.update(Message::ScrollDrillRoot(3.0));
+        let _ = app.update(Message::ScrollRoot(3.0));
         assert_eq!(
             root(&app),
             PitchClass::new(0),
@@ -1502,9 +1033,9 @@ mod tests {
         completes(&mut app);
         let _ = app.update(Message::AdvanceScaleSequence);
 
-        let _ = app.update(Message::GrabDrillRoot(0.0));
+        let _ = app.update(Message::GrabRoot(0.0));
         drags(&mut app, 5.0);
-        let _ = app.update(Message::DropDrillRoot);
+        let _ = app.update(Message::DropRoot);
 
         assert_eq!(root(&app), PitchClass::new(5));
         assert_eq!(app.walk_the_scale.progress(), Some((0, 5)));
@@ -2339,41 +1870,6 @@ mod tests {
                 .all(|target| !matches!(target, FocusTarget::DrillKind(_) | FocusTarget::Back)),
             "the run's controls are interleaved with the kinds"
         );
-    }
-
-    #[test]
-    fn no_root_is_a_focus_stop_here_and_every_one_still_is_elsewhere() {
-        let mut app = app_with_seed(0);
-        app.navigate_to(Screen::WalkTheScale);
-        let _ = app.update(Message::StartWalkTheScale);
-
-        assert!(
-            app.focusables()
-                .iter()
-                .all(|target| !matches!(target, FocusTarget::Root(_) | FocusTarget::CagedRoot(_))),
-            "the drill stops on a root"
-        );
-
-        // the first element is annotated so both closures coerce to one fn pointer type
-        for (screen, is_a_root) in [
-            (
-                Screen::ScaleTrainer,
-                (|target: &FocusTarget| matches!(target, FocusTarget::Root(_)))
-                    as fn(&FocusTarget) -> bool,
-            ),
-            (Screen::Caged, |target| {
-                matches!(target, FocusTarget::CagedRoot(_))
-            }),
-        ] {
-            app.navigate_to(screen.clone());
-            let stops = app.focusables().iter().filter(|t| is_a_root(t)).count();
-
-            assert_eq!(
-                stops,
-                PitchClass::ALL.len(),
-                "{screen:?} lost a root button"
-            );
-        }
     }
 
     #[test]

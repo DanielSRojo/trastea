@@ -131,11 +131,11 @@ whenever that hash changed.
 
 ### Shared selector widgets
 
-`root_note_row` labels each button with the scale pressing it would build, so a label moves
-with the kind: pitch class 10 reads A♯ under Minor Pentatonic and B♭ under Ionian, not the
-A♯ major that would put three double sharps on the neck. Its message and focus target are
-parameters because the Scale Trainer and Walk the Scale each own a scale. `root_square` is
-shared with the CAGED window, which differs only in what names a root and what a press means.
+No screen has a root grid any more: the Scale Trainer, Walk the Scale and the CAGED window
+each set their root on the glyph in `root_stage.rs`, which names it the way the screen's scale
+or triad spells it, so pitch class 10 still reads B♭ under Ionian and A♯ under Minor
+Pentatonic. `root_stage::kind_card` takes its message and focus target as parameters because
+the Scale Trainer and Walk the Scale each own a scale.
 
 `interval_token` and the marker-text function are pure decisions split out of their widgets so
 they can be tested without a widget tree. The glyph and digit render in different fonts, so the
@@ -146,12 +146,13 @@ are hand-written, so a swapped pair would otherwise compile and pass.
 ### Card heights
 
 iced lays a `Shrink` child out against the space left, so a column that runs out gives its last
-child a height of zero and the content silently stops drawing. `SUMMARY_CARD_HEIGHT` and the
-selector card height are therefore budgeted by fit tests that use the same named text sizes
-the cards draw with. The budget restates iced's `LineHeight::default()`, `Relative(1.3)`,
+child a height of zero and the content silently stops drawing. The cards set level with the
+root — the kind card and the CAGED shape card — are therefore budgeted against
+`ROOT_BAND_HEIGHT` by fit tests that use the same named text sizes the cards draw with. The budget restates iced's `LineHeight::default()`, `Relative(1.3)`,
 because iced resolves it internally and the test works in laid-out pixels. A pill is its text,
 `.padding([8, 12])` and the 3px focus ring. Harmonic Minor and the two pentatonics are wider
-than the summary card at `SUMMARY_NAME_SIZE`, so names are budgeted at two lines.
+than the old summary card at its name size, which is why the Scale Trainer's summary card
+went before its root grid did: the kind card already says which kind is chosen.
 
 ## Focus
 
@@ -161,43 +162,38 @@ drill runs, and only the prompt knows. An extra parameter would work today and n
 the next time. The same holds for `App::accelerators`, where the library's `i` names the next
 notation button.
 
-Side-by-side cards share grid rows. On the Scale Trainer the root card occupies columns
-`0..ROOT_ROW_WIDTH` and the kinds card the columns after, so Right at the edge of the root grid
-steps into the kinds. Moving vertically searches leftwards only, so a shorter row clamps to its
-own last widget and a row occupied only further right yields nothing — which keeps the move in
-its card instead of dropping it into the taller kinds card.
+Side-by-side cards would share grid rows, and moving vertically searches leftwards only, so a
+shorter row clamps to its own last widget. No screen has two side-by-side cards since the
+Scale Trainer's root card went; its grid is now Back, the kinds, and the controls under them.
 
 `card_bands` splits the Tab order by card, so Tab finishes one card before starting the next
 instead of hopping between side-by-side cards every few widgets. Single-card screens use one
 band; Walk the Scale joined them when its root card went, because two bands split its kind rows
-down the middle.
+down the middle, and the Scale Trainer followed for the same reason.
 
 ### Back on its own row
 
-On the Scale Trainer the summary card's buttons take the leftmost columns above the first roots.
-A fourth column for Back would land in the kinds card's band, and Tab would reach the reroll
-button only after all sixteen kinds. So Back has a row of its own, which is where it is drawn,
-in the top bar above the card. The cost is that Right from Back no longer walks into the card;
-Tab and Down still reach it. The two trainers and the CAGED window put Back on its own row for
-the same reason: the card's own row is full of its controls.
+Back has a row of its own on every screen, which is where it is drawn, in the top bar above the
+cards. The cost is that Right from Back walks nowhere; Tab and Down still reach what is below.
 
 ### Grid shapes
 
-- `KIND_ROW_WIDTHS` has six rows. `Voodoo | Spanish Gypsy | Whole Tone | Diminished` measured
-  456px against the 440px the card gets at the default 1280-wide window, so Diminished was cut
-  off. Of every contiguous five-row shape only two fit, with 10px and 0px to spare. The chosen
-  six-row shape has 73px spare on its widest row and stays a palindrome, as the old 4-3-2-3-4 did.
-- Walk the Scale has its own seven-row shape, `DRILL_KIND_ROW_WIDTHS`, ending in pairs so its
-  selector column can be narrower; see `drills.md`.
-- The root rows are derived from `PitchClass::ALL`; the kind rows are ragged, so their widths
-  are spelled out. Both views and the focus grid read these.
+- `KIND_ROW_WIDTHS` has seven rows, ending in pairs, so the selector column the Scale Trainer
+  and Walk the Scale share can be 390 wide; see `drills.md`. It replaced a six-row shape
+  (3-3-2-2-3-3) sized for the Scale Trainer's old 440px kind card, where
+  `Voodoo | Spanish Gypsy | Whole Tone | Diminished` measured 456px and was cut off.
+- The kind rows are ragged, so their widths are spelled out. Both views and the focus grid
+  read them.
+- The Interval Trainer's answers are three columns, sized for the selector column; see
+  `drills.md`. Its controls sit in a row under them, as on the scale screens.
 - The Note Trainer's answer grid is four columns: four divides the twelve pitch classes. The
   header row above it is five while pressing and four while playing, where direction is not
   drawn; a vertical move clamps to the nearer row's last widget as on any ragged grid. While
   playing a third row holds the input device, as on Walk the Scale.
-- The CAGED shape row is as wide as the cycle, which may be fewer than five.
+- The CAGED shapes are one per row, as many as the cycle holds, which may be fewer than five;
+  the two controls sit in a row under them.
 - Walk the Scale's last row holds only the controls the run currently shows, so Tab never stops
-  on nothing. Its root is set on the glyph, so there is no root row.
+  on nothing. No root screen has a root row: the root is set on the glyph.
 - Rows are built by zipping rather than indexing, so a narrower `ROOT_ROW_WIDTH` drops buttons
   instead of panicking and a wider one leaves cells empty.
 
@@ -217,8 +213,9 @@ the same reason: the card's own row is full of its controls.
 The necks are a deliberate special case rather than a mechanism: seventy-eight positions reached
 by anything other than the arrows would cost more than Tab being the only way out. The library's
 list and the CAGED pills joined later on the same terms, so walking the list or the cycle is one
-gesture rather than focus-then-activate. The pills claim left and right only, since up and down
-have nowhere further along the row to go.
+gesture rather than focus-then-activate. The pills are a column, so they claim up and down, and
+only while the cycle goes further: at either end the arrow moves the ring as anywhere else, to
+Back above or the controls below, which a claim at the ends would have made Tab-only.
 
 The Home menu claims all four, for a different reason. It is two columns — the categories, and
 beside them the entries of whichever category is open — and the open one is simply the one the

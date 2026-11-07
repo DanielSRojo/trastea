@@ -1,10 +1,11 @@
 //! Play the Interval: the drill's state machine and the screen that draws it.
 //!
-//! The answer is heard rather than pressed, and nothing on screen names a note, so the drill
-//! cannot be answered by hunting for a name.
+//! The answer is heard rather than pressed. Only the root is named on screen — never what was
+//! heard — so the drill cannot be answered by hunting for the target's name.
 
 use iced::{Color, Element, Length, Padding};
 
+use super::Message;
 use super::calibration;
 use super::drill::{ANSWERS, Score, choice_for, interval_label};
 use super::focus::FocusTarget;
@@ -12,15 +13,14 @@ use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
 use super::neck::{DRILL_NECK, Position, neck};
 use super::placement::{Placed, Placer};
+use super::root_stage::{root_column, selector_column, stage, still_root_glyph};
 use super::style::{
-    BODY, DANGER, INK, MUTE, ROOT_MARKER, SUCCESS, card_container, control_button, control_shuffle,
-    streak_readout,
+    BODY, DANGER, INK, MUTE, ROOT_MARKER, SUCCESS, control_button, control_shuffle, streak_readout,
 };
-use super::{Message, SUMMARY_CARD_HEIGHT};
 use crate::audio::detect::Heard;
 use crate::audio::inharmonicity::Fit;
 use crate::music::intervals::Interval;
-use crate::music::notes::PitchClass;
+use crate::music::notes::{Note, PitchClass};
 use crate::rng::Rng;
 
 /// What the drill is asking: a position to measure from, and how far.
@@ -70,6 +70,11 @@ impl PlayTheInterval {
 
         drill.draw_prompt(rng);
         drill
+    }
+
+    /// What the big glyph says: the root's name, and never what was heard.
+    fn root_name(&self) -> Option<Note> {
+        Some(self.prompt.root.pitch_class()?.conventional_name())
     }
 
     pub(super) fn listener(&self) -> &Listener {
@@ -264,45 +269,39 @@ pub(super) fn ui_play_the_interval(
 
     let question = column![
         row![
-            text("Play").size(26).color(BODY),
+            text("play").size(26).color(BODY),
             interval_label(&choice_for(drill.prompt.interval), 34, INK),
         ]
-        .spacing(12),
-        text("above the amber root — anywhere on the neck")
-            .size(16)
-            .color(MUTE),
+        .spacing(12)
+        .align_y(iced::Alignment::Center),
+        text("above it — anywhere on the neck").size(16).color(MUTE),
     ]
-    .spacing(6);
+    .spacing(6)
+    .align_x(iced::Alignment::Center);
 
-    let prompt_card = container(
-        column![
-            row![
-                question,
-                Space::new().width(Length::Fill),
-                streak_readout(drill.score.streak(), drill.score.best()),
-            ],
-            play_controls(focused),
-            Space::new().height(Length::Fill),
-            ui_device_line(&drill.listener, focused),
-            ui_heard_line(drill),
-        ]
-        .spacing(12),
-    )
-    .width(Length::Fill)
-    .height(Length::Fixed(SUMMARY_CARD_HEIGHT))
-    .padding(32)
-    .style(card_container);
+    let glyph = match drill.root_name() {
+        Some(root) => still_root_glyph(root),
+        None => Space::new().into(),
+    };
 
-    container(row![fretboard(neck), column![prompt_card].width(Length::Fill)].spacing(32))
-        .width(Length::Fill)
-        .padding(Padding {
-            top: 8.0,
-            right: 64.0,
-            bottom: 48.0,
-            left: 64.0,
-        })
-        .center_y(Length::Fill)
-        .into()
+    let centre = root_column(glyph, question, None);
+
+    let foot = column![
+        play_controls(focused),
+        streak_readout(drill.score.streak(), drill.score.best()),
+        ui_heard_line(drill),
+        ui_device_line(&drill.listener, focused),
+    ]
+    .spacing(12)
+    .align_x(iced::Alignment::Center);
+
+    // nothing to pick here, so nothing sits on the root's line in this column
+    let selector = selector_column(
+        Space::new(),
+        container(foot).width(Length::Fill).center_x(Length::Fill),
+    );
+
+    stage(fretboard(neck), centre, selector)
 }
 
 /// What the app is hearing, and while a note is read, its cents offset — so an out-of-tune
@@ -320,7 +319,7 @@ fn ui_heard_line(drill: &PlayTheInterval) -> Element<'static, Message> {
     .into()
 }
 
-/// The two strings the line above draws, split out so the tests can assert no note is named.
+/// The two strings the line above draws, split out so the tests can assert it names no note.
 fn heard_line(drill: &PlayTheInterval) -> (&'static str, String) {
     let status = match drill.listener.state() {
         State::NotStarted => "not listening",
@@ -339,7 +338,7 @@ fn heard_line(drill: &PlayTheInterval) -> (&'static str, String) {
     (status, offset)
 }
 
-/// The header row. One control: skip.
+/// One control: skip.
 fn play_controls(focused: FocusTarget) -> Element<'static, Message> {
     use iced::widget::row;
 
@@ -1065,5 +1064,22 @@ mod tests {
         assert_eq!(app.play_the_interval.prompt, before);
         assert_eq!(app.play_the_interval.score.streak(), 0);
         assert!(!app.play_the_interval.listener().is_picking());
+    }
+
+    #[test]
+    fn the_glyph_names_the_prompts_root() {
+        let mut app = play_app(0x1a7);
+
+        for _ in 0..32 {
+            let drill = &app.play_the_interval;
+            let root = drill
+                .prompt
+                .root
+                .pitch_class()
+                .expect("the root is on the neck");
+            assert_eq!(drill.root_name(), Some(root.conventional_name()));
+
+            let _ = app.update(Message::SkipPlayPrompt);
+        }
     }
 }

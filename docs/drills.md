@@ -11,8 +11,10 @@ distances by it.
 
 - One table feeds the grid, the focus rows and the prompt pool, the way a Home category's
   `entries` feed its buttons, focus cells and digit keys. Twelve happens to divide evenly into
-  `ANSWER_ROW_WIDTH`, which the Interval Trainer's grid relies on and the played drill does
-  not; the table is a vocabulary, not a layout.
+  `INTERVAL_ROW_WIDTH`, which the Interval Trainer's grid relies on and the played drill does
+  not; the table is a vocabulary, not a layout. The width is three rather than the Note
+  Trainer's four because the answers sit in the 390-wide selector column of `root_stage`, and
+  four buttons wide enough for the tritone twin do not fit it.
 - The twin is carried as an `Interval`, not as a written label, so a button's text cannot drift
   from the interval it stands for.
 - `App` reaches the table through `drill::ANSWER_COUNT` and `drill::choice_for`, which keeps
@@ -78,6 +80,23 @@ The `Rng` is passed into `new` and everything that redraws, because it lives on 
 the drill and `&mut self.note_trainer` plus `&mut self.rng` are two mutable borrows of one
 `App`. A generator owned by the drill would mean a second seed. There is no `Default`: a
 constant first prompt would open every launch on the same note.
+
+## The root on the interval screens
+
+Both interval drills stand on `root_stage`, as the scale screens do: the neck, the root's name
+in 120-point type with the question under it, and a column on the right with the answers on
+the root's line — in *Name it* only — and the controls and streak at its foot. The glyph is
+`still_root_glyph`, with no gesture canvas under it, because the root is the drill's to choose
+and a drag that rerolled the prompt would be a second skip.
+
+Naming the root was a reversal. Both screens used to name nothing, so that a prompt could be
+answered by measuring and by nothing else. The root's name was let in because both drills are
+about intervals: knowing the root is F♯ tells you nothing about which ring is a minor third
+above it without the interval arithmetic the drill is training. The target is still never
+named, and Play the Interval still draws what it heard as marks rather than a name, since
+either would let the answer be read instead of found. The name is
+`PitchClass::conventional_name` — with no key to spell in, a black key takes the spelling it
+usually goes by.
 
 ## Drawing a prompt
 
@@ -291,7 +310,8 @@ old run's start.
 
 ### The root gesture
 
-The root glyph is set by drag or wheel at `STEP_DISTANCE`, 40 pixels a semitone: wide enough
+The gesture lives in `root_stage.rs`, shared with the Scale Trainer and the CAGED window; it was
+written here and moved out when they wanted it. The root glyph is set by drag or wheel at `STEP_DISTANCE`, 40 pixels a semitone: wide enough
 that a slip on the glyph does not walk the scale, narrow enough that all twelve are one gesture
 (480 pixels back to the same root). Nothing in the geometry reads it.
 
@@ -309,12 +329,13 @@ that a slip on the glyph does not walk the scale, narrow enough that all twelve 
   one moment the pointer must be on the glyph; it carries the window's x, because
   `position_in` is `None` as soon as the pointer leaves. A wheel event over the glyph is
   captured whether or not it stepped, which keeps anything else from scrolling.
-- Whether a drag is under way is read off the drill, not kept in a widget `State`, so
-  `App::update` owns the gesture and the view cannot go stale.
+- Whether a drag is under way is read off `App`'s one `RootDial`, not kept in a widget `State`,
+  so `App::update` owns the gesture and the view cannot go stale. The dial yields steps rather
+  than holding a root, and `App` hands them to the screen on show; leaving a screen drops it,
+  so a drag cannot outlive the glyph it began on and no screen inherits another's remainder.
 - The canvas draws nothing. The glyph is a widget stacked over it because a `Frame` cannot
   measure text and the letter and accidental are in two fonts — the reason the Tuner's name
-  sits over its dial. `ROOT_ROW_HEIGHT` is fixed so the canvas, and its arrows, do not move
-  with the window.
+  sits over its dial. `ROOT_ROW_HEIGHT` is fixed so the canvas does not move with the window.
 - The grab box is one struct read by the press, the wheel and the pointer shape. Its half-width
   is fixed at 80 — half a letter and accidental at the 120-point `ROOT_DISPLAY_SIZE` — and not
   measured per note, so the box does not change size under the hand mid-drag. It is clamped to
@@ -325,10 +346,13 @@ that a slip on the glyph does not walk the scale, narrow enough that all twelve 
 - `NECK_COLUMN_WIDTH` is fixed at 340 because the fretboard canvas caps its own width off its
   height to keep a twelve-fret neck's aspect ratio; a share of the window would leave the slack
   beside the neck. The number is what the neck draws at this window height plus its padding.
-- `SELECTOR_COLUMN_WIDTH` is 390, the widest `drill_kind_row_spans` row — `Melodic Minor`
+- These figures are `root_stage`'s, and hold for the Scale Trainer and the CAGED window too.
+  The CAGED neck has fifteen frets in the same column; the canvas is a fixed 280 wide either
+  way, so only its fret spacing changes.
+- `SELECTOR_COLUMN_WIDTH` is 390, the widest `kind_row_spans` row — `Melodic Minor`
   and `Minor Pentatonic` — plus the card's padding. From `Major Pentatonic` on the kinds sit in
-  pairs rather than the Scale Trainer's threes, which took the column down from 470; the cost is
-  a seventh row, which this column has the height for and the Scale Trainer's card does not. A
+  pairs, which took the column down from 470; the cost is a seventh row, which the root band
+  has the height for. A
   narrower column draws the widest row past the card's edge. `the_widest_kind_row_fits_the_selector_column` guards it with a deliberately
   generous estimate of 0.58 em per glyph, since no font is available to measure in a test; the
   Scale Trainer never hits this because its kind card is half the window wide.
@@ -338,7 +362,8 @@ that a slip on the glyph does not walk the scale, narrow enough that all twelve 
   band that `on_root_line` places identically in both columns, with free space split one above
   to two below so the line sits a little above the middle, nearer where the eye reads the neck.
   It is the root that is centred, not root and sequence together as before; the sequence hangs
-  below it. The band is fixed rather than measured because iced cannot align across columns,
+  below it, in a container given the same fill as the space above the glyph, which is what
+  makes the centring exact rather than the pair's. The band is fixed rather than measured because iced cannot align across columns,
   so it must be at least the card's height — `the_kind_card_fits_the_root_band` guards that.
   The drill panel is stacked over the column's foot instead of following the card, so its
   height does not move the line.
@@ -370,9 +395,14 @@ that a slip on the glyph does not walk the scale, narrow enough that all twelve 
 calls. It keeps no state: the `Scale` and `Notation` live on `App` because three screens read
 them and none of them can put the pair into a bad state.
 
-- The header shows the degree as `♭3`, not `1♭3`. The longer form was tried for reading less
-  like an instruction to flatten the third, and crowded a line shared by three buttons and the
-  root label.
+- The screen stands on `root_stage`, as Walk the Scale does: the neck, the root glyph with the
+  kind's formula under it, and the kind card level with the root. The root grid and the summary
+  card went with the move; the glyph names the root and the kind card shows which kind is on, so
+  both restated what the screen already said. The feel and usage text sits at the foot of the
+  centre column, as the drill panel does on the right, so its two or three lines cannot move the
+  root line.
+- The notation control shows the degree as `♭3`, not `1♭3`. The longer form was tried for
+  reading less like an instruction to flatten the third, and crowded the old header row.
 - `spell` stays the membership test in both notation modes, so the mode can change text and
   never make a dot disappear; the degree lookup is an `expect` because
   `degree_and_spell_agree_on_membership` in `scales.rs` proves a spelled pitch class has one.

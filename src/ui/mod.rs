@@ -15,6 +15,7 @@ mod placement;
 mod play_the_interval;
 mod position;
 mod position_finder;
+mod root_stage;
 mod scale_trainer;
 mod shapes;
 mod style;
@@ -29,6 +30,7 @@ use listener::Listener;
 use note_trainer::{NoteTrainer, ui_note_trainer};
 use play_the_interval::{PlayTheInterval, ui_play_the_interval};
 use position_finder::{PositionFinder, ui_position_finder};
+use root_stage::RootDial;
 use scale_trainer::ui_scale_trainer;
 use tuner::{Tuner, ui_tuner};
 use walk_the_scale::{WalkTheScale, ui_walk_the_scale};
@@ -54,25 +56,21 @@ use focus::{Direction, FocusTarget, step_focus, step_focus_2d};
 use keys::{Fires, translate_key, ui_help_overlay};
 use neck::DRILL_NECK;
 use style::{
-    BODY, CANVAS, INK, KEYCAP_BACK, KEYCAP_FONT, MUSIC_FONT, SMUFL_DOUBLE_FLAT, SMUFL_DOUBLE_SHARP,
+    BODY, INK, KEYCAP_BACK, KEYCAP_FONT, MUSIC_FONT, SMUFL_DOUBLE_FLAT, SMUFL_DOUBLE_SHARP,
     SMUFL_FLAT, SMUFL_SHARP, card_button, focus_ring, ghost_button, page_container,
     selected_root_button,
 };
 
 /// How long a correct answer stays lit before the next prompt replaces it.
 const ANSWER_FLASH: Duration = Duration::from_secs(1);
-/// Tall enough for a two-line kind name plus the formula. iced gives a `Shrink` child that
-/// runs out of room a height of zero rather than overflowing.
+/// The trainers' summary card. iced gives a `Shrink` child that runs out of room a height of
+/// zero rather than overflowing.
 const SUMMARY_CARD_HEIGHT: f32 = 280.0;
-/// Named so the fit test budgets against the same sizes the card draws with.
-const SUMMARY_ROOT_SIZE: f32 = 56.0;
-const SUMMARY_NAME_SIZE: f32 = 34.0;
 const SUMMARY_FORMULA_SIZE: f32 = 24.0;
-const ROOT_SELECTOR_CARD_WIDTH: f32 = 320.0;
-/// Tall enough for `KIND_ROW_WIDTHS`'s six rows; the root selector shares it.
+/// The trainers' answer card.
 const SELECTOR_CARD_HEIGHT: f32 = 400.0;
 const ROOT_BUTTON_SIZE: f32 = 50.0;
-/// Named so `selector_card_fits_every_kind_row` budgets against it.
+/// Named so the kind card's fit tests budget against it.
 const KIND_BUTTON_SIZE: f32 = 16.0;
 
 pub struct App {
@@ -92,6 +90,8 @@ pub struct App {
     chord_library: ChordLibrary,
     caged: Caged,
     walk_the_scale: WalkTheScale,
+    /// One for every screen, since only the one on show has a root glyph to drag.
+    root_dial: RootDial,
     /// Holds the open audio stream, which a subscription would drop whenever its hash changed.
     tuner: Tuner,
     position_finder: PositionFinder,
@@ -129,7 +129,6 @@ pub enum Message {
     /// A press on a Home category, which takes the ring and so opens its entries.
     OpenCategory(Category),
     GoBack,
-    SelectRoot(PitchClass),
     SelectScaleKind(ScaleKind),
     ToggleNotation,
     RerollScale,
@@ -164,8 +163,6 @@ pub enum Message {
     SelectVoicing(usize),
     /// Picks a notation outright, by its index in the screen's `Notation::cycle_for`.
     SetNotation(usize),
-    /// Picks the root the CAGED window shows.
-    SelectCagedRoot(PitchClass),
     /// Picks one shape of the CAGED cycle, by its place in the derived order.
     SelectCagedShape(usize),
     /// A different root for the CAGED window, without touching the Scale Trainer's scale.
@@ -195,15 +192,16 @@ pub enum Message {
     StartWalkTheScale,
     /// Picks the kind the drill walks.
     SelectDrillKind(ScaleKind),
-    /// The root display's drag. x is in window coordinates, since the gesture outlives the
-    /// pointer's stay over the canvas and only differences are read.
-    GrabDrillRoot(f32),
-    DragDrillRoot(f32),
-    DropDrillRoot,
-    /// The wheel over the root display, already converted from `ScrollDelta` to steps.
-    ScrollDrillRoot(f32),
+    /// The root glyph's drag. x is in window coordinates, since the gesture outlives the
+    /// pointer's stay over the canvas and only differences are read. Routed, like the
+    /// steps below, to the screen on show.
+    GrabRoot(f32),
+    DragRoot(f32),
+    DropRoot,
+    /// The wheel over the root glyph, already converted from `ScrollDelta` to steps.
+    ScrollRoot(f32),
     /// `[` and `]`: the root a semitone down or up, from wherever the ring is standing.
-    StepDrillRoot(i32),
+    StepRoot(i32),
     /// A different scale to drill.
     RerollDrillScale,
     /// Swaps how the drill is answered — a press on the neck, or a note played.
@@ -260,6 +258,7 @@ impl App {
             chord_library: ChordLibrary::new(),
             caged: Caged::new(),
             walk_the_scale: WalkTheScale::new(),
+            root_dial: RootDial::default(),
             tuner: Tuner::new(),
             position_finder: PositionFinder::new(),
         };
@@ -372,17 +371,22 @@ impl App {
                 self.walk_the_scale.leave();
             }
             Message::GoBack => self.go_back(),
-            Message::SelectRoot(root) => self.set_scale(root, self.scale.kind()),
             Message::SelectScaleKind(kind) => self.set_scale(self.scale.root(), kind),
             Message::ToggleNotation => self.toggle_notation(),
             Message::RerollScale => self.reroll_scale(),
             Message::StartWalkTheScale => self.walk_the_scale.restart(),
             Message::SelectDrillKind(kind) => self.walk_the_scale.select_kind(kind),
-            Message::GrabDrillRoot(x) => self.walk_the_scale.grab_root(x),
-            Message::DragDrillRoot(x) => self.walk_the_scale.drag_root(x),
-            Message::DropDrillRoot => self.walk_the_scale.drop_root(),
-            Message::ScrollDrillRoot(steps) => self.walk_the_scale.scroll_root(steps),
-            Message::StepDrillRoot(steps) => self.walk_the_scale.step_root(steps),
+            Message::GrabRoot(x) => self.root_dial.grab(x),
+            Message::DragRoot(x) => {
+                let steps = self.root_dial.drag(x);
+                self.step_root(steps);
+            }
+            Message::DropRoot => self.root_dial.release(),
+            Message::ScrollRoot(steps) => {
+                let steps = self.root_dial.scroll(steps);
+                self.step_root(steps);
+            }
+            Message::StepRoot(steps) => self.step_root(steps),
             Message::RerollDrillScale => self.walk_the_scale.reroll(&mut self.rng),
             Message::ToggleScaleAnswering => self.walk_the_scale.toggle_answering(),
             Message::CycleScaleDuration => self.walk_the_scale.cycle_duration(),
@@ -441,7 +445,6 @@ impl App {
             Message::SelectChordRow(index) => self.chord_library.select_row(index),
             Message::SelectVoicing(index) => self.chord_library.select_voicing(index),
             Message::SetNotation(index) => self.activate(FocusTarget::NotationChoice(index)),
-            Message::SelectCagedRoot(root) => self.caged.select_root(root),
             Message::SelectCagedShape(index) => self.caged.select_shape(index),
             Message::RerollCagedRoot => self.reroll_caged_root(),
             Message::Accelerate(c) => return self.accelerate(c),
@@ -541,6 +544,28 @@ impl App {
         self.reset_focus();
     }
 
+    /// Steps the root of whichever screen is on show, wrapping in both directions.
+    fn step_root(&mut self, steps: i32) {
+        if steps == 0 {
+            return;
+        }
+
+        match self.screen {
+            Screen::ScaleTrainer => {
+                self.set_scale(self.scale.root().shift(steps), self.scale.kind())
+            }
+            Screen::WalkTheScale => self.walk_the_scale.step_root(steps),
+            Screen::Caged => self.caged.step_root(steps),
+            Screen::Home
+            | Screen::NoteTrainer
+            | Screen::IntervalTrainer
+            | Screen::PlayTheInterval
+            | Screen::ChordLibrary
+            | Screen::Tuner
+            | Screen::PositionFinder => {}
+        }
+    }
+
     fn go_back(&mut self) {
         if let Some(prev) = self.history.pop() {
             self.leaving_for(&prev);
@@ -561,6 +586,9 @@ impl App {
         if self.screen == *next {
             return;
         }
+
+        // a drag cannot outlive the glyph it began on
+        self.root_dial = RootDial::default();
 
         // a run's clock must not keep spending behind a screen nobody is looking at
         if self.screen == Screen::WalkTheScale {
@@ -796,16 +824,17 @@ impl App {
             return;
         }
 
-        // the pills claim left and right only; up and down still leave the row
+        // the stacked pills claim up and down until the cycle ends, where the ring moves on
         if let FocusTarget::CagedShape(_) = self.focused {
             let delta = match direction {
-                Direction::Left => Some(-1),
-                Direction::Right => Some(1),
-                Direction::Up | Direction::Down => None,
+                Direction::Up => Some(-1),
+                Direction::Down => Some(1),
+                Direction::Left | Direction::Right => None,
             };
 
-            if let Some(delta) = delta {
-                self.caged.move_selection(delta);
+            if let Some(delta) = delta
+                && self.caged.move_selection(delta)
+            {
                 self.focused = FocusTarget::CagedShape(self.caged.selected());
                 return;
             }
@@ -859,11 +888,6 @@ impl App {
                     listener.open_picker();
                 }
             }
-            FocusTarget::CagedRoot(index) => {
-                if let Some(&pitch_class) = PitchClass::ALL.get(index) {
-                    self.caged.select_root(pitch_class);
-                }
-            }
             FocusTarget::CagedShape(index) => self.caged.select_shape(index),
             FocusTarget::RerollCagedRoot => self.reroll_caged_root(),
             FocusTarget::DrillKind(index) => {
@@ -879,11 +903,6 @@ impl App {
             FocusTarget::ScaleFretboard => self.walk_the_scale.answer_at_cursor(),
             FocusTarget::NotationToggle => self.toggle_notation(),
             FocusTarget::RerollScale => self.reroll_scale(),
-            FocusTarget::Root(index) => {
-                if let Some(&pitch_class) = PitchClass::ALL.get(index) {
-                    self.set_scale(pitch_class, self.scale.kind());
-                }
-            }
             FocusTarget::ScaleKind(index) => {
                 if let Some(&kind) = ScaleKind::ALL.get(index) {
                     self.set_scale(self.scale.root(), kind);
@@ -926,7 +945,12 @@ impl App {
             Screen::Home => ui_home(self.focused),
             Screen::ScaleTrainer => with_top_bar(
                 "Scale Trainer",
-                ui_scale_trainer(self.scale, self.notation, self.focused),
+                ui_scale_trainer(
+                    self.scale,
+                    self.notation,
+                    self.root_dial.is_dragging(),
+                    self.focused,
+                ),
                 true,
                 self.focused,
             ),
@@ -950,7 +974,12 @@ impl App {
             ),
             Screen::Caged => with_top_bar(
                 "CAGED",
-                ui_caged(&self.caged, self.notation, self.focused),
+                ui_caged(
+                    &self.caged,
+                    self.notation,
+                    self.root_dial.is_dragging(),
+                    self.focused,
+                ),
                 true,
                 self.focused,
             ),
@@ -962,7 +991,11 @@ impl App {
             ),
             Screen::WalkTheScale => with_top_bar(
                 "Walk the Scale",
-                ui_walk_the_scale(&self.walk_the_scale, self.focused),
+                ui_walk_the_scale(
+                    &self.walk_the_scale,
+                    self.root_dial.is_dragging(),
+                    self.focused,
+                ),
                 true,
                 self.focused,
             ),
@@ -1075,39 +1108,7 @@ fn with_top_bar(
         .into()
 }
 
-/// Each button is named by the scale pressing it would build, so labels move with the kind.
-/// The message and focus target are parameters because the trainer and the drill each own a scale.
-fn root_note_row(
-    pitch_classes: &[PitchClass],
-    scale: Scale,
-    start_index: usize,
-    focused: FocusTarget,
-    on_press: fn(PitchClass) -> Message,
-    target: fn(usize) -> FocusTarget,
-) -> iced::widget::Row<'static, Message> {
-    use iced::widget::row;
-
-    pitch_classes
-        .iter()
-        .enumerate()
-        .fold(row![].spacing(28), |row, (i, pitch_class)| {
-            let is_selected = *pitch_class == scale.root();
-            let color = if is_selected { CANVAS } else { INK };
-
-            row.push(root_square(
-                note_label(
-                    Scale::new(*pitch_class, scale.kind()).root_note(),
-                    24,
-                    color,
-                ),
-                is_selected,
-                focused == target(start_index + i),
-                on_press(*pitch_class),
-            ))
-        })
-}
-
-/// The kind pills, parameterised like `root_note_row`.
+/// The kind pills; the message and focus target are the screen's.
 fn scale_kind_row(
     kinds: &[ScaleKind],
     selected: ScaleKind,
@@ -1134,43 +1135,6 @@ fn scale_kind_row(
                 focused == target(start_index + i),
             ))
         })
-}
-
-/// One square root button, wrapped in its focus ring. Shared by the Scale Trainer and CAGED.
-fn root_square(
-    label: iced::widget::Row<'static, Message>,
-    is_selected: bool,
-    is_focused: bool,
-    message: Message,
-) -> Element<'static, Message> {
-    use iced::Length;
-    use iced::widget::{button, container};
-
-    let square = button(
-        container(label)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .center_x(Length::Fill)
-            .center_y(Length::Fill),
-    )
-    .width(Length::Fixed(ROOT_BUTTON_SIZE))
-    .height(Length::Fixed(ROOT_BUTTON_SIZE))
-    .padding(0)
-    .style(if is_selected {
-        selected_root_button
-    } else {
-        ghost_button
-    })
-    .on_press(message);
-
-    focus_ring(
-        container(square)
-            .width(Length::Fixed(ROOT_BUTTON_SIZE))
-            .height(Length::Fixed(ROOT_BUTTON_SIZE))
-            .center_x(Length::Fixed(ROOT_BUTTON_SIZE))
-            .center_y(Length::Fixed(ROOT_BUTTON_SIZE)),
-        is_focused,
-    )
 }
 
 fn note_label(
@@ -1269,7 +1233,6 @@ fn trainer_button<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::focus::KIND_ROW_WIDTHS;
     use super::keys::accelerators_for;
     use super::*;
     use iced::keyboard::key::Named;
@@ -1346,12 +1309,20 @@ mod tests {
         }
     }
 
+    /// Steps the Scale Trainer's root to `to` with one message's worth of semitones.
+    fn steps_scale_root_to(app: &mut App, to: PitchClass) {
+        let from = app.scale.root();
+        let steps = (i32::from(to.semitone()) - i32::from(from.semitone())).rem_euclid(12);
+        let _ = app.update(Message::StepRoot(steps));
+    }
+
     #[test]
-    fn selecting_a_root_names_it_the_way_it_is_taught() {
+    fn stepping_to_a_root_names_it_the_way_it_is_taught() {
         // pitch class 10 under Ionian is B♭ major, not A♯ major
         let mut app = app_with_seed(7);
+        app.open(Screen::ScaleTrainer);
         let _ = app.update(Message::SelectScaleKind(ScaleKind::Ionian));
-        let _ = app.update(Message::SelectRoot(PitchClass::new(10)));
+        steps_scale_root_to(&mut app, PitchClass::new(10));
 
         assert_eq!(app.scale.root_note().to_string(), "Bb");
         assert!(
@@ -1365,24 +1336,125 @@ mod tests {
     }
 
     #[test]
-    fn a_root_button_is_named_by_the_scale_pressing_it_builds() {
-        // both kinds, since the label moves with the kind
-        for kind in [ScaleKind::Ionian, ScaleKind::MinorPentatonic] {
-            let mut app = app_with_seed(5);
-            let _ = app.update(Message::SelectScaleKind(kind));
+    fn the_scale_trainers_root_steps_through_every_pitch_class_and_wraps() {
+        let mut app = app_with_seed(5);
+        app.open(Screen::ScaleTrainer);
+        let (start, kind) = (app.scale.root(), app.scale.kind());
 
-            for &pitch_class in &PitchClass::ALL {
-                let label = Scale::new(pitch_class, kind).root_note();
-
-                let _ = app.update(Message::SelectRoot(pitch_class));
-
-                assert_eq!(
-                    app.scale.root_note(),
-                    label,
-                    "{kind:?} button for {pitch_class:?} promised {label}"
-                );
-            }
+        let mut seen = HashSet::new();
+        for _ in 0..PitchClass::ALL.len() {
+            press_into(&mut app, "]", keyboard::Modifiers::empty());
+            seen.insert(app.scale.root());
         }
+
+        assert_eq!(seen.len(), PitchClass::ALL.len());
+        assert_eq!(
+            app.scale.root(),
+            start,
+            "twelve steps up did not come back round"
+        );
+        assert_eq!(app.scale.kind(), kind, "stepping the root moved the kind");
+
+        press_into(&mut app, "[", keyboard::Modifiers::empty());
+        assert_eq!(app.scale.root(), start.shift(-1));
+    }
+
+    /// One `RootDial` serves every screen, so a step must land on the screen on show alone.
+    #[test]
+    fn a_root_step_moves_only_the_screen_on_show() {
+        let mut app = app_with_seed(0x5eed);
+        app.open(Screen::Caged);
+        let (scale, drill) = (app.scale, app.walk_the_scale.scale());
+        let caged = app.caged.root();
+
+        let _ = app.update(Message::GrabRoot(0.0));
+        let _ = app.update(Message::DragRoot(2.0 * root_stage::STEP_DISTANCE));
+        let _ = app.update(Message::DropRoot);
+
+        assert_eq!(
+            app.caged.root(),
+            caged.shift(2),
+            "the drag did not reach CAGED"
+        );
+        assert_eq!(app.scale, scale, "the drag moved the Scale Trainer");
+        assert_eq!(
+            app.walk_the_scale.scale(),
+            drill,
+            "the drag moved the drill"
+        );
+
+        let _ = app.update(Message::ScrollRoot(-1.0));
+        assert_eq!(
+            app.caged.root(),
+            caged.shift(1),
+            "the wheel did not reach CAGED"
+        );
+
+        // off the root screens a step has nowhere to go
+        app.open(Screen::Tuner);
+        let _ = app.update(Message::StepRoot(3));
+        assert_eq!(app.caged.root(), caged.shift(1));
+    }
+
+    #[test]
+    fn leaving_a_screen_mid_drag_ends_the_drag() {
+        let mut app = app_with_seed(0x5eed);
+        app.open(Screen::Caged);
+        let _ = app.update(Message::GrabRoot(0.0));
+
+        app.open(Screen::ScaleTrainer);
+        let root = app.scale.root();
+        let _ = app.update(Message::DragRoot(3.0 * root_stage::STEP_DISTANCE));
+
+        assert!(!app.root_dial.is_dragging());
+        assert_eq!(
+            app.scale.root(),
+            root,
+            "a drag begun on CAGED stepped the trainer"
+        );
+    }
+
+    #[test]
+    fn the_arrows_walk_the_caged_cycle_and_leave_it_at_either_end() {
+        let mut app = app_with_seed(0xca6);
+        app.open(Screen::Caged);
+        app.focused = FocusTarget::CagedShape(0);
+        let last = app.caged.shapes().len() - 1;
+
+        for expected in 1..=last {
+            press_named(&mut app, Named::ArrowDown);
+            assert_eq!(app.caged.selected(), expected);
+            assert_eq!(app.focused, FocusTarget::CagedShape(expected));
+        }
+
+        // the cycle is over, so the ring moves on to the controls under it
+        press_named(&mut app, Named::ArrowDown);
+        assert_eq!(app.caged.selected(), last);
+        assert_eq!(app.focused, FocusTarget::NotationToggle);
+
+        app.caged.select_shape(0);
+        app.focused = FocusTarget::CagedShape(0);
+        press_named(&mut app, Named::ArrowUp);
+        assert_eq!(
+            app.focused,
+            FocusTarget::Back,
+            "up from the first shape stayed put"
+        );
+    }
+
+    #[test]
+    fn the_caged_root_steps_on_the_brackets() {
+        let mut app = app_with_seed(0xca6);
+        app.open(Screen::Caged);
+        app.focused = FocusTarget::Back;
+        let root = app.caged.root();
+
+        press_into(&mut app, "]", keyboard::Modifiers::empty());
+        assert_eq!(app.caged.root(), root.shift(1));
+        press_into(&mut app, "[", keyboard::Modifiers::empty());
+        press_into(&mut app, "[", keyboard::Modifiers::empty());
+        assert_eq!(app.caged.root(), root.shift(-1));
+        assert_eq!(app.focused, FocusTarget::Back, "a bracket moved the ring");
     }
 
     #[test]
@@ -1484,28 +1556,6 @@ mod tests {
     }
 
     #[test]
-    fn the_arrows_walk_the_caged_cycle_without_a_second_press() {
-        let mut app = app_with_seed(0xca6);
-        app.open(Screen::Caged);
-        app.focused = FocusTarget::CagedShape(0);
-
-        app.move_focus(Direction::Right);
-
-        assert_eq!(app.caged.selected(), 1, "the selection did not follow");
-        assert_eq!(
-            app.focused,
-            FocusTarget::CagedShape(1),
-            "the ring did not follow the selection"
-        );
-
-        // Stops at the ends rather than wrapping, as every other row does.
-        app.move_focus(Direction::Left);
-        app.move_focus(Direction::Left);
-        assert_eq!(app.caged.selected(), 0);
-        assert_eq!(app.focused, FocusTarget::CagedShape(0));
-    }
-
-    #[test]
     fn tab_still_escapes_the_caged_pills() {
         let mut app = app_with_seed(0xca6);
         app.open(Screen::Caged);
@@ -1516,7 +1566,7 @@ mod tests {
         assert_ne!(app.focused, FocusTarget::CagedShape(0));
         assert!(matches!(
             app.focused,
-            FocusTarget::CagedShape(_) | FocusTarget::CagedRoot(_)
+            FocusTarget::CagedShape(_) | FocusTarget::NotationToggle
         ));
     }
 
@@ -1551,7 +1601,7 @@ mod tests {
         .map(|(key, ..)| key)
         .collect();
 
-        assert_eq!(keys, ['r', 'i']);
+        assert_eq!(keys, ['r', 'i', '[', ']']);
         for inert in ["d", "a"] {
             let before = (app.caged.root(), app.caged.selected(), app.notation);
             press_into(&mut app, inert, keyboard::Modifiers::empty());
@@ -1710,7 +1760,7 @@ mod tests {
         let _ = app.update(Message::RerollScale);
         assert_eq!(app.notation, Notation::Intervals, "a reroll reset it");
 
-        let _ = app.update(Message::SelectRoot(PitchClass::new(3)));
+        let _ = app.update(Message::StepRoot(3));
         let _ = app.update(Message::SelectScaleKind(ScaleKind::Aeolian));
         assert_eq!(app.notation, Notation::Intervals, "a selection reset it");
 
@@ -2172,7 +2222,7 @@ mod tests {
     fn help_preserves_focus_and_adds_no_targets() {
         let mut app = app_with_seed(0x0fc5);
         app.navigate_to(Screen::ScaleTrainer);
-        app.focused = FocusTarget::Root(4);
+        app.focused = FocusTarget::ScaleKind(4);
 
         let reachable = app_on(Screen::ScaleTrainer).focusables();
 
@@ -2182,7 +2232,7 @@ mod tests {
         press_into(&mut app, "?", keyboard::Modifiers::SHIFT);
 
         assert!(!app.help_open);
-        assert_eq!(app.focused, FocusTarget::Root(4));
+        assert_eq!(app.focused, FocusTarget::ScaleKind(4));
     }
 
     /// Presses a named key, for the keys `press` cannot build because they produce no character.
@@ -2276,57 +2326,6 @@ mod tests {
                 (None, 5),
                 (Some(SMUFL_FLAT), 7),
             ]
-        );
-    }
-
-    #[test]
-    fn selector_card_fits_every_kind_row() {
-        // iced's default line height, and the card's `.spacing(12)` and `.padding(32)`
-        const TEXT_LINE_HEIGHT: f32 = 1.3;
-        const COLUMN_SPACING: f32 = 12.0;
-        const CARD_PADDING: f32 = 32.0;
-        // a pill is its text, the button's `.padding([8, 12])` and the 3px `focus_ring`
-        const BUTTON_PADDING_Y: f32 = 8.0;
-        const FOCUS_RING_PADDING: f32 = 3.0;
-
-        let rows = KIND_ROW_WIDTHS.len() as f32;
-        let pill =
-            KIND_BUTTON_SIZE * TEXT_LINE_HEIGHT + 2.0 * BUTTON_PADDING_Y + 2.0 * FOCUS_RING_PADDING;
-        let needed = rows * pill + (rows - 1.0) * COLUMN_SPACING + 2.0 * CARD_PADDING;
-
-        assert!(
-            SELECTOR_CARD_HEIGHT >= needed,
-            "the selector card is {SELECTOR_CARD_HEIGHT} tall but needs {needed} for \
-             {rows} rows of scale kinds; the last row would lay out at zero height and \
-             stop drawing, taking its kinds off the screen with it."
-        );
-    }
-
-    #[test]
-    fn summary_card_fits_a_two_line_name() {
-        // iced's `LineHeight::default()`, `Relative(1.3)`, which iced resolves internally
-        const TEXT_LINE_HEIGHT: f32 = 1.3;
-        // The card's own `.spacing(10)` and `.padding(32)`, both in `ui_scale_trainer`.
-        const COLUMN_SPACING: f32 = 10.0;
-        const CARD_PADDING: f32 = 32.0;
-        // several names are wider than the card at `SUMMARY_NAME_SIZE`, so budget two lines
-        const NAME_LINES: f32 = 2.0;
-
-        let line = |size: f32| size * TEXT_LINE_HEIGHT;
-        // the header row is as tall as the root label
-        let needed = line(SUMMARY_ROOT_SIZE)
-            + COLUMN_SPACING
-            + NAME_LINES * line(SUMMARY_NAME_SIZE)
-            + COLUMN_SPACING
-            + line(SUMMARY_FORMULA_SIZE)
-            + 2.0 * CARD_PADDING;
-
-        assert!(
-            SUMMARY_CARD_HEIGHT >= needed,
-            "the summary card is {SUMMARY_CARD_HEIGHT} tall but needs {needed} for a \
-             two-line scale name above its formula. iced resolves a `Shrink` child against \
-             the space that is left, so the formula row would lay out at zero height and \
-             stop drawing entirely — silently, with no clipping and no panic."
         );
     }
 }
