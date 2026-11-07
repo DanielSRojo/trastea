@@ -687,7 +687,7 @@ mod tests {
     use crate::ui::keys::{Fires, accelerators_for};
     use crate::ui::neck::STANDARD_TUNING;
     use crate::ui::tests::{press_into, press_named};
-    use crate::ui::{App, HOME_MENU, Notation, Screen, WalkTheScale};
+    use crate::ui::{App, Notation, Screen, WalkTheScale};
     use iced::keyboard;
     use iced::keyboard::key::Named;
 
@@ -747,11 +747,11 @@ mod tests {
     // ---- Reaching it ----
 
     #[test]
-    fn nine_on_home_opens_the_position_finder() {
+    fn four_then_two_on_home_opens_the_position_finder() {
         let (mut app, _) = App::new();
-        assert_eq!(HOME_MENU[8].label, "Position Finder");
 
-        press_into(&mut app, "9", keyboard::Modifiers::empty());
+        press_into(&mut app, "4", keyboard::Modifiers::empty());
+        press_into(&mut app, "2", keyboard::Modifiers::empty());
         assert_eq!(app.screen, Screen::PositionFinder);
 
         press_named(&mut app, Named::Escape);

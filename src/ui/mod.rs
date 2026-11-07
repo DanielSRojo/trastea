@@ -5,6 +5,7 @@ mod chord_library;
 mod drill;
 mod focus;
 mod fretboard;
+mod home;
 mod interval_trainer;
 mod keys;
 mod listener;
@@ -21,6 +22,7 @@ mod walk_the_scale;
 use std::time::Duration;
 
 use caged::{Caged, ui_caged};
+use home::{Category, ui_home};
 use interval_trainer::{IntervalTrainer, ui_interval_trainer};
 use listener::Listener;
 use note_trainer::{NoteTrainer, ui_note_trainer};
@@ -123,6 +125,8 @@ pub enum Screen {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Message {
     Navigate(Screen),
+    /// A press on a Home category, which takes the ring and so opens its entries.
+    OpenCategory(Category),
     GoBack,
     SelectRoot(PitchClass),
     SelectScaleKind(ScaleKind),
@@ -228,66 +232,8 @@ pub enum Message {
     ActivateFocused,
 }
 
-/// One entry of the Home screen's menu.
-struct MenuItem {
-    label: &'static str,
-    caption: &'static str,
-    screen: Screen,
-}
-
 /// How often the Tuner asks for audio while it is showing.
 const AUDIO_POLL: std::time::Duration = std::time::Duration::from_millis(10);
-
-/// The Home menu, in draw order; its buttons, focus grid and digit accelerators derive from it.
-const HOME_MENU: [MenuItem; 9] = [
-    MenuItem {
-        label: "Scale Trainer",
-        caption: "Explore and learn guitar scales",
-        screen: Screen::ScaleTrainer,
-    },
-    MenuItem {
-        label: "Walk the Scale",
-        caption: "Find a scale's degrees in order, by ear or by eye",
-        screen: Screen::WalkTheScale,
-    },
-    MenuItem {
-        label: "Note Trainer",
-        caption: "Build fretboard recall one pitch at a time",
-        screen: Screen::NoteTrainer,
-    },
-    MenuItem {
-        label: "Interval Trainer",
-        caption: "Recognize distances from a tonal center",
-        screen: Screen::IntervalTrainer,
-    },
-    MenuItem {
-        label: "Play the Interval",
-        caption: "Play the distance a lit position asks for",
-        screen: Screen::PlayTheInterval,
-    },
-    MenuItem {
-        label: "Chord Library",
-        caption: "Look up a chord and see where it sits",
-        screen: Screen::ChordLibrary,
-    },
-    MenuItem {
-        label: "CAGED",
-        caption: "See one chord in all five places on the neck",
-        screen: Screen::Caged,
-    },
-    MenuItem {
-        label: "Tuner",
-        caption: "Tune by ear against what the app hears",
-        screen: Screen::Tuner,
-    },
-    MenuItem {
-        label: "Position Finder",
-        caption: "Play a note and see where on the neck it was",
-        screen: Screen::PositionFinder,
-    },
-];
-
-const HOME_MENU_ITEMS: usize = HOME_MENU.len();
 
 impl App {
     pub fn new() -> (Self, Task<Message>) {
@@ -301,7 +247,7 @@ impl App {
             screen: Screen::default(),
             history: Vec::new(),
             scale: Scale::new(PitchClass::new(0), ScaleKind::Ionian),
-            focused: FocusTarget::HomeMenuItem(0),
+            focused: FocusTarget::HomeCategory(Category::Scales),
             rng,
             help_open: false,
             notation: Notation::Notes,
@@ -398,6 +344,11 @@ impl App {
 
         match message {
             Message::Navigate(screen) => self.open(screen),
+            Message::OpenCategory(category) => self.focused = FocusTarget::HomeCategory(category),
+            // on Home, Esc steps out of a category's entries as Left does
+            Message::GoBack if matches!(self.focused, FocusTarget::HomeEntry(..)) => {
+                self.focused = home::step(self.focused, Direction::Left);
+            }
             // Esc closes the device list before it leaves the screen
             Message::GoBack if self.is_picking() => {
                 if let Some(listener) = self.listener() {
@@ -589,8 +540,15 @@ impl App {
     fn go_back(&mut self) {
         if let Some(prev) = self.history.pop() {
             self.leaving_for(&prev);
-            self.screen = prev;
+            let left = std::mem::replace(&mut self.screen, prev);
             self.reset_focus();
+
+            // with the category it sits in open, so the way back retraces the way in
+            if self.screen == Screen::Home
+                && let Some(entry) = home::entry_for(&left)
+            {
+                self.focused = entry;
+            }
         }
     }
 
@@ -769,6 +727,14 @@ impl App {
             return;
         }
 
+        if matches!(
+            self.focused,
+            FocusTarget::HomeCategory(_) | FocusTarget::HomeEntry(..)
+        ) {
+            self.focused = home::step(self.focused, direction);
+            return;
+        }
+
         if self.focused == FocusTarget::Fretboard {
             self.note_trainer.move_cursor(direction);
             return;
@@ -843,8 +809,11 @@ impl App {
     /// Performs `target`'s action without walking the focus ring onto it.
     fn activate(&mut self, target: FocusTarget) {
         match target {
-            FocusTarget::HomeMenuItem(index) => {
-                if let Some(item) = HOME_MENU.get(index) {
+            FocusTarget::HomeCategory(category) => {
+                self.focused = FocusTarget::HomeEntry(category, 0);
+            }
+            FocusTarget::HomeEntry(category, index) => {
+                if let Some(item) = category.entries().get(index) {
                     self.open(item.screen.clone());
                 }
             }
@@ -1068,42 +1037,6 @@ fn with_top_bar(
         .height(Length::Fill)
         .style(page_container)
         .into()
-}
-
-fn ui_home(focused: FocusTarget) -> Element<'static, Message> {
-    use iced::Length;
-    use iced::widget::{column, container, row, text};
-
-    let menu = column(HOME_MENU.iter().enumerate().map(|(index, item)| {
-        focus_ring(
-            trainer_button(item.label, item.caption)
-                .on_press(Message::Navigate(item.screen.clone())),
-            focused == FocusTarget::HomeMenuItem(index),
-        )
-    }))
-    .spacing(12);
-
-    let hero = column![
-        text("Trastea").size(56).color(INK),
-        text("A focused guitar trainer for scales, intervals, and fretboard fluency.")
-            .size(21)
-            .color(BODY),
-        row![
-            // text("α").size(13).color(CANVAS),
-            // text("desktop practice lab").size(13).color(INK)
-        ]
-        .spacing(8)
-        .padding([6, 12])
-    ]
-    .spacing(16);
-
-    let content = container(row![hero, menu].spacing(64))
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding([48, 64])
-        .center_y(Length::Fill);
-
-    with_top_bar("Trastea", content.into(), false, focused)
 }
 
 /// Each button is named by the scale pressing it would build, so labels move with the kind.
@@ -1488,9 +1421,10 @@ mod tests {
     }
 
     #[test]
-    fn the_seventh_digit_opens_the_caged_window() {
+    fn three_then_two_opens_the_caged_window() {
         let mut app = app_with_seed(0xca6);
-        press_into(&mut app, "7", keyboard::Modifiers::empty());
+        press_into(&mut app, "3", keyboard::Modifiers::empty());
+        press_into(&mut app, "2", keyboard::Modifiers::empty());
 
         assert_eq!(app.screen, Screen::Caged);
         assert!(!app.caged.shapes().is_empty());
@@ -1788,8 +1722,9 @@ mod tests {
     #[test]
     fn the_chord_library_is_reachable_from_the_menu() {
         let mut app = app_with_seed(0xc40d);
-        // the library is the sixth `HOME_MENU` entry, so it takes the sixth digit
-        press_into(&mut app, "6", keyboard::Modifiers::empty());
+        // the first entry of the third category
+        press_into(&mut app, "3", keyboard::Modifiers::empty());
+        press_into(&mut app, "1", keyboard::Modifiers::empty());
 
         assert_eq!(app.screen, Screen::ChordLibrary);
     }
@@ -2117,11 +2052,17 @@ mod tests {
     /// When the action navigates, focus moves because navigating moves it.
     #[test]
     fn a_navigating_accelerator_resets_focus_on_the_new_screen() {
-        for (index, item) in HOME_MENU.iter().enumerate() {
-            let key = char::from_digit(index as u32 + 1, 10).expect("menu fits in digits");
+        let entries = Category::ALL.into_iter().flat_map(|category| {
+            let last = category.entries().len() - 1;
+            (category.entries().iter().enumerate())
+                .map(move |(index, item)| (category, last, index, item))
+        });
+
+        for (category, last, index, item) in entries {
+            let key = char::from_digit(index as u32 + 1, 10).expect("a category fits in digits");
 
             let mut app = app_with_seed(0x6070);
-            app.focused = FocusTarget::HomeMenuItem(HOME_MENU.len() - 1);
+            app.focused = FocusTarget::HomeEntry(category, last);
 
             press_into(&mut app, &key.to_string(), keyboard::Modifiers::empty());
 
@@ -2248,7 +2189,7 @@ mod tests {
     fn enter_and_space_activate_the_focused_widget() {
         for named in [Named::Enter, Named::Space] {
             let mut app = app_with_seed(0xac71);
-            app.focused = FocusTarget::HomeMenuItem(1);
+            app.focused = FocusTarget::HomeEntry(Category::Scales, 1);
 
             press_named(&mut app, named);
 

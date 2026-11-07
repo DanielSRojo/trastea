@@ -495,20 +495,15 @@ mod screen_tests {
     fn the_tuner_is_reachable_and_leavable_like_every_other_screen() {
         let (mut app, _) = App::new();
 
-        let entry = HOME_MENU
-            .iter()
-            .position(|item| item.screen == Screen::Tuner)
-            .expect("the Tuner is a Home menu entry");
-        assert!(
-            accelerators_for(&Screen::Home, Notation::Notes, &WalkTheScale::new())
-                .iter()
-                .any(|(key, target, _)| *key == '8'
-                    && *target == Fires::Widget(FocusTarget::HomeMenuItem(entry))),
-            "the Tuner has no digit on the Home menu"
+        // Tools, then its first entry
+        for digit in ["4", "1"] {
+            press_into(&mut app, digit, keyboard::Modifiers::empty());
+        }
+        assert_eq!(
+            app.screen,
+            Screen::Tuner,
+            "the Tuner has no digits on the Home menu"
         );
-
-        let _ = app.update(Message::Navigate(Screen::Tuner));
-        assert_eq!(app.screen, Screen::Tuner);
 
         let _ = app.update(Message::GoBack);
         assert_eq!(app.screen, Screen::Home, "Esc did not leave the Tuner");

@@ -306,6 +306,18 @@ pub(super) fn card_button(
     }
 }
 
+/// A Home category whose entries are showing, marked even while the ring is among them.
+pub(super) fn open_card_button(
+    theme: &iced::Theme,
+    status: iced::widget::button::Status,
+) -> iced::widget::button::Style {
+    iced::widget::button::Style {
+        background: Some(Background::Color(CANVAS_SOFT_2)),
+        border: Border::default().rounded(12).width(1).color(BODY),
+        ..card_button(theme, status)
+    }
+}
+
 pub(super) fn ghost_button(
     _theme: &iced::Theme,
     status: iced::widget::button::Status,

@@ -6,12 +6,16 @@ use std::ops::Range;
 use crate::music::notes::PitchClass;
 
 use super::drill::{ANSWER_COUNT, Drill};
+use super::home::{self, Category};
 use super::walk_the_scale;
-use super::{App, HOME_MENU_ITEMS, Screen};
+use super::{App, Screen};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusTarget {
-    HomeMenuItem(usize),
+    /// A block of the Home menu; the focused one is the one whose entries show.
+    HomeCategory(Category),
+    /// One screen in a Home category, indexed into its `entries`.
+    HomeEntry(Category, usize),
     Back,
     NotationToggle,
     RerollScale,
@@ -130,9 +134,8 @@ impl App {
                 vec![Some(FocusTarget::SkipPlayPrompt)],
                 vec![Some(FocusTarget::InputDevice)],
             ],
-            Screen::Home => (0..HOME_MENU_ITEMS)
-                .map(|i| vec![Some(FocusTarget::HomeMenuItem(i))])
-                .collect(),
+            // drawn and hit-tested by this grid, but the arrows go through `home::step`
+            Screen::Home => home::focus_grid(self.focused),
             Screen::Caged => {
                 let mut back_row: FocusRow = vec![None; ROOT_ROW_WIDTH];
                 back_row[0] = Some(FocusTarget::Back);
@@ -354,6 +357,10 @@ impl App {
 
     /// Every focusable on a screen, card by card — the Tab order, from the arrows' grid.
     pub(super) fn focusables(&self) -> Vec<FocusTarget> {
+        if self.screen == Screen::Home {
+            return home::tab_order(self.focused);
+        }
+
         let grid = self.focus_grid();
         let width = grid.iter().map(Vec::len).max().unwrap_or(0);
 
@@ -447,10 +454,10 @@ mod tests {
     use crate::ui::tests::app_on;
 
     #[test]
-    fn home_has_a_focusable_per_menu_entry() {
+    fn home_rings_every_category_and_only_the_open_one_s_entries() {
         assert_eq!(
             app_on(Screen::Home).focusables().len(),
-            HOME_MENU_ITEMS,
+            Category::ALL.len() + Category::Scales.entries().len(),
             "the menu and its focus ring disagree"
         );
     }
@@ -674,25 +681,11 @@ mod tests {
     }
 
     #[test]
-    fn home_menu_is_vertical_only() {
-        let grid = app_on(Screen::Home).focus_grid();
-        let first = FocusTarget::HomeMenuItem(0);
-
-        assert_eq!(
-            step_focus_2d(&grid, first, Direction::Down),
-            FocusTarget::HomeMenuItem(1)
-        );
-        assert_eq!(step_focus_2d(&grid, first, Direction::Up), first);
-        assert_eq!(step_focus_2d(&grid, first, Direction::Right), first);
-        assert_eq!(step_focus_2d(&grid, first, Direction::Left), first);
-    }
-
-    #[test]
     fn arrows_snap_stale_focus_back_onto_the_grid() {
         let grid = app_on(Screen::Home).focus_grid();
         assert_eq!(
             step_focus_2d(&grid, FocusTarget::Back, Direction::Down),
-            FocusTarget::HomeMenuItem(0)
+            FocusTarget::HomeCategory(Category::Scales)
         );
     }
 }

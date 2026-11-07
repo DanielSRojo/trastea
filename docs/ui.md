@@ -216,6 +216,30 @@ list and the CAGED pills joined later on the same terms, so walking the list or 
 gesture rather than focus-then-activate. The pills claim left and right only, since up and down
 have nowhere further along the row to go.
 
+The Home menu claims all four, for a different reason. It is two columns — the categories, and
+beside them the entries of whichever category is open — and the open one is simply the one the
+ring is on, or the one holding the entry it is on, so the menu keeps no state of its own. Grid
+geometry would get the second column wrong: the cell beside an entry is some other category,
+and Left onto it would swap out the column just left. So `home::step` crosses between a
+category and its own entries, and up and down stay in a column. The grid is still built, as
+drawn, for what the grid is otherwise for: membership, and snapping a stale target.
+
+## The Home menu
+
+Nine screens in one list was too much to take in at once, so they are grouped by subject —
+scales, notes and intervals, chords, and the tools that only listen — with each group's
+entries opened beside it. Subject rather than reference-versus-drill, since a learner arrives
+wanting to work on scales, not wanting a drill of some kind.
+
+The column opens on focus rather than on `Enter`, so browsing the categories with the arrows
+shows what is in each without a press, and Right never lands in a column belonging to another
+category. `Enter`, a click and a digit all step into the category instead. Digits number
+whichever column the ring is in, so two of them reach any screen; the cost is that a screen no
+longer has one digit of its own. `Esc` on an entry steps back out to its category, as Left
+does, and coming back from a screen lands on the entry that opened it. Tab visits each category
+followed by its entries, so it walks the whole tree rather than every category before any
+entry.
+
 ## Keyboard
 
 `translate_key` cannot tell whether a character is bound, because binding is per screen and it
@@ -332,8 +356,8 @@ list; a picker index is on the screen side of the line that keeps the detector t
 - `calibration::kept_path` is `None` under test, so no test reads the learner's calibration or
   replaces it on completing a walk. Persistence is tested through `read` and `write` with a
   temporary path, as for the remembered device.
-- Calibration is a mode, `c`, rather than a screen: a tenth menu entry would sit past the digit
-  accelerators for something done once per string change, and the only screen that reads a
+- Calibration is a mode, `c`, rather than a screen: a menu entry of its own would be one
+  more thing on Home for something done once per string change, and the only screen that reads a
   calibration is the one that captures it.
 
 ## Style

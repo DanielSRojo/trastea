@@ -11,9 +11,7 @@ use super::style::{
     BODY, CANVAS, CANVAS_SOFT_2, INK, KEYCAP_ARROWS, KEYCAP_BACKTAB, KEYCAP_FONT, KEYCAP_TAB, MUTE,
     card_container,
 };
-use super::{
-    App, HOME_MENU, Message, Notation, Screen, WalkTheScale, chord_library, walk_the_scale,
-};
+use super::{App, Message, Notation, Screen, WalkTheScale, chord_library, home, walk_the_scale};
 
 /// The modifiers that suppress a character binding.
 ///
@@ -87,6 +85,11 @@ pub(super) enum Fires {
 impl App {
     /// The accelerators the current screen claims. A key absent here is inert on that screen.
     pub(super) fn accelerators(&self) -> Vec<Accelerator> {
+        // Home's digits depend on which column the ring is in, which no other table needs
+        if self.screen == Screen::Home {
+            return home::accelerators(self.focused);
+        }
+
         accelerators_for(
             &self.screen,
             self.chord_library.notation(),
@@ -101,19 +104,8 @@ pub(super) fn accelerators_for(
     drill: &WalkTheScale,
 ) -> Vec<Accelerator> {
     match screen {
-        // numbered by position; `from_digit` runs out after nine
-        Screen::Home => HOME_MENU
-            .iter()
-            .enumerate()
-            .filter_map(|(index, item)| {
-                let key = char::from_digit(index as u32 + 1, 10)?;
-                Some((
-                    key,
-                    Fires::Widget(FocusTarget::HomeMenuItem(index)),
-                    item.label.into(),
-                ))
-            })
-            .collect(),
+        // the table at rest, with the ring on the categories
+        Screen::Home => home::accelerators(FocusTarget::HomeCategory(home::Category::Scales)),
         Screen::ScaleTrainer => vec![
             (
                 'r',
@@ -528,29 +520,6 @@ mod tests {
                     );
                 }
             }
-        }
-    }
-
-    /// A trainer added to `HOME_MENU` must arrive with its digit already attached.
-    #[test]
-    fn every_home_menu_item_has_a_digit_accelerator() {
-        let bound = accelerators_for(&Screen::Home, Notation::Notes, &WalkTheScale::new());
-
-        assert_eq!(bound.len(), HOME_MENU.len());
-
-        for (index, item) in HOME_MENU.iter().enumerate() {
-            let expected = char::from_digit(index as u32 + 1, 10).expect("menu fits in digits");
-
-            assert_eq!(
-                bound[index],
-                (
-                    expected,
-                    Fires::Widget(FocusTarget::HomeMenuItem(index)),
-                    item.label.into()
-                ),
-                "menu item {index} ({}) is misnumbered or mislabelled",
-                item.label
-            );
         }
     }
 

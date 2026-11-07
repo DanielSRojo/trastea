@@ -9,8 +9,8 @@ fretboard can tell apart with no key established, and `music/` holds no instrume
 `drill` rather than in either screen because both interval drills mean the same twelve
 distances by it.
 
-- One table feeds the grid, the focus rows and the prompt pool, the way `HOME_MENU` feeds the
-  menu's buttons, focus cells and digit keys. Twelve happens to divide evenly into
+- One table feeds the grid, the focus rows and the prompt pool, the way a Home category's
+  `entries` feed its buttons, focus cells and digit keys. Twelve happens to divide evenly into
   `ANSWER_ROW_WIDTH`, which the Interval Trainer's grid relies on and the played drill does
   not; the table is a vocabulary, not a layout.
 - The twin is carried as an `Interval`, not as a written label, so a button's text cannot drift

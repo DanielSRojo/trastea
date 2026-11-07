@@ -304,7 +304,7 @@ The focus ring is a 2-D grid rather than a flat tab order, so `↑ ↓ ← →` 
 | `Enter`, `Space` | activate |
 | `Esc`, `Backspace` | back |
 | `?` | list the keys that work on this screen |
-| `1`–`9` | jump straight to a Home menu entry |
+| `1`–`9` | on Home, pick a category, then an entry in it — `2` `1` is the Note Trainer |
 
 Every arrow the chrome draws — the overlay's two rows and the back button in each screen's
 top bar — comes from one subset embedded like the other fonts; see `just fonts`. The tab
@@ -378,9 +378,10 @@ src/
                          keeps a fit window's worth of history beside detection's window,
                          because the fit reads further back than detection drains
   ui/
-    mod.rs               App, Screen, Message — update, view and the subscription — the
-                         Home view, and the root buttons and formula tokens that three
-                         screens share
+    mod.rs               App, Screen, Message — update, view and the subscription — and
+                         the root buttons and formula tokens that three screens share
+    home.rs              the Home menu: the screens grouped into categories, the open
+                         one's entries beside them, opened by wherever the ring stands
     style.rs             the palette, the faces and the glyphs drawn from them, and the
                          control and container styles every screen builds from
     neck.rs              the tuning, Neck and the two necks the screens draw, and a
