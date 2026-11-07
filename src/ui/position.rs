@@ -10,11 +10,11 @@ use super::neck::{NECK_STRINGS, Neck, Position};
 
 /// How near a candidate's prediction a measurement must sit to match it at all, in log₂ B.
 /// Four times run 3's widest take-to-take spread (0.099), the spike's line for "build it";
-/// tuned on a real guitar.
+/// held on the spike's Stratocaster with no take left unnamed.
 pub(super) const FIT_GATE: f32 = 0.4;
 
 /// How far apart two candidates' predictions must sit to be told apart, in log₂ B. The same
-/// starting point as [`FIT_GATE`], and tuned the same way.
+/// value as [`FIT_GATE`]; on the Stratocaster it split the E4 trio and kept D|G together.
 pub(super) const MARGIN: f32 = 0.4;
 
 /// What the estimate can say: three cases for the reason `Heard` has its own. A place, the

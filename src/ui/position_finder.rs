@@ -476,7 +476,7 @@ fn notices(finder: &PositionFinder) -> Vec<String> {
     for string in kept.flagged() {
         let name = string_name(string).unwrap_or_default();
         said.push(format!(
-            "the {name} string did not rise as a string should — notes on it are never placed alone"
+            "the {name} string did not rise across its frets as a string should — notes on it are never placed alone"
         ));
     }
 

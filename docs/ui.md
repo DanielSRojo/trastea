@@ -347,9 +347,13 @@ list; a picker index is on the screen side of the line that keeps the detector t
 - A flagged string's positions join every group at their pitch, because a prediction that did not
   follow the model cannot rule a candidate out; one is never named alone, even as the only
   candidate.
-- `FIT_GATE` and `MARGIN` both start at 0.4 in log₂ B, four times run 3's widest take-to-take
-  spread, and are tuned on a real guitar. `RISE_TOLERANCE` starts at 0.5 and the drift constants at
-  0.3; none of them has been measured against a guitar yet.
+- `FIT_GATE` and `MARGIN` are both 0.4 in log₂ B, four times run 3's widest take-to-take
+  spread. Checked on the spike's Stratocaster with the pluck spot varied between takes, they
+  held: the E4 trio named alone every time, A3 at D@7 and G@2 answered as the predicted group,
+  A@12 named alone, and no take left unnamed — so neither moved. `RISE_TOLERANCE` started at 0.5 and is 0.8: on the
+  spike's Stratocaster the plain B string rises 2.59 from open to twelfth fret, and the spike's own
+  B@5 sat 0.31 above the model's slope, so the steep rise is the string rather than a bad reading.
+  The drift constants start at 0.3 and have not been measured against a guitar yet.
 - Drift is judged on one miss per answered note — measured minus the nearest prediction, signed —
   over the last five. Five misses on one side, at least 0.3 out and within 0.3 of each other, read
   as the strings having moved together; scattered misses read as playing.

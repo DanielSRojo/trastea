@@ -13,9 +13,8 @@ use super::neck::NECK_STRINGS;
 const MODEL_RISE: f32 = 2.0;
 
 /// How far a string's measured rise may sit from [`MODEL_RISE`] and still be trusted. The
-/// spike's plain strings came within about a third of the rise over a few frets; a starting
-/// value, to be tuned on a real guitar.
-const RISE_TOLERANCE: f32 = 0.5;
+/// spike's Stratocaster B string rises about 2.6 on every take, so 0.5 flagged a sound string.
+const RISE_TOLERANCE: f32 = 0.8;
 
 /// How many confirmed notes drift is judged over.
 const DRIFT_RUN: usize = 5;
@@ -220,6 +219,22 @@ pub(super) mod tests {
             (predicted - (2.0 * b0).log2()).abs() < 1e-5,
             "the 6th fret predicted {} rather than log₂ 2·B₀",
             predicted.exp2()
+        );
+    }
+
+    #[test]
+    fn a_steep_plain_string_is_trusted_and_a_steeper_one_is_flagged() {
+        let b0 = 1e-4f32;
+
+        assert!(
+            !uniform(b0, b0 * 2.6f32.exp2())
+                .expect("complete")
+                .is_flagged(4)
+        );
+        assert!(
+            uniform(b0, b0 * 2.9f32.exp2())
+                .expect("complete")
+                .is_flagged(4)
         );
     }
 
