@@ -1,7 +1,5 @@
 //! The Chord Library: looking a chord up, and drawing the ways to play it.
-//!
-//! The shapes those ways come from live in [`super::shapes`], not here. They are
-//! instrument knowledge rather than one screen's, and two screens place them.
+//! The shapes themselves live in `super::shapes`.
 
 use iced::keyboard;
 use iced::widget::canvas;
@@ -20,38 +18,24 @@ use super::style::{
 };
 use super::{Message, Notation, intervalic_text, note_label};
 
-/// The library's state: what has been typed, which root it settled on, and what is picked.
-///
-/// Its own struct rather than five more fields on `App`, so they can stay private — they
-/// are read all over the views below and nowhere else. The arrangement both trainers use.
 /// The three notations the library can draw, in the order `i` walks them.
-///
-/// Its own list rather than one shared with the Scale Trainer: a scale has no fingering, so
-/// the two screens have different vocabularies and no reason to move together.
 pub(super) const NOTATIONS: [Notation; 3] =
     [Notation::Notes, Notation::Intervals, Notation::Fingers];
 
+/// The library's state: what has been typed and what is picked.
 pub(super) struct ChordLibrary {
     query: String,
     /// Where the caret sits, as a character index into `query`.
     ///
-    /// The box is drawn and edited here rather than by iced's `text_input`, because that
-    /// widget would receive keys *as well as* the global subscription — both would fire,
-    /// and `l` would insert a character and move the focus ring. One owner, one caret.
+    /// The box is drawn here rather than by iced's `text_input`, which would receive keys as
+    /// well as the global subscription, so `l` would both type and move the focus ring.
     caret: usize,
     selected_row: usize,
     selected_voicing: usize,
     search_focused: bool,
-    /// Whether a `g` is waiting for its second half.
-    ///
-    /// `gg` is the one two-key gesture in the app. Anything other than a second `g` clears
-    /// it, so a half-typed motion never lies in wait to change what the next key does.
+    /// Whether a `g` is waiting for its second half. Any other key clears it.
     pending_g: bool,
-    /// What the diagrams' marks say, kept here rather than on `App`.
-    ///
-    /// Held by the screen because only this screen can draw all three, and because sharing
-    /// one field with the Scale Trainer meant picking `fingers` here quietly changed what
-    /// that screen labelled its markers with.
+    /// Kept here rather than on `App` so it does not change the Scale Trainer's labels.
     notation: Notation,
 }
 
@@ -64,8 +48,6 @@ impl ChordLibrary {
             selected_voicing: 0,
             search_focused: false,
             pending_g: false,
-            // Fingers by default: the question this screen is opened to answer is "how do
-            // I play this", and a fingering answers it in a way a note name does not.
             notation: Notation::Fingers,
         }
     }
@@ -80,9 +62,7 @@ impl ChordLibrary {
         }
     }
 
-    /// Opening the screen: an empty box with the caret in it, and the notation left as the
-    /// learner last set it. The query goes because the first keystroke should start a new
-    /// search rather than extend the last one.
+    /// Opening the screen: an empty box with the caret in it, the notation left as last set.
     pub(super) fn enter(&mut self) {
         self.set_query(String::new());
         self.focus_search();
@@ -98,18 +78,14 @@ impl ChordLibrary {
 
     /// The qualities surviving the query, in the order they are listed.
     ///
-    /// An empty query is every quality on the current root — browsing is the zero-input
-    /// case of searching rather than a mode of its own. A query that parses picks the
-    /// chord it names and the ones extending it; one that does not falls back to
-    /// approximate matching, which is the only place a score is involved and never
-    /// competes with an exact hit.
+    /// An empty query is every chord. A query that parses picks the chord it names and the
+    /// ones extending it; one that does not falls back to approximate matching.
     pub(super) fn rows(&self) -> Vec<Chord> {
         match Query::parse(&self.query) {
             None if self.query.trim().is_empty() => every_chord().collect(),
             None => self.approximate_rows(),
             Some(Query::Root(root)) => every_chord().filter(|chord| chord.root() == root).collect(),
-            // `covers` rather than `==`: a named quality is where the learner has typed to,
-            // not where they are going, so `Cmaj` must not hide the `Cmaj7` it starts.
+            // `covers` rather than `==`, so `Cmaj` does not hide the `Cmaj7` it starts.
             Some(Query::Quality(kind)) => every_chord()
                 .filter(|chord| kind.covers(chord.kind()))
                 .collect(),
@@ -120,15 +96,10 @@ impl ChordLibrary {
     }
 
     /// Rows for a query the grammar could not read: the chords whose symbol contains the
-    /// query's characters in order, nearest match first.
-    ///
-    /// A subsequence rather than a substring, so `cmj7` still reaches `Cmaj7`. The hazard
-    /// this would otherwise carry — `cm7` scoring against `Cmaj7` — cannot arise, because
-    /// `cm7` parses and never reaches here.
+    /// query's characters in order, nearest match first. `cm7` parses, so it never reaches here.
     fn approximate_rows(&self) -> Vec<Chord> {
         let needle = self.query.trim().to_lowercase();
-        // The library's own order is the last tiebreak, so two equally good matches come
-        // out in the order the list would have shown them anyway.
+        // The library's own order is the last tiebreak.
         let mut scored: Vec<(usize, usize, usize, Chord)> = every_chord()
             .enumerate()
             .filter_map(|(order, chord)| {
@@ -148,11 +119,8 @@ impl ChordLibrary {
 
     /// Scrolls the list so the selected row is on screen.
     ///
-    /// Proportional: the offset is the selection's share of the rows, so the highlight
-    /// starts at the top of the viewport for the first row and reaches the bottom for the
-    /// last, staying inside it all the way between. Exact at both ends, and near enough in
-    /// the middle that the group headers' extra height does not push it out — which is what
-    /// spares this from having to know the viewport's size or a row's height in pixels.
+    /// The offset is the selection's share of the rows: exact at both ends and close enough
+    /// between, so it needs neither the viewport's size nor a row's height.
     pub(super) fn follow_selection(&self) -> iced::Task<Message> {
         let rows = self.rows().len();
         let y = if rows > 1 {
@@ -175,9 +143,7 @@ impl ChordLibrary {
         self.selected_voicing
     }
 
-    /// Replaces the query. Nothing is remembered from it: the list is the whole library
-    /// filtered by whatever is typed, so an empty box means the whole library rather than
-    /// "the last root you named", which was state the screen never showed anybody.
+    /// Replaces the query. Nothing else is remembered from it.
     fn set_query(&mut self, query: String) {
         self.query = query;
         self.selected_row = 0;
@@ -201,8 +167,7 @@ impl ChordLibrary {
         }
     }
 
-    /// Walks the list, stopping at the ends rather than wrapping — the rule the focus grid
-    /// already follows for a row of unequal width.
+    /// Walks the list, stopping at the ends rather than wrapping.
     pub(super) fn move_row(&mut self, delta: isize) {
         let count = self.rows().len();
         if count == 0 {
@@ -225,11 +190,8 @@ impl ChordLibrary {
         self.selected_voicing = next as usize;
     }
 
-    /// The vim motions this screen claims for itself: `gg` to the first chord, `G` to the
-    /// last. Reports whether it took the key.
-    ///
-    /// Only reached with the search box unfocused, since a focused box takes every character
-    /// as text — which it must, because `g` is a note name.
+    /// The vim motions this screen claims: `gg` to the first chord, `G` to the last.
+    /// Reports whether it took the key. Only reached with the search box unfocused.
     pub(super) fn motion(&mut self, c: char) -> bool {
         let pending = std::mem::replace(&mut self.pending_g, false);
 
@@ -257,11 +219,7 @@ impl ChordLibrary {
     }
 
     /// Handles a key while the box has focus, reporting what it did.
-    ///
-    /// Almost everything is text here: a character key types rather than acting, which is
-    /// why `j` does not move and `?` does not open the help. The exceptions are the picker
-    /// set — the arrows, `Enter` and `Esc` — and they are what make typing and choosing one
-    /// gesture rather than two.
+    /// Character keys type; only the arrows, `Enter` and `Esc` act.
     pub(super) fn handle_key(
         &mut self,
         key: &keyboard::Key,
@@ -270,22 +228,18 @@ impl ChordLibrary {
         use keyboard::key::Named;
 
         match key.as_ref() {
-            // Leaves the box without clearing it: the query is how the learner got here,
-            // and the gesture is "I found it, now let me look at the shapes".
+            // Leaves the box without clearing the query.
             keyboard::Key::Named(Named::Escape) => {
                 self.search_focused = false;
 
                 return KeyOutcome::Handled;
             }
-            // Accepting: the row is already selected, so this is the learner saying they
-            // have found it. The ring moves on to the shapes.
+            // The row is already selected; the ring moves on to the shapes.
             keyboard::Key::Named(Named::Enter) => {
                 self.search_focused = false;
 
                 return KeyOutcome::Accepted;
             }
-            // The one pair that still navigates while typing, so a learner never has to
-            // leave the box to pick from what they have narrowed to.
             keyboard::Key::Named(Named::ArrowUp) => self.move_row(-1),
             keyboard::Key::Named(Named::ArrowDown) => self.move_row(1),
             keyboard::Key::Named(Named::ArrowLeft) => self.caret = self.caret.saturating_sub(1),
@@ -314,8 +268,7 @@ impl ChordLibrary {
                 self.set_query(next.into_iter().collect());
                 self.caret = at + typed;
             }
-            // Anything else is not this box's business — a command-modified key, say, so
-            // `Ctrl+K` from inside the box still reaches the app.
+            // Declined, so `Ctrl+K` from inside the box still reaches the app.
             _ => return KeyOutcome::Ignored,
         }
 
@@ -323,15 +276,7 @@ impl ChordLibrary {
     }
 }
 
-/// What a keystroke in the search box did, which is more than "was it mine".
-///
-/// `Accepted` is its own case because `Enter` and `Esc` mean different things: leaving the
-/// box with `Esc` is backing out, and leaves the ring where it was, while `Enter` is
-/// finishing — the learner has found their chord and wants to look through its shapes, so
-/// the ring goes to the list, whose arrows walk exactly that.
-///
-/// Returned rather than reaching for `App`'s focus from in here: this struct knows what its
-/// own key did, and where the ring sits is the parent's business.
+/// What a keystroke in the search box did. `App` moves the ring on `Accepted`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum KeyOutcome {
     /// Not this box's key — the app should go on and translate it.
@@ -348,10 +293,6 @@ fn list_id() -> iced::widget::Id {
 }
 
 /// Every chord the library holds, by root and then by quality.
-///
-/// The whole cross product, because the list is a filter over it rather than a window onto
-/// one root. Building all 180 costs about 33µs — the rows are cheap; it is the widgets that
-/// are not, which is why the view groups them rather than showing a flat wall.
 fn every_chord() -> impl Iterator<Item = Chord> {
     PitchClass::ALL.into_iter().flat_map(|root| {
         ChordQuality::ALL
@@ -361,10 +302,7 @@ fn every_chord() -> impl Iterator<Item = Chord> {
 }
 
 /// Where `needle`'s characters appear in `haystack`, in order, as `(start, span)`.
-///
-/// `None` when they do not all appear. The pair is what ranks a match: an earlier start
-/// beats a later one, and a tighter span beats a scattered one, so `maj7` sits above
-/// `mMaj7` for the query `maj7`.
+/// An earlier start and then a tighter span rank higher, so `maj7` beats `mMaj7`.
 fn subsequence(needle: &str, haystack: &str) -> Option<(usize, usize)> {
     if needle.is_empty() {
         return Some((0, 0));
@@ -387,26 +325,14 @@ fn subsequence(needle: &str, haystack: &str) -> Option<(usize, usize)> {
 }
 
 /// One piece of a written chord symbol: body-font text, or a SMuFL glyph.
-///
-/// Two fonts, so one `text` widget cannot carry both — the split `note_label` and
-/// `intervalic_text` already make for accidentals, applied one level up to the quality.
 enum SymbolPart {
     Text(&'static str),
     Glyph(char),
-    /// A glyph set as a superscript rather than on the baseline.
-    ///
-    /// Only the diminished and half-diminished circles: engraving convention raises those
-    /// two and leaves every other quality mark sitting on the baseline beside the root.
-    /// Raising them all — which is what this did at first — makes `Cm` and `Csus4` look
-    /// like exponents.
+    /// A glyph set as a superscript. Only the diminished and half-diminished circles are raised.
     Raised(char),
 }
 
-/// How a quality is written after its root.
-///
-/// The four with a glyph of their own use it; the rest are their abbreviation. This is the
-/// typographic counterpart of `ChordQuality::suffix`, which is ASCII because `music/`
-/// cannot reach these constants.
+/// How a quality is written after its root; the typographic counterpart of `ChordQuality::suffix`.
 fn symbol_parts(kind: ChordQuality) -> &'static [SymbolPart] {
     use SymbolPart::{Glyph, Raised, Text};
 
@@ -427,15 +353,12 @@ fn symbol_parts(kind: ChordQuality) -> &'static [SymbolPart] {
         ChordQuality::HalfDiminished7 => &[Raised(SMUFL_CSYM_HALF_DIMINISHED)],
         // The circle is raised; the seventh after it is not.
         ChordQuality::Diminished7 => &[Raised(SMUFL_CSYM_DIMINISHED), Text("7")],
-        // `7♯5`, not `+7`. Both are used, but `+7` is read by some as "with an augmented
-        // seventh" — a major seventh — which is a different chord. `7♯5` says the same
-        // thing as the degree row beneath it and cannot be read two ways.
+        // `7♯5`, not `+7`, which some read as a major seventh.
         ChordQuality::Augmented7 => &[Text("7"), Glyph(SMUFL_SHARP), Text("5")],
     }
 }
 
-/// A chord written the way a musician writes it: the root with a real accidental, the
-/// quality with its own glyph where it has one.
+/// A chord written with a real accidental and the quality's own glyph where it has one.
 fn chord_symbol(
     chord: Chord,
     size: impl Into<iced::Pixels>,
@@ -444,23 +367,15 @@ fn chord_symbol(
     use iced::widget::{container, text};
 
     let size = size.into();
-    // The quality is set smaller than the root, the way chord symbols are engraved. At the
-    // root's own size the diminished circle comes out at cap height and `C°` reads as `CO`.
+    // At the root's own size the diminished circle reaches cap height and `C°` reads as `CO`.
     let quality = iced::Pixels(size.0 * 0.66);
-    // A superscript is smaller again than the baseline marks, not merely lifted off them.
-    // At the quality's own size the circle comes out as big as the `m` in `Cm`, which is
-    // the size of a letter rather than of a mark about one.
+    // At the quality's size the circle comes out as big as the `m` in `Cm`.
     let raised = iced::Pixels(size.0 * 0.42);
 
-    // The row bottom-aligns its children, which lines up the *boxes* rather than the
-    // baselines — and a smaller box carries proportionally less descender under its text,
-    // so a mark would hang below the root's baseline like a subscript. Lifting each by its
-    // own shortfall in descender space is what puts them all on one line. iced's default
-    // line height is 1.3, of which roughly 0.3 sits under the baseline.
+    // The row bottom-aligns boxes rather than baselines, so each smaller mark is lifted by its
+    // shortfall in descender space. iced's line height is 1.3, roughly 0.3 below the baseline.
     let sits_on_baseline = |mark: iced::Pixels| (size.0 - mark.0) * 0.3;
-    // The superscript then rises a percentage of its own height above that shared
-    // baseline, which brings its top up near the root's cap — where a chart puts it. Half
-    // that left it sitting around the root's middle, reading as a mark that had slipped.
+    // The superscript then rises to bring its top near the root's cap.
     let lift = sits_on_baseline(raised) + raised.0 * 0.85;
 
     symbol_parts(chord.kind())
@@ -487,8 +402,7 @@ fn chord_symbol(
                 ..iced::Padding::ZERO
             }))
         })
-        // Bottom-aligned so a smaller mark sits beside the root rather than over it; the
-        // paddings above are what turn "same bottom edge" into "same baseline".
+        // The paddings above turn "same bottom edge" into "same baseline".
         .align_y(iced::Alignment::End)
 }
 
@@ -504,9 +418,6 @@ fn mark_label(
         return String::new();
     };
 
-    // `spell` and `degree` rather than a search through `notes()` here: what a pitch class
-    // is called in a chord, and what job it does, are both questions for `music/`. This
-    // module decides which of the two answers to draw and nothing else.
     match notation {
         Notation::Notes => chord
             .spell(sounding)
@@ -516,7 +427,7 @@ fn mark_label(
             .degree(sounding)
             .map(|interval| interval.to_string())
             .unwrap_or_default(),
-        // An open string is stopped by nobody, so it carries no finger.
+        // An open string carries no finger.
         Notation::Fingers => voicing.fingers()[string]
             .map(|finger| finger.to_string())
             .unwrap_or_default(),
@@ -541,19 +452,13 @@ fn diagram_for(chord: Chord, voicing: Voicing, notation: Notation) -> ChordDiagr
             }
         }),
         barre: voicing.barre_fret(),
-        // Display-only in this change. The widget hit-tests regardless, so the editing
-        // pass has a surface to land on — see the module comment on `chord_diagram`.
+        // Display-only for now; the widget hit-tests regardless.
         on_press: None,
     }
 }
 
 /// The rule between one root's chords and the next.
-///
-/// Both names on the five black keys, because the rows below genuinely use both: pitch
-/// class 1 spells `D♭` under a major triad and `C♯` under a minor one, since `D♭ F A♭`
-/// costs two flats where `C♯ E♯ G♯` costs three sharps. A header reading `C♯` alone would
-/// be wrong about a third of its own group — and showing the pair says the thing the
-/// spelling rule exists to teach, which is that the name follows the chord.
+/// Both names on black keys: pitch class 1 spells `D♭` under a major triad, `C♯` under a minor.
 fn root_header(root: PitchClass, after_a_group: bool) -> iced::Element<'static, Message> {
     use iced::Length;
     use iced::widget::{Space, column, container, row, text};
@@ -575,8 +480,7 @@ fn root_header(root: PitchClass, after_a_group: bool) -> iced::Element<'static, 
     container(
         column![
             name,
-            // A hairline rather than a bordered container: a `Border` would draw on all
-            // four sides, and only the underline is wanted.
+            // A hairline rather than a `Border`, which would draw all four sides.
             container(Space::new().height(Length::Fixed(1.0)))
                 .width(Length::Fill)
                 .style(hairline_rule),
@@ -592,14 +496,9 @@ fn root_header(root: PitchClass, after_a_group: bool) -> iced::Element<'static, 
     .into()
 }
 
-/// The magnifier in the search box, drawn rather than set.
-///
-/// `⌕` is not a character a text face is expected to carry and nothing embedded here has a
-/// magnifier in it, so the glyph the system found for it came out as a stray `o` sitting
-/// under the baseline. Two strokes depend on nothing.
+/// The magnifier in the search box, drawn because no embedded font carries `⌕`.
 struct SearchIcon;
 
-/// The side of the square the icon is drawn in.
 const SEARCH_ICON: f32 = 14.0;
 
 impl canvas::Program<Message> for SearchIcon {
@@ -620,9 +519,7 @@ impl canvas::Program<Message> for SearchIcon {
         let side = bounds.width.min(bounds.height);
         let stroke = Stroke::default().with_color(MUTE).with_width(1.4);
 
-        // The lens up in the corner and the handle out of it down the diagonal, which is the
-        // whole drawing: the handle leaves the rim at 45°, so it starts a radius away on
-        // both axes.
+        // The handle leaves the rim at 45°, so it starts a radius away on both axes.
         let centre = Point::new(side * 0.4, side * 0.4);
         let radius = side * 0.3;
         let grip = radius * std::f32::consts::FRAC_1_SQRT_2;
@@ -654,8 +551,7 @@ pub(super) fn ui_chord_library(
         text(typed.to_string()).size(16).color(INK)
     };
 
-    // The caret is a glyph rather than a blinking cursor: nothing here animates, and a
-    // learner needs to see that the box has the keyboard, not where a redraw is due.
+    // A glyph rather than a blinking cursor: nothing here animates.
     let caret = if library.search_focused() {
         text("▏").size(16).color(SUCCESS)
     } else {
@@ -696,9 +592,7 @@ pub(super) fn ui_chord_library(
             rows.iter()
                 .enumerate()
                 .fold(column![].spacing(2), |list, (index, &chord)| {
-                    // A header wherever the root changes. Derived here rather than stored
-                    // in the rows, so the selection stays a plain index into the chords and
-                    // the arrows never have to step over anything unselectable.
+                    // Derived here so the selection stays a plain index into the chords.
                     let opens_a_group = index == 0 || rows[index - 1].root() != chord.root();
                     let list = if opens_a_group {
                         list.push(root_header(chord.root(), index > 0))
@@ -773,9 +667,7 @@ fn detail_pane(
     use iced::Length;
     use iced::widget::{Space, button, column, container, row, scrollable, text};
 
-    // Spelled with the same glyphs the symbol above them uses, the way the scale trainer's
-    // summary card spells its root and its formula. `note.to_string()` is the ASCII the
-    // canvas is limited to, and this is not a canvas.
+    // Not `note.to_string()`, which is the ASCII the canvas is limited to.
     let notes = chord
         .notes()
         .into_iter()
@@ -784,10 +676,7 @@ fn detail_pane(
         });
     let degrees = intervalic_text(chord.degrees());
 
-    // Three buttons rather than one that cycles. A control whose label changes on every
-    // press does not read as a control with options — it reads as a status line, and
-    // nobody presses a status line to see what else it could say. Laid out as the scale
-    // trainer lays out its roots: pills, with the chosen one filled.
+    // Three buttons rather than one that cycles, laid out as pills with the chosen one filled.
     let notation_buttons =
         NOTATIONS
             .iter()
@@ -823,9 +712,6 @@ fn detail_pane(
                 notation_buttons,
             ]
             .align_y(iced::Alignment::Center),
-            // The symbol above says how the chord is written and nothing about how it is
-            // said, which is the half a beginner is missing — `C` is "C major" and only
-            // somebody who already knows that can read it off the chart.
             text(chord.spoken()).size(22).font(FEEL_FONT).color(MUTE),
             row![notes, Space::new().width(Length::Fixed(32.0)), degrees]
                 .align_y(iced::Alignment::Center),
@@ -838,15 +724,12 @@ fn detail_pane(
 
     let shapes = voicings(chord, &DRILL_NECK);
     let strip: iced::Element<'static, Message> = if shapes.is_empty() {
-        // Specified rather than hidden: the chord keeps its notes and degrees, and the
-        // screen says why there is nothing to look at.
         text("No shape available for this chord")
             .size(16)
             .color(MUTE)
             .into()
     } else {
-        // Wrapped rather than scrolled sideways: a shape that does not fit drops to the
-        // next line, so the whole set is one block to read instead of a strip to drag.
+        // Wrapped rather than scrolled sideways.
         scrollable(
             shapes
                 .iter()
@@ -882,8 +765,6 @@ fn voicing_card(
     use iced::widget::{button, column, container, text};
 
     let caption = format!("{}  ·  {}", position_label(voicing), voicing.shape_name());
-    // The picked shape is drawn half again as large. Its caption grows with it, so the two
-    // stay one object rather than a big picture with a small note under it.
     let (size, caption_size) = if picked { (FEATURE, 16) } else { (STRIP, 13) };
 
     container(
@@ -903,8 +784,7 @@ fn voicing_card(
         } else {
             super::style::row_button
         })
-        // A press anywhere inside picks the voicing: selection is about the diagram as a
-        // whole, never about which position was pressed.
+        // A press anywhere inside picks the voicing; the position pressed does not matter.
         .on_press(Message::SelectVoicing(index)),
     )
     .into()
@@ -962,9 +842,7 @@ mod tests {
 
     #[test]
     fn a_quality_alone_narrows_to_that_quality_on_every_root() {
-        // The list is a filter over the whole library now, so a bare quality is twelve
-        // chords rather than one — which is the more useful answer and the more obvious
-        // one, since nothing on screen was ever naming a "current root".
+        // A bare quality lists it on all twelve roots.
         let library = typed("m7b5");
         let rows = library.rows();
 
@@ -977,8 +855,7 @@ mod tests {
 
     #[test]
     fn a_root_and_a_quality_narrow_to_that_chord() {
-        // Nothing is written longer than `maj7`, so this one narrows to a single row. See
-        // `a_named_quality_keeps_the_chords_that_extend_it` for one that does not.
+        // Nothing is written longer than `maj7`, so this narrows to a single row.
         let library = typed("bbmaj7");
 
         assert_eq!(library.rows().len(), 1);
@@ -998,8 +875,7 @@ mod tests {
 
     #[test]
     fn an_exact_parse_is_not_ranked_against_an_approximate_one() {
-        // `cm7` is a subsequence of `Cmaj7`, so a matcher scoring by adjacency would offer
-        // the major seventh here. Parsing settles it outright and nothing else is listed.
+        // `cm7` is a subsequence of `Cmaj7`; parsing settles it and nothing else is listed.
         let library = typed("cm7");
 
         assert_eq!(library.rows().len(), 1);
@@ -1011,8 +887,6 @@ mod tests {
 
     #[test]
     fn a_named_quality_keeps_the_chords_that_extend_it() {
-        // `Cmaj` is a stop on the way to `Cmaj7`, and used to be the end of the road: an
-        // exact parse listed that one chord and hid every longer name it starts.
         let names = |query: &str| {
             typed(query)
                 .rows()
@@ -1033,7 +907,7 @@ mod tests {
 
     #[test]
     fn a_quality_alone_extends_on_every_root() {
-        // The same widening one level up: `dim` alone must not hide the twelve `dim7`s.
+        // `dim` alone must not hide the twelve `dim7`s.
         let rows = typed("dim").rows();
 
         assert_eq!(rows.len(), 24);
@@ -1062,9 +936,7 @@ mod tests {
 
     #[test]
     fn a_row_is_named_under_the_quality_it_carries() {
-        // The scale trainer's rule, carried across: a pitch class is not spelled one fixed
-        // way down a group, it is spelled as each chord is written. This is also why a
-        // group header has to show both names — see `root_header`.
+        // A pitch class is spelled as each chord is written, not one fixed way down a group.
         let names: Vec<String> = typed("a#")
             .rows()
             .iter()
@@ -1077,8 +949,7 @@ mod tests {
 
     #[test]
     fn a_black_key_group_needs_both_of_its_names() {
-        // What `root_header` renders the pair for. On the five black keys the qualities
-        // genuinely disagree, so one name would be wrong about part of its own group.
+        // On the five black keys the qualities disagree, so `root_header` shows both names.
         for &root in &PitchClass::ALL {
             let spellings: Vec<String> = ChordQuality::ALL
                 .iter()
@@ -1158,8 +1029,7 @@ mod tests {
 
     #[test]
     fn enter_finishes_the_search_and_hands_on_the_keyboard() {
-        // The difference from escape: escape backs out, enter is done. Only enter says the
-        // ring should move, and `App` is what moves it.
+        // Only enter says the ring should move.
         let mut library = typed("cmaj7");
         library.focus_search();
 
@@ -1234,8 +1104,7 @@ mod tests {
 
     #[test]
     fn every_chord_in_the_roster_can_be_played() {
-        // Not required by the spec — a chord with no shape is specified and handled — but
-        // true of the fifteen that ship, and worth knowing if it stops being true.
+        // Not required, but true of the fifteen that ship.
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
                 let chord = Chord::new(root, kind);

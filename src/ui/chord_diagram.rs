@@ -1,37 +1,17 @@
 //! One voicing, drawn as a chord diagram.
-//!
-//! A sibling of [`super::fretboard`] rather than a mode on it. The neck there draws twelve
-//! frets and has no way to say a string is *not* sounded — a mute is the absence of a
-//! marker, annotated above the nut, not a marker at a position. Bolting a window offset, a
-//! barre and a mute onto that module would make its round-trip invariant conditional on a
-//! mode flag, and that invariant is the one thing standing between the app and a click
-//! landing a fret away from the dot it visibly hit.
-//!
-//! So the invariant travels here instead, and the same `Layout` drives drawing and
-//! hit-testing, held together by the same round-trip test. This widget's geometry is the
-//! harder of the two, which is a reason to want that test more rather than less.
+//! A sibling of `super::fretboard`, with its own `Layout` shared by drawing and hit-testing.
 
 use iced::alignment;
 use iced::widget::canvas::{self, Canvas, Fill, Frame, Path, Stroke, Text};
 use iced::{Color, Element, Length, Pixels, Point, Rectangle, Renderer, Size, Theme};
 
-/// The fewest frets a diagram shows, however small the shape.
-///
-/// Four, so that every diagram is the same height whatever it holds — a strip of them
-/// reads as a row of chords rather than as a row of different-sized boxes.
+/// The fewest frets a diagram shows, so every diagram in a strip is the same height.
 const MIN_WINDOW: usize = 4;
 
 /// How far up the neck a shape may sit before the diagram stops showing the nut.
-///
-/// A shape stopping at the second fret is still an open-position chord to look at, so its
-/// diagram keeps the nut. Past that the nut is dead space and the window follows the hand.
 const NUT_REACH: u8 = 2;
 
-/// Which frets a diagram shows.
-///
-/// Derived from the voicing every time rather than stored beside it. Stored, the two could
-/// disagree, and a diagram drawn against a stale window renders its dots at the wrong frets
-/// while remaining perfectly legible — the worst failure a reference can have.
+/// Which frets a diagram shows. Derived from the voicing so it cannot go stale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Window {
     /// The lowest fret drawn. One means the window begins at the nut.
@@ -65,7 +45,7 @@ pub fn window_for(strings: &[Option<u8>; 6]) -> Window {
     let has_open = strings.iter().flatten().any(|&fret| fret == 0);
 
     let Some(&lowest) = stopped.iter().min() else {
-        // Nothing stopped at all — an all-open chord. The nut, and the default width.
+        // An all-open chord.
         return Window {
             first_fret: 1,
             fret_count: MIN_WINDOW,
@@ -86,11 +66,7 @@ pub fn window_for(strings: &[Option<u8>; 6]) -> Window {
     }
 }
 
-/// Where everything in the diagram sits, computed from the canvas bounds and the window.
-///
-/// Both drawing and hit-testing read this, for the reason `fretboard::Layout` gives: two
-/// copies of the same arithmetic drift the moment either changes, and the symptom is a
-/// press resolving one fret away from the dot it landed on.
+/// Where everything in the diagram sits; drawing and hit-testing both read this.
 struct Layout {
     string_count: usize,
     window: Window,
@@ -108,12 +84,9 @@ impl Layout {
     const PAD_BOTTOM: f32 = 16.0;
     const MARK_GAP: f32 = 3.0;
     const STRING_COUNT: usize = 6;
-    /// Room on the right for the `5fr` label, taken out of the width before the strings
-    /// are spaced so the neck stays centred on what is left.
+    /// Room on the right for the `5fr` label, taken out before the strings are spaced.
     const LABEL_GUTTER: f32 = 28.0;
-    /// A dot has to hold a two-character note name — `Bb`, `F#` — at a size worth reading.
-    /// These are what the strip's fixed width is chosen against; below the floor the labels
-    /// stop being legible, which is the whole point of the screen.
+    /// The smallest dot that still holds a legible two-character name like `Bb`.
     const MIN_DOT: f32 = 7.5;
     const MAX_DOT: f32 = 13.0;
 
@@ -121,13 +94,10 @@ impl Layout {
         let available_w = size.width - 2.0 * Self::PAD_X - Self::LABEL_GUTTER;
         let string_spacing = available_w / (Self::STRING_COUNT - 1) as f32;
 
-        // The largest radius the diagram could use, not the one dots are drawn with:
-        // `pad_top` has to reserve the mark row before `fret_spacing` is known, so it
-        // cannot depend on the final radius. Folding these together moves the whole neck.
+        // The largest radius, not the drawn one: `pad_top` reserves the mark row before
+        // `fret_spacing` is known, so it cannot depend on the final radius.
         let max_dot_radius = (string_spacing * 0.34).clamp(Self::MIN_DOT, Self::MAX_DOT);
-        // Two bands above the nut, not one: the marks, and a line above them for the open
-        // strings' labels. An open string has no filled disc to write on, so its name goes
-        // over the ring — and with only the mark row reserved that lands off the canvas.
+        // Two bands above the nut: the marks, and a line for open strings' labels over the ring.
         let pad_top = max_dot_radius * 2.0 + Self::MARK_GAP + max_dot_radius * 1.4;
 
         let usable_h = size.height - pad_top - Self::PAD_BOTTOM;
@@ -174,7 +144,7 @@ impl Layout {
     }
 
     /// Where the mark for `(string, fret)` is centred. Fret 0 is the mark row above the
-    /// nut, which is where an open string and a muted one are both annotated.
+    /// nut, where open and muted strings are both annotated.
     fn marker_center(&self, string: usize, fret: u8) -> Point {
         let y = if fret == 0 {
             self.pad_top - self.dot_radius - self.mark_gap
@@ -186,12 +156,7 @@ impl Layout {
         Point::new(self.string_x(string), y)
     }
 
-    /// The inverse of `marker_center`.
-    ///
-    /// `None` off the diagram rather than a clamp onto the nearest edge — the reason
-    /// `fretboard::Layout::position_at` gives, and it matters more here: this widget is
-    /// built to be pressable by a later editing pass, and a stray press resolved onto a
-    /// position would silently rewrite a chord.
+    /// The inverse of `marker_center`. `None` off the diagram rather than clamping to an edge.
     fn position_at(&self, point: Point) -> Option<(usize, u8)> {
         let slack = self.dot_radius;
         if point.x < self.left_x() - slack || point.x > self.right_x() + slack {
@@ -202,8 +167,7 @@ impl Layout {
         let string = nearest.clamp(0, self.string_count as isize - 1) as usize;
 
         let fret = if point.y < self.top_y() {
-            // The mark row. It stands for the open string only when the nut is on show;
-            // a window starting up the neck has no fret 0 to resolve to.
+            // The mark row means the open string only when the nut is on show.
             if !self.window.shows_nut() {
                 return None;
             }
@@ -223,26 +187,17 @@ impl Layout {
     }
 }
 
-/// What one string of the diagram shows.
-///
-/// One struct per string rather than parallel arrays, so a fret and the label describing it
-/// cannot end up on different strings. `label` is text already decided, as `NoteMarker`'s
-/// is: this module draws marks and glyphs and knows nothing about music.
+/// What one string of the diagram shows. `label` is already-decided text.
 #[derive(Debug, Clone)]
 pub struct StringMark {
     /// The fret stopped, `Some(0)` for an open string, `None` for one that is not sounded.
     pub fret: Option<u8>,
     pub label: String,
-    /// Whether this string sounds the chord's root, which is drawn distinctly under every
-    /// notation setting.
+    /// Whether this string sounds the chord's root, drawn distinctly under every notation.
     pub is_root: bool,
 }
 
 /// A diagram, and optionally a way to press it.
-///
-/// Generic over `Message` only because `on_press` maps a position onto one — the
-/// arrangement `Fretboard` uses, and a plain `fn` pointer for the same reason: every
-/// call site passes a bare enum constructor, which captures nothing.
 pub struct ChordDiagram<Message> {
     pub strings: [StringMark; 6],
     /// The fret a barre spans, drawn as one bar rather than as a dot per string.
@@ -272,8 +227,7 @@ const INK: Color = Color::WHITE;
 const GROUND: Color = Color::BLACK;
 const FRET_LINE: Color = Color::from_rgb8(0x3a, 0x3a, 0x3a);
 const STRING_LINE: Color = Color::from_rgb8(0x77, 0x77, 0x77);
-/// The root's dot. Filled white reads loudest, and every other dot is the muted grey below
-/// it, so the root is told apart before any label is read.
+/// The root's dot, set apart from the grey every other dot is drawn in.
 const ROOT_DOT: Color = Color::from_rgb8(0xff, 0xb3, 0x4d);
 const TONE_DOT: Color = Color::from_rgb8(0xd0, 0xd0, 0xd0);
 
@@ -376,8 +330,7 @@ impl<Message> canvas::Program<Message> for ChordDiagram<Message> {
                     }
                     continue;
                 }
-                // Open: a ring above the nut, never a filled dot — a filled mark up there
-                // would read as a note being stopped at the nut.
+                // Open: a ring, since a filled mark above the nut would read as a stopped note.
                 Some(0) => {
                     frame.stroke(
                         &Path::circle(center, layout.dot_radius * 0.72),
@@ -396,8 +349,7 @@ impl<Message> canvas::Program<Message> for ChordDiagram<Message> {
                 continue;
             }
 
-            // On the dot where there is one, and beside the ring where the string is open:
-            // an open string's label has no filled disc to sit on.
+            // On the dot, or beside the ring for an open string, which has no disc to sit on.
             let (position, color) = match mark.fret {
                 Some(0) => (
                     Point::new(center.x, center.y - layout.dot_radius * 1.4),
@@ -406,10 +358,7 @@ impl<Message> canvas::Program<Message> for ChordDiagram<Message> {
                 _ => (center, GROUND),
             };
 
-            // A three-character label — `Bbb` on a diminished seventh, `bb7` as its degree —
-            // does not fit a disc sized for `Bb`. Shrunk rather than clipped or the disc
-            // grown, because the discs have to stay one size across a strip to read as a
-            // row of chords.
+            // Labels like `Bbb` shrink so the discs stay one size across a strip.
             let size = match mark.label.chars().count() {
                 0..=2 => layout.dot_radius * 1.15,
                 _ => layout.dot_radius * 0.8,
@@ -429,11 +378,8 @@ impl<Message> canvas::Program<Message> for ChordDiagram<Message> {
         vec![frame.into_geometry()]
     }
 
-    /// Turns a press into the caller's message.
-    ///
-    /// `&self`, so nothing is cached between events and the layout is rebuilt from
-    /// `bounds` — which is what guarantees hit-testing uses the geometry the last `draw`
-    /// used.
+    /// Turns a press into the caller's message. The layout is rebuilt from `bounds` each
+    /// time, so hit-testing uses the geometry the last `draw` used.
     fn update(
         &self,
         _state: &mut (),
@@ -475,16 +421,8 @@ impl<Message> canvas::Program<Message> for ChordDiagram<Message> {
     }
 }
 
-/// The two sizes a diagram is drawn at.
-///
-/// The gap between them is the point: the picked shape is the one being read, and the rest
-/// are a row of options to pick from. A dot's radius follows the width, so `FEATURE`'s
-/// labels come out around half again as large as `STRIP`'s rather than merely further apart
-/// — which is what makes the picked one legible across the room and the others scannable.
-/// The heights are chosen against the widths, not picked separately: a fret band much
-/// taller than a string is wide stops looking like a fretboard and starts looking like a
-/// ladder. `fretboard::Layout` targets the same proportion with `TARGET_FRET_CELL_RATIO`;
-/// `a_cell_is_about_as_tall_as_it_is_wide` is what holds these two to it.
+/// The two sizes a diagram is drawn at: the picked shape large, the strip of options small.
+/// Heights are chosen so a fret band is about as tall as a string is wide.
 pub const STRIP: Size = Size::new(180.0, 188.0);
 pub const FEATURE: Size = Size::new(264.0, 292.0);
 
@@ -502,8 +440,6 @@ pub fn chord_diagram<Message: 'static>(
 mod tests {
     use super::*;
 
-    /// Sizes a diagram is plausibly drawn at. The widget is fixed, but a strip of them may
-    /// be laid out tighter on a narrow window.
     /// Both sizes the strip draws, plus two the layout could squeeze them to.
     const SIZES: [Size; 4] = [
         STRIP,
@@ -516,9 +452,7 @@ mod tests {
         values
     }
 
-    /// The property that makes hit-testing trustworthy, and the reason `Layout` exists:
-    /// the centre of every mark the window contains resolves back to it. Edited apart,
-    /// drawing and hit-testing fail this.
+    /// The centre of every mark the window contains resolves back to it.
     #[test]
     fn every_marker_center_round_trips() {
         let windows = [
@@ -684,7 +618,7 @@ mod tests {
 
     #[test]
     fn the_window_follows_the_voicing() {
-        // The whole reason it is derived rather than stored.
+        // The reason it is derived rather than stored.
         let low = window_for(&frets([
             Some(0),
             Some(2),
@@ -723,9 +657,7 @@ mod tests {
 
     #[test]
     fn a_cell_is_about_as_tall_as_it_is_wide() {
-        // Not a rule about pixels but about proportion: a diagram whose bands stretch far
-        // past its string spacing reads as a ladder. Sizing the two constants by eye is
-        // what this catches when one of them is later nudged.
+        // Bands stretched far past the string spacing read as a ladder.
         let window = Window {
             first_fret: 1,
             fret_count: 4,
@@ -744,8 +676,7 @@ mod tests {
 
     #[test]
     fn the_featured_size_draws_larger_dots_than_the_strip() {
-        // What makes a picked shape read as picked, and the reason both sizes are named
-        // constants: a label scales with the dot, so this is the legibility difference.
+        // A label scales with the dot, so this is the legibility difference.
         let window = Window {
             first_fret: 1,
             fret_count: 4,
@@ -759,8 +690,7 @@ mod tests {
 
     #[test]
     fn the_widget_builds() {
-        // The counterpart of `every_screen_builds_its_view`: nothing here renders, but the
-        // canvas has to assemble into an `Element` before the strip can hold one.
+        // Nothing renders, but the canvas has to assemble into an `Element`.
         let diagram: ChordDiagram<()> = ChordDiagram {
             strings: std::array::from_fn(|index| StringMark {
                 fret: [None, Some(3), Some(2), Some(0), Some(1), Some(0)][index],

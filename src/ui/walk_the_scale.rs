@@ -1,18 +1,6 @@
 //! Walk the Scale: the drill's state machine and the screen that draws it.
 //!
-//! Both halves live here so the state can keep its fields to itself — they are read all over
-//! the views below and nowhere else, and `App` drives the drill through the handful of methods
-//! marked `pub(super)`.
-//!
-//! A screen rather than a mode of the Scale Trainer, which is what this was first built as.
-//! The two want different things from one keyboard: the trainer is a reference you read, and
-//! this asks you to stop reading. `play_the_interval.rs` made the same split from the Interval
-//! Trainer, for the same reason and one release earlier.
-//!
-//! It owns the scale it drills rather than reading `App`'s. The Scale Trainer's scale is a
-//! different thing being looked at for a different reason, and rerolling here would otherwise
-//! move a screen the learner is not on — the CAGED window keeps its own root on exactly that
-//! argument.
+//! It owns the scale it drills, so rerolling here never moves the Scale Trainer.
 
 use std::time::{Duration, Instant};
 
@@ -37,77 +25,45 @@ use crate::music::scales::{Scale, ScaleKind};
 use crate::rng::Rng;
 
 /// How the learner answers the drill.
-///
-/// `neck_hidden` sits *inside* `Playing` rather than beside it because the two facts are not
-/// independent: the neck is the surface a press is given on, so "pressing, with the neck
-/// hidden" is a state the drill has no answer for. Putting the flag in the variant makes
-/// that state unwriteable rather than merely unwritten — swapping to `Pressing` drops the
-/// flag with the variant that held it, which is also the whole implementation of "swapping
-/// back shows the neck again".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Answering {
     Pressing,
     Playing { neck_hidden: bool },
 }
 
-/// What the drill will do with the next confirmed reading.
-///
-/// A copy of `play_the_interval::Gate`, deliberately. The two drills agree today, and the
-/// Changes Trainer — which walks a progression, where the chord under an element moves as
-/// well as the degree — is the screen that will say whether there is one abstraction here or
-/// two. `shapes.rs` and `listener.rs` both moved out when a second screen actually wanted
-/// them rather than when a first author guessed; this copy waits for the same signal, and
-/// names its twin so the eventual extraction has both sites to read.
+/// What the drill does with the next confirmed reading.
+/// Duplicates `play_the_interval::Gate` on purpose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Gate {
     Deaf,
     Listening,
 }
 
-/// One run of the drill.
-///
-/// Everything here belongs to a single run, which is why it is a struct behind one `Mode`
-/// variant rather than a handful of fields on `WalkTheScale` that would survive into display
-/// mode carrying the last run's values.
+/// One run of the drill, so nothing from it survives into the ended state.
 struct Run {
-    /// How far through the sequence. The *whole* of what is stored about it: the degrees
-    /// themselves are `scale.kind().intervals()`, asked for at read time. A stored sequence
-    /// would be a field free to disagree with the scale beside it, which is the argument the
-    /// CAGED window's derived cycle already makes.
+    /// How far through the sequence. The degrees are read from the scale, never stored.
     at: usize,
     /// Sequences completed without a wrong answer.
     streak: u32,
     /// Sequences completed at all, which is what a timed run reports.
     completed: u32,
-    /// Whether this sequence has been answered wrongly yet. A sequence is clean until it is
-    /// not, and only a clean one raises the streak.
+    /// Only a sequence with no wrong answer raises the streak.
     clean: bool,
-    /// The degrees found so far in this sequence, marked as the walk goes up.
     answered: Vec<PitchClass>,
-    /// Every wrong pitch class given to the *current* element, cleared when it advances — a
-    /// `Vec` for the reason the other drills' is one: replacing the last wrong answer would
-    /// un-mark the earlier ones.
+    /// Every wrong pitch class given to the current element, cleared when it advances.
     wrong: Vec<PitchClass>,
-    /// The pitch class that completed a sequence, held while it is lit. `Some` is the paused
-    /// state, and it marks the end of a *sequence* rather than of an element — a flash
-    /// between every degree would cost seven seconds to walk a seven-note scale.
+    /// The pitch class that completed a sequence, held while it is lit. Flashes per
+    /// sequence, not per element.
     flashing: Option<PitchClass>,
     gate: Gate,
-    /// When the run began. Stored rather than a countdown: a `remaining` decremented on a
-    /// tick drifts, and lies outright if a tick is missed while the window is not drawn.
+    /// Stored rather than a countdown, which would drift if a tick were missed.
     started: Instant,
-    /// `None` for an untimed run, so "no duration chosen" and "runs until you leave" are one
-    /// fact rather than two.
+    /// `None` for an untimed run.
     duration: Option<Duration>,
-    /// Where the keyboard is pointing on the neck, for answering without a mouse.
     cursor: Position,
 }
 
-/// What the screen is doing.
-///
-/// Two states rather than three: the drill is the whole screen now, so there is no display to
-/// fall back to — entering it starts a run. What a finished run completed is a state of its
-/// own rather than the absence of one, which is why this is not an `Option<Run>`.
+/// What the screen is doing. Entering starts a run, so there is no display state.
 enum Mode {
     Running(Run),
     Ended {
@@ -118,41 +74,23 @@ enum Mode {
     },
 }
 
-/// The scale drill.
-///
-/// No iced types, so the sequence, the gate and the streak rules are testable without a
-/// widget tree — and, because `Listener::apply` is the seam, without a capture device.
+/// No iced types, so the sequence and gate are testable without a widget tree or a device.
 pub(super) struct WalkTheScale {
-    /// The scale being drilled, owned here rather than read off `App`.
-    ///
-    /// The Scale Trainer's scale is a different thing being looked at for a different reason,
-    /// and a drill that moved it would mean rerolling here changed a screen the learner was
-    /// not on. The CAGED window keeps its own root for the same reason.
     scale: Scale,
-    /// A preference rather than part of a run: how a learner answers survives leaving the
-    /// drill, which is why the `Listener` below is *not* inside this.
+    /// A preference that survives leaving the drill, unlike the `Listener`.
     answering: Answering,
     best_streak: u32,
     /// Where a drag of the root display was last measured from, in window coordinates.
-    ///
-    /// `Option<f32>` rather than a `bool` beside an `f32`: the anchor exists exactly when a
-    /// drag does, so "dragging, from nowhere" is a state that cannot be written down.
     drag: Option<f32>,
-    /// What the wheel has scrolled that has not yet bought a semitone.
-    ///
-    /// Kept between gestures rather than reset: a nudge one way and a nudge back should leave
-    /// the root where it was, and resetting would make that depend on where one gesture ended
-    /// and the next began.
+    /// Wheel travel that has not yet made a semitone. Kept between gestures so a nudge
+    /// and a nudge back cancel.
     scroll: f32,
-    /// The capture device, held only while a run is listening. Opened and released
-    /// explicitly, the way `leaving_for` already manages the two screens that listen; a
-    /// device living inside `Answering::Playing` would still be open in display mode.
+    /// The capture device, held only while a run is listening.
     listener: Option<Listener>,
     mode: Mode,
 }
 
-/// The durations `t` cycles through. `None` first, so the key's first press from the default
-/// is a step *into* timing rather than out of it.
+/// The durations `t` cycles through. `None` first, so the first press starts timing.
 const DURATIONS: [Option<Duration>; 4] = [
     None,
     Some(Duration::from_secs(3 * 60)),
@@ -177,11 +115,8 @@ impl Run {
         }
     }
 
-    /// The degree the drill is asking for, or `None` past the end of the sequence.
-    ///
-    /// `get` rather than an index: changing the scale kind mid-sequence can leave `at`
-    /// pointing past a shorter kind's degrees, and the honest answer to "which degree is
-    /// that" is that there is not one.
+    /// The degree the drill is asking for, or `None` past the end of the sequence. `get`
+    /// because a kind change can leave `at` past a shorter kind's degrees.
     fn degree(&self, scale: Scale) -> Option<Interval> {
         scale.kind().intervals().get(self.at).copied()
     }
@@ -214,10 +149,7 @@ impl WalkTheScale {
     pub(super) fn new() -> WalkTheScale {
         WalkTheScale {
             scale: Scale::new(PitchClass::new(9), ScaleKind::MinorPentatonic),
-            // Playing rather than pressing: the drill is about finding a degree on the
-            // instrument, and the neck is the surface you fall back to. The device is not
-            // claimed here — `enter` is what opens it, so an app that never reaches this
-            // screen never listens.
+            // the device is not claimed here; `enter` opens it
             answering: Answering::Playing { neck_hidden: false },
             best_streak: 0,
             drag: None,
@@ -231,10 +163,7 @@ impl WalkTheScale {
         self.scale
     }
 
-    /// Changing what is being drilled starts the sequence again: a position part-way through
-    /// one kind's degrees means nothing in another's, and `at` would be left pointing past
-    /// the end of a shorter kind — which `Run::degree` answers with `None` rather than a
-    /// panic, but which no learner should ever see.
+    /// Changing the root starts the sequence again.
     pub(super) fn select_root(&mut self, root: PitchClass) {
         self.scale = Scale::new(root, self.scale.kind());
         self.restart_sequence();
@@ -257,9 +186,8 @@ impl WalkTheScale {
         self.drag = Some(x);
     }
 
-    /// A drag that has reached `x`. Whole steps of travel are consumed off the anchor rather
-    /// than measured from the press point, so the drill never has to remember the root it
-    /// started on — and the pointer has to return to where it was to undo a step.
+    /// A drag that has reached `x`. Whole steps are consumed off the anchor, so the pointer
+    /// must return to where it was to undo a step.
     pub(super) fn drag_root(&mut self, x: f32) {
         let Some(anchor) = self.drag else {
             return;
@@ -277,8 +205,7 @@ impl WalkTheScale {
         self.drag = None;
     }
 
-    /// The wheel, in steps. Ignored while a drag is going: one gesture owns the root at a
-    /// time, which is this `if` rather than a rule about how two accumulators compose.
+    /// The wheel, in steps. Ignored while a drag is going.
     pub(super) fn scroll_root(&mut self, steps: f32) {
         if self.drag.is_some() {
             return;
@@ -298,7 +225,7 @@ impl WalkTheScale {
         self.restart_sequence();
     }
 
-    /// `r`: replace what is on screen, which here is the scale being drilled.
+    /// `r`: reroll the scale being drilled.
     pub(super) fn reroll(&mut self, rng: &mut Rng) {
         let current = (self.scale.root(), self.scale.kind());
         let (root, kind) = rng.draw_other_than(current, |rng| {
@@ -378,8 +305,7 @@ impl WalkTheScale {
             listener.listen();
         }
 
-        // Armed off the device rather than set flat, so a run begun in silence judges the
-        // next note and one begun over a ringing string waits for it to stop.
+        // armed off the device so a run begun over a ringing string waits for it to stop
         let gate = match self.listener.as_ref().and_then(Listener::reading) {
             Some(_) => Gate::Deaf,
             None => Gate::Listening,
@@ -388,8 +314,8 @@ impl WalkTheScale {
         self.mode = Mode::Running(Run::new(duration, gate));
     }
 
-    /// Leaving the screen: the run ends and the device goes down with it, so a duration
-    /// cannot go on being spent behind a screen nobody is looking at.
+    /// Leaving the screen: the run ends and the device is released, so a duration is not
+    /// spent off screen.
     pub(super) fn leave(&mut self) {
         self.mode = Mode::Ended {
             completed: 0,
@@ -406,16 +332,13 @@ impl WalkTheScale {
         self.listener = None;
     }
 
-    /// Opening the screen. The scale is what it was left on — a learner comes back to the
-    /// scale they are working on, which is the CAGED window's rule rather than the Scale
-    /// Trainer's — while the run itself is fresh and the best streak persists.
+    /// Opening the screen: the scale is kept, the run is fresh, the best streak persists.
     pub(super) fn enter(&mut self) {
         self.release();
         self.begin(None);
     }
 
-    /// The selection changed under a running sequence, so the sequence starts again — a
-    /// position part-way through one kind's degrees means nothing in another's.
+    /// The selection changed under a running sequence, so the sequence starts again.
     pub(super) fn restart_sequence(&mut self) {
         if let Mode::Running(run) = &mut self.mode {
             run.restart();
@@ -437,9 +360,7 @@ impl WalkTheScale {
         }
     }
 
-    /// Hiding the neck is a playing-mode option: in pressing mode the neck is the surface
-    /// the answer is given on, so this is inert there rather than leaving a drill with
-    /// nothing to answer with.
+    /// Hides the neck. Inert in pressing mode, where the neck is the answer surface.
     pub(super) fn toggle_neck(&mut self) {
         if let Answering::Playing { neck_hidden } = &mut self.answering {
             *neck_hidden = !*neck_hidden;
@@ -457,20 +378,15 @@ impl WalkTheScale {
         }
     }
 
-    /// A position pressed on the neck. Inert in playing mode, where the answer is given on
-    /// the instrument and a press would be a second way to answer the same prompt.
+    /// A position pressed on the neck. Inert in playing mode.
     pub(super) fn press(&mut self, pitch_class: PitchClass) {
         if self.answering == Answering::Pressing {
             self.judge(pitch_class);
         }
     }
 
-    /// A released reading, folded in and judged.
-    ///
-    /// The asymmetry is `play_the_interval::apply`'s: a reading that is *not* a pitch
-    /// re-arms and is otherwise ignored, so silence and a strum cost nothing — which is what
-    /// makes a fumble on the way to a degree free, and what lets two consecutive degrees be
-    /// judged without the drill being told where one ends.
+    /// A released reading, folded in and judged. A non-pitch reading only re-arms the gate,
+    /// so silence and a fumble cost nothing.
     pub(super) fn apply(&mut self, heard: Heard) {
         if !matches!(self.answering, Answering::Playing { .. }) {
             return;
@@ -494,23 +410,17 @@ impl WalkTheScale {
             return;
         };
 
-        // Judged once, whatever happens next: a held string confirms the same reading on
-        // every poll, and this is what makes one unbroken note one answer.
+        // a held string confirms the same reading every poll; this makes one note one answer
         if let Mode::Running(run) = &mut self.mode {
             run.gate = Gate::Deaf;
         }
         self.judge(pitch.pitch_class());
     }
 
-    /// Scores a pitch class against the element being asked for.
+    /// Scores a pitch class against the element being asked for. The octave is ignored, so a
+    /// walked scale need not ascend.
     ///
-    /// The octave is thrown away, which is the rule every other drill in the app applies —
-    /// so a degree is correct wherever on the neck it lies. The cost is that a walked scale
-    /// need not literally ascend; requiring that would be drilling where the octave is, on
-    /// top of the degree it means to teach.
-    ///
-    /// Not `drill::Score`: a streak here counts clean sequences rather than answers, and the
-    /// best outlives each run.
+    /// Not `drill::Score`: the streak counts clean sequences and the best outlives each run.
     fn judge(&mut self, played: PitchClass) {
         let scale = self.scale;
         let streak = {
@@ -529,8 +439,7 @@ impl WalkTheScale {
                 run.wrong.clear();
                 run.at += 1;
 
-                // The sequence is over, so this is what scores. Elements advance on the tick
-                // they are judged; only the completion holds the screen.
+                // only the completion holds the screen; elements advance as they are judged
                 if run.at >= scale.kind().intervals().len() {
                     run.completed += 1;
                     if run.clean {
@@ -552,16 +461,11 @@ impl WalkTheScale {
         self.best_streak = self.best_streak.max(streak);
     }
 
-    /// Ends the flash and begins the next sequence.
-    ///
-    /// A no-op when nothing is being marked, so a tick that outlived its flash — one that
-    /// crossed a selection change, or landed after the screen was left — cannot retire a
-    /// sequence the learner is still reading.
+    /// Ends the flash and begins the next sequence. A no-op outside the flash, so a stale
+    /// tick cannot retire a sequence the learner is still reading.
     pub(super) fn advance(&mut self) {
-        // Read before the run is borrowed, and off the device rather than set flat: the note
-        // that completed the sequence is still ringing as the next one is drawn, and a
-        // sequence that took what was already sounding would have its first element answered
-        // by the last one's answer.
+        // read off the device: the completing note is still ringing and must not answer the
+        // next sequence's first element
         let gate = match self.listener.as_ref().and_then(Listener::reading) {
             Some(_) => Gate::Deaf,
             None => Gate::Listening,
@@ -596,7 +500,7 @@ impl WalkTheScale {
         self.run().map(|run| run.cursor)
     }
 
-    /// The neck claims the motion keys while it is focused, as the two trainers' do.
+    /// The neck claims the motion keys while it is focused.
     pub(super) fn move_cursor(&mut self, direction: Direction) {
         let Mode::Running(run) = &mut self.mode else {
             return;
@@ -604,8 +508,7 @@ impl WalkTheScale {
         run.cursor = run.cursor.step(direction);
     }
 
-    /// Enter on the neck answers with wherever the cursor is sitting — the same thing a
-    /// click on that position would send.
+    /// Enter on the neck answers with the position under the cursor.
     pub(super) fn answer_at_cursor(&mut self) {
         let Some(Position { string, fret }) = self.cursor() else {
             return;
@@ -615,7 +518,7 @@ impl WalkTheScale {
         }
     }
 
-    /// Moves a run's start back, so a duration can be spent in a test without spending it.
+    /// Moves a run's start back, so a duration can be spent in a test without waiting.
     #[cfg(test)]
     fn rewind(&mut self, by: Duration) {
         if let Mode::Running(run) = &mut self.mode {
@@ -623,8 +526,7 @@ impl WalkTheScale {
         }
     }
 
-    /// Cycles the duration. Restarting the run is deliberate: a duration applied part-way
-    /// through would be counted from a start that belonged to the old one.
+    /// Cycles the duration, restarting the run so the new duration counts from its start.
     pub(super) fn cycle_duration(&mut self) {
         let current = self.duration();
         let next = DURATIONS
@@ -638,16 +540,15 @@ impl WalkTheScale {
     }
 }
 
-/// The screen: the neck on the left, what is being asked and what it is set to beneath it,
-/// and the two selector grids on the right.
+/// The screen: the neck on the left, the root and sequence in the middle, the selector and
+/// controls on the right.
 pub(super) fn ui_walk_the_scale(
     drill: &WalkTheScale,
     focused: FocusTarget,
 ) -> Element<'static, Message> {
     use iced::widget::{Space, column, container, row, stack, text};
 
-    // Modal while it is up, as it is on the two other screens that listen: what the screen
-    // was showing is not drawn behind it.
+    // modal while it is up: nothing is drawn behind it
     if let Some(listener) = drill.listener()
         && listener.is_picking()
     {
@@ -670,9 +571,6 @@ pub(super) fn ui_walk_the_scale(
         on_press: Some(Message::ChooseScalePosition),
     };
 
-    // The neck has a column to itself. It is seventy-eight positions in six rows and it is
-    // what the learner is reading, so anything sharing the column takes width the strings
-    // need — which is the whole reason this screen is laid out in three.
     let neck: Element<'static, Message> = if drill.neck_hidden() {
         container(
             text("the neck is hidden — find the degree by ear")
@@ -685,25 +583,15 @@ pub(super) fn ui_walk_the_scale(
         .center_y(Length::Fill)
         .into()
     } else {
-        // Centred in its column. The canvas caps its own width off the height it is given —
-        // a twelve-fret neck has an aspect ratio and `Layout` keeps it — so a column wider
-        // than the neck leaves a gap, and the gap belongs on both sides rather than one.
+        // the canvas caps its width to the neck's aspect ratio, so centre it in the column
         container(fretboard(fb))
             .width(Length::Fixed(NECK_COLUMN_WIDTH))
             .height(Length::Fill)
             .into()
     };
 
-    // The middle column, on the ground rather than in a card: the root the scale is built on,
-    // set large, and the sequence along the bottom. No card, because a card is a boundary and
-    // there is nothing here to bound — this is the one thing the screen is saying.
-    // The root and the sequence are one mark, not two: the degrees sit at the root's feet
-    // rather than at the bottom of the column, and the pair is centred together.
-    // The root is a canvas with the glyph stacked over it. The canvas is the surface the drag
-    // and the wheel land on, and draws the arrows that say so; the glyph stays a widget
-    // because a `Frame` cannot measure text, and an accidental has to be placed beside a
-    // letter it has measured. Both halves centre themselves, so there is no padding to keep
-    // in step — which is the whole reason the row is a fixed height.
+    // a `Frame` cannot measure text, so the glyph is a widget stacked over the canvas that
+    // takes the drag and the wheel
     let root = stack![
         Canvas::new(RootGrip {
             dragging: drill.is_dragging(),
@@ -718,10 +606,7 @@ pub(super) fn ui_walk_the_scale(
     ];
 
     let centre = column![
-        // Two above to three below rather than evenly: the pair sits a tenth of the column's
-        // free height above its middle, where the eye is already reading the neck. The
-        // sequence is the row under the root rather than the bottom of the column, so it
-        // moves with it.
+        // two above to three below puts the pair a little above the column's middle
         Space::new().height(Length::FillPortion(2)),
         container(root)
             .width(Length::Fill)
@@ -751,10 +636,6 @@ pub(super) fn ui_walk_the_scale(
     .padding(24)
     .style(card_container);
 
-    // The kind selector and the run's controls share the right column: the selector says what
-    // is being drilled and the controls say how, and neither belongs beside the neck. The root
-    // is not here — it is the glyph in the middle column, which is the one thing on the screen
-    // that both states the scale and sets it.
     let selector = column![
         kind_card,
         Space::new().height(Length::Fill),
@@ -776,48 +657,24 @@ pub(super) fn ui_walk_the_scale(
         .into()
 }
 
-/// The root, set as large as the column allows. The one thing on the screen that is not a
-/// question: which scale this is.
 const ROOT_DISPLAY_SIZE: f32 = 120.0;
 
-/// The sequence's own size, along the bottom of the middle column.
 const SEQUENCE_SIZE: f32 = 34.0;
 
-/// How wide the neck's column is.
-///
-/// Fixed rather than a share of the window, because the canvas caps its own width off the
-/// height it is given — `Layout` holds a twelve-fret neck's aspect ratio — so a column with a
-/// share of the width would leave the slack beside the neck instead of where it is wanted. The
-/// number is what the neck actually draws at this window's height plus its own padding, so
-/// there is no gap to give away.
+/// Fixed because the canvas caps its own width off its height; this is what the neck draws at
+/// this window's height plus its padding.
 const NECK_COLUMN_WIDTH: f32 = 340.0;
 
-/// How wide the right column is.
-///
-/// Fixed rather than `Fill` because the kind pills carry names as long as `Harmonic Minor`, and
-/// a column that shrank with the window would clip them before the neck ran out of room. The
-/// number is what the widest of `kind_row_spans`'s rows asks for — `Spanish Gypsy`, `Whole Tone`
-/// and `Diminished` together — plus the card's padding. A narrower column drew that row past the
-/// card's edge, which is what `the_widest_kind_row_fits_the_selector_column` now catches.
+/// Fixed so the kind pills are not clipped; fits the widest `kind_row_spans` row plus padding.
 const SELECTOR_COLUMN_WIDTH: f32 = 470.0;
 
 /// How far the pointer travels, or the wheel scrolls, for one semitone.
-///
-/// Wide enough that a hand that slips on the glyph does not walk the scale, narrow enough that
-/// all twelve are one gesture — 480px from a root back to itself. Nothing in the geometry below
-/// reads it, so it is one number to change if it turns out to be wrong.
 const STEP_DISTANCE: f32 = 40.0;
 
-/// How tall the row holding the root is. Fixed, because the canvas under the glyph has to be
-/// the same height whatever the window is: a canvas that filled would put the arrows wherever
-/// the column's slack happened to leave them.
+/// Fixed so the canvas under the glyph, and its arrows, do not move with the window.
 const ROOT_ROW_HEIGHT: f32 = ROOT_DISPLAY_SIZE * 1.3;
 
 /// Where the root's glyph sits, and what counts as a press on it.
-///
-/// The one `Layout` this canvas has, and the one thing it knows: three gestures read the same
-/// box — the press that begins a drag, the wheel, and the pointer shape — so the box is a
-/// struct rather than a condition written out three times.
 struct RootDisplay {
     center: Point,
     half_width: f32,
@@ -825,16 +682,14 @@ struct RootDisplay {
 }
 
 impl RootDisplay {
-    /// Half the width of the widest glyph drawn here: a letter and an accidental at
-    /// `ROOT_DISPLAY_SIZE`. Deliberately not measured per note — a box that changed size with
-    /// the note in it would move under the hand mid-drag.
+    /// Half the width of the widest glyph. Not measured per note, so the box does not change
+    /// size under the hand mid-drag.
     const GLYPH_HALF_WIDTH: f32 = 80.0;
 
     fn new(size: Size) -> RootDisplay {
         RootDisplay {
             center: Point::new(size.width / 2.0, size.height / 2.0),
-            // Never wider than the canvas: a box reaching past the edge would claim presses
-            // on whatever is drawn beside it.
+            // never wider than the canvas, or it would claim presses beside it
             half_width: (size.width / 2.0).min(Self::GLYPH_HALF_WIDTH),
             half_height: size.height.min(ROOT_DISPLAY_SIZE) / 2.0,
         }
@@ -849,20 +704,13 @@ impl RootDisplay {
         }
     }
 
-    /// Whether a point on the canvas is on the glyph — the one question all three gestures ask.
     fn grabs(&self, point: Point) -> bool {
         self.grab_box().contains(point)
     }
 }
 
-/// A scroll, in steps.
-///
-/// `Lines` comes from a notched wheel and `Pixels` from a trackpad or a high-resolution one,
-/// and which arrives is the machine's choice rather than ours. A notch is one semitone,
-/// because that is what a notch means; a pixel is worth what a pixel of drag is worth, which
-/// is why the wheel needs no constant of its own and why a trackpad does not race through the
-/// twelve. Only the vertical axis is read — a notch is up or down, and counting a diagonal
-/// flick's sideways component too would step twice for one gesture.
+/// A scroll, in steps. A notch is one step and pixels are worth what drag pixels are worth.
+/// Only the vertical axis is read, so a diagonal flick does not step twice.
 fn steps_from(delta: ScrollDelta) -> f32 {
     match delta {
         ScrollDelta::Lines { y, .. } => y,
@@ -870,26 +718,17 @@ fn steps_from(delta: ScrollDelta) -> f32 {
     }
 }
 
-/// The root display as a canvas: the surface all three gestures land on, and nothing else.
-///
-/// It draws nothing. The glyph over it is a widget, because a `Frame` cannot measure text and
-/// the letter and its accidental are set in two different fonts — the same reason the Tuner's
-/// note name sits over its dial rather than in it. A canvas rather than a `mouse_area` because
-/// `update` is handed every event wherever the pointer is, which is what lets a drag go on
-/// past the edge of the glyph it began on.
+/// The root display's gesture surface. A canvas rather than a `mouse_area` because `update`
+/// sees every event, so a drag continues past the glyph's edge.
 struct RootGrip {
-    /// Whether a drag is already going, which is what decides that a cursor move anywhere in
-    /// the window is this widget's business. Read off the drill rather than kept here: the
-    /// view is rebuilt from state on every update, so it cannot go stale, and a `State` on the
-    /// widget would put the gesture somewhere `App::update` cannot see.
+    /// Whether a drag is already going. Read off the drill so `App::update` owns the gesture.
     dragging: bool,
 }
 
 impl canvas::Program<Message> for RootGrip {
     type State = ();
 
-    /// Nothing. What the learner sees here is the glyph stacked over this canvas, and the
-    /// pointer turning to a grab is what says the glyph can be taken hold of.
+    /// Nothing; the glyph is the widget stacked over this canvas.
     fn draw(
         &self,
         _state: &(),
@@ -914,16 +753,13 @@ impl canvas::Program<Message> for RootGrip {
             .is_some_and(|point| display.grabs(point));
 
         match event {
-            // The press is the one moment the pointer has to be on the glyph. What it carries
-            // is the window's x rather than the canvas's: `position_in` is `None` the moment
-            // the pointer leaves, which is exactly when the drag still has work to do.
+            // carries the window's x: `position_in` is `None` once the pointer leaves
             iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left))
                 if over =>
             {
                 let x = cursor.position()?.x;
                 Some(canvas::Action::publish(Message::GrabDrillRoot(x)).and_capture())
             }
-            // `position` here is already the window's, which is the frame the anchor is in.
             iced::Event::Mouse(iced::mouse::Event::CursorMoved { position }) if self.dragging => {
                 Some(canvas::Action::publish(Message::DragDrillRoot(position.x)).and_capture())
             }
@@ -932,8 +768,7 @@ impl canvas::Program<Message> for RootGrip {
             {
                 Some(canvas::Action::publish(Message::DropDrillRoot).and_capture())
             }
-            // Captured whether or not it stepped, so a wheel over the glyph never falls
-            // through. Nothing on this screen scrolls today, and this is what keeps that true.
+            // captured whether or not it stepped, so a wheel over the glyph never falls through
             iced::Event::Mouse(iced::mouse::Event::WheelScrolled { delta }) if over => Some(
                 canvas::Action::publish(Message::ScrollDrillRoot(steps_from(*delta))).and_capture(),
             ),
@@ -948,8 +783,6 @@ impl canvas::Program<Message> for RootGrip {
         cursor: iced::mouse::Cursor,
     ) -> iced::mouse::Interaction {
         if self.dragging {
-            // Held for the length of the gesture, wherever the pointer has got to — the same
-            // reason `update` stops asking where it is once a drag has begun.
             iced::mouse::Interaction::Grabbing
         } else if cursor
             .position_in(bounds)
@@ -962,11 +795,8 @@ impl canvas::Program<Message> for RootGrip {
     }
 }
 
-/// The scale's formula, with the drill's place in it marked.
-///
-/// This is the sequence and the progress readout at once: the degrees already found are lit,
-/// the one being asked for is bright, and the rest are muted. A `2 of 5` beside it would be a
-/// second description of the same fact.
+/// The scale's formula, with the drill's place in it marked: found degrees lit, the current
+/// one bright, the rest muted.
 fn sequence_text(drill: &WalkTheScale) -> iced::widget::Row<'static, Message> {
     use iced::widget::{row, text};
 
@@ -1000,15 +830,10 @@ fn sequence_text(drill: &WalkTheScale) -> iced::widget::Row<'static, Message> {
 }
 
 /// The run's controls and its numbers, at the foot of the right column.
-///
-/// Not beside the neck: the neck has a column to itself so the strings stay legible, and not
-/// in the middle, which says one thing and says it large.
 fn drill_panel(drill: &WalkTheScale, focused: FocusTarget) -> Element<'static, Message> {
     use iced::Length;
     use iced::widget::{column, row, text};
 
-    // `r` is the first control here, as the shuffle is on the Scale Trainer and the CAGED
-    // window: replace what is on screen, which here is the scale being drilled.
     let mut controls = row![control_button(
         control_shuffle(),
         Message::RerollDrillScale,
@@ -1018,9 +843,7 @@ fn drill_panel(drill: &WalkTheScale, focused: FocusTarget) -> Element<'static, M
 
     if drill.is_running() {
         controls = controls.push(control_button(
-            // A word, not a glyph: `control_glyph` pins its content to one glyph's width so
-            // that single marks line up, and anything longer is centred on a box narrower
-            // than itself — which is how `press` came to sit off-centre in its button.
+            // `control_glyph` pins its width to one glyph, which would put a word off-centre
             control_label(
                 text(match drill.answering() {
                     Answering::Pressing => "press",
@@ -1051,7 +874,6 @@ fn drill_panel(drill: &WalkTheScale, focused: FocusTarget) -> Element<'static, M
             ));
         }
     } else {
-        // A run that ended on its duration: the one control is starting another.
         controls = controls.push(control_button(
             control_label(text("again"), CONTROL_SIZE),
             Message::StartWalkTheScale,
@@ -1059,8 +881,6 @@ fn drill_panel(drill: &WalkTheScale, focused: FocusTarget) -> Element<'static, M
         ));
     }
 
-    // The run's numbers, under the controls. The degree being asked for is not here — it is
-    // the middle column's job, and two places saying it would be two places to disagree.
     let readout: Element<'static, Message> = match drill.summary() {
         Some((completed, best)) => column![
             text(format!("{completed} sequences")).size(22).color(INK),
@@ -1070,9 +890,7 @@ fn drill_panel(drill: &WalkTheScale, focused: FocusTarget) -> Element<'static, M
         ]
         .spacing(4)
         .into(),
-        // Shrink-wide rather than pushing the time to the far edge, so the column can centre
-        // it; the time is only pushed when there is one, so an untimed run is not off-centre
-        // by a spacing's width.
+        // the time is only pushed when there is one, so an untimed run stays centred
         None => row![
             text(format!(
                 "streak {} · best {}",
@@ -1091,14 +909,11 @@ fn drill_panel(drill: &WalkTheScale, focused: FocusTarget) -> Element<'static, M
         .into(),
     };
 
-    // Centred under the kind card, which is the column's one other occupant.
     let mut panel = column![controls, readout]
         .spacing(12)
         .align_x(iced::Alignment::Center)
         .width(Length::Fill);
 
-    // Only while playing: a screen answered with a press has nothing to say about a device
-    // it is not holding.
     if let Some(listener) = drill.listener() {
         panel = panel.push(text(listening_line(listener)).size(13).color(MUTE));
         panel = panel.push(ui_device_line(listener, focused));
@@ -1107,11 +922,7 @@ fn drill_panel(drill: &WalkTheScale, focused: FocusTarget) -> Element<'static, M
     panel.into()
 }
 
-/// What the screen says it is hearing.
-///
-/// Split out as the words rather than the widget for the reason `play_the_interval`'s is:
-/// the claim worth testing is that the four states read differently, and that none of them
-/// names a note — neither of which a widget tree can be asked about.
+/// What the screen says it is hearing, as words so the tests can read them.
 fn listening_line(listener: &Listener) -> &'static str {
     match listener.state() {
         State::NotStarted => "not listening",
@@ -1124,12 +935,7 @@ fn listening_line(listener: &Listener) -> &'static str {
 
 /// What one pitch class is marked as while a drill is running, or `None` if it is not marked.
 ///
-/// Priority is flash, then wrong, then answered: the note that completed a sequence is also
-/// the last one answered, and the completion is what the screen is saying at that moment.
-///
-/// Only the answered marks carry a label, and it is the *degree* rather than the note — a
-/// note name would let the next element be answered by hunting for a name, which is the
-/// Note Trainer's drill rather than this one.
+/// Priority is flash, then wrong, then answered. Labels are degrees, never note names.
 fn mark_for(run: &Run, scale: Scale, pitch_class: PitchClass) -> Option<(Color, String)> {
     if run.flashing == Some(pitch_class) {
         return Some((SUCCESS, String::new()));
@@ -1148,12 +954,8 @@ fn mark_for(run: &Run, scale: Scale, pitch_class: PitchClass) -> Option<(Color, 
     Some((LINK, label))
 }
 
-/// The neck while a drill is running: what has been answered, what was answered wrongly, and
-/// nothing else.
-///
-/// Deliberately *not* the scale. A neck with every degree marked and labelled carries the
-/// answer to every element of the sequence, so the display's picture is withheld for as long
-/// as the drill is asking for it.
+/// The neck while a drill is running: answered and wrong marks only, never the scale, which
+/// would give the answers away.
 fn drill_markers(drill: &WalkTheScale) -> Vec<NoteMarker> {
     let scale = drill.scale();
     let Some(run) = drill.run() else {
@@ -1191,22 +993,16 @@ mod tests {
     use super::*;
     use crate::audio::detect::Detection;
     use crate::ui::KIND_BUTTON_SIZE;
-    // `as _` brings the trait in for method resolution without binding the name: `update` is
-    // `Program`'s, and a trait's methods are only callable where the trait is in scope.
+    // `as _` brings `Program` into scope for `update` without binding the name
     use iced::keyboard;
     use iced::widget::canvas::Program as _;
 
-    /// An app parked on the Scale Trainer with a known scale and a run going.
-    ///
-    /// `navigate_to` rather than `open`, so nothing is rerolled and no device is claimed:
-    /// every assertion below is about what the drill does with an answer, and a run started
-    /// in pressing mode listens to nothing.
+    /// An app on the drill with a known scale and a run going. `navigate_to` rather than
+    /// `open`, so nothing is rerolled.
     fn drill_app(root: u8, kind: ScaleKind) -> App {
         let mut app = app_with_seed(0);
         app.navigate_to(Screen::WalkTheScale);
-        // Into pressing before the run begins, so no capture device is claimed: the screen
-        // opens in playing mode, and most of what is asserted below is about a press. The
-        // tests that want playing toggle back, as they always did.
+        // into pressing before the run begins, so no capture device is claimed
         app.walk_the_scale.toggle_answering();
         app.walk_the_scale.enter();
         app.walk_the_scale.select_root(PitchClass::new(root));
@@ -1230,8 +1026,7 @@ mod tests {
             .transpose(degree(app).semitones())
     }
 
-    /// The lowest position carrying a pitch class. Which one is arbitrary, and that the
-    /// drill is indifferent to the choice is asserted by `a_degree_is_accepted_anywhere`.
+    /// The lowest position carrying a pitch class.
     fn position_of(pitch_class: PitchClass) -> (usize, usize) {
         (0..NECK_STRINGS)
             .flat_map(|string| (0..=DRILL_NECK.frets()).map(move |fret| (string, fret)))
@@ -1249,8 +1044,7 @@ mod tests {
         presses(app, target(app));
     }
 
-    /// Answers it with the semitone above — near enough to be a plausible slip, and never
-    /// a degree of the scale for the kinds these tests use.
+    /// Answers with the semitone above, never a degree of the scales these tests use.
     fn answers_wrong(app: &mut App) {
         presses(app, target(app).transpose(1));
     }
@@ -1281,9 +1075,7 @@ mod tests {
             .expect("the neck sounds every pitch class")
     }
 
-    /// Widths the root display is plausibly drawn at. The middle column takes what the neck
-    /// and the selector leave, so the width is what varies with the window; the height is
-    /// `ROOT_ROW_HEIGHT` and does not.
+    /// Widths the root display is plausibly drawn at; the height is fixed.
     const ROOT_SIZES: [Size; 4] = [
         Size::new(220.0, ROOT_ROW_HEIGHT),
         Size::new(278.0, ROOT_ROW_HEIGHT),
@@ -1291,11 +1083,6 @@ mod tests {
         Size::new(520.0, ROOT_ROW_HEIGHT),
     ];
 
-    /// The box every gesture is tested against: centred on the canvas, the glyph's size, and
-    /// never reaching past the edge into what is drawn beside it.
-    ///
-    /// The canvas draws nothing, so there is no drawing for this to be held against — what it
-    /// guards instead is that the one region three gestures share stays where the glyph is.
     #[test]
     fn the_grab_box_is_centred_and_stays_inside_the_canvas() {
         for size in ROOT_SIZES {
@@ -1324,17 +1111,10 @@ mod tests {
         }
     }
 
-    /// The kind pills are laid out in the rows `kind_row_spans` gives, and the widest of them
-    /// — `Spanish Gypsy`, `Whole Tone` and `Diminished` — has to fit inside the card or it is
-    /// drawn past its edge. The Scale Trainer never hits this because its kind card is half
-    /// the window wide; a fixed column does.
-    ///
-    /// The glyph width is an estimate, deliberately generous: iced measures text at layout
-    /// time and there is no font here to ask. What the test is for is the *ordering* — a kind
-    /// with a longer name, or a narrower column, should fail this before it reaches a window.
+    /// The glyph width is a generous estimate, since there is no font to measure here.
     #[test]
     fn the_widest_kind_row_fits_the_selector_column() {
-        // A conservative average advance for the body font at `KIND_BUTTON_SIZE`.
+        // a conservative average advance for the body font at `KIND_BUTTON_SIZE`
         const GLYPH_WIDTH: f32 = 0.58;
         const BUTTON_PADDING_X: f32 = 12.0;
         const FOCUS_RING_PADDING: f32 = 3.0;
@@ -1364,7 +1144,6 @@ mod tests {
 
     // ---- The root display ----
 
-    /// The two units one movement arrives in, reduced to the one the drill counts.
     #[test]
     fn a_notch_and_a_step_of_pixels_are_each_one_step() {
         assert_eq!(steps_from(ScrollDelta::Lines { x: 0.0, y: 1.0 }), 1.0);
@@ -1390,9 +1169,7 @@ mod tests {
         height: ROOT_ROW_HEIGHT,
     };
 
-    /// Whether the canvas acts on an event — which is all a test can read, since what it
-    /// publishes is sealed inside a `canvas::Action`. What the message then does to the drill
-    /// is asserted on the state above, where the messages are synthesized by hand.
+    /// Whether the canvas acts on an event; what it publishes is sealed inside a `canvas::Action`.
     fn acts_on(dragging: bool, event: &canvas::Event, at: Point) -> bool {
         RootGrip { dragging }
             .update(
@@ -1404,8 +1181,6 @@ mod tests {
             .is_some()
     }
 
-    /// The wheel is the one gesture that asks where the pointer is on every event, so the
-    /// hit-test is what keeps a scroll aimed elsewhere on the screen out of the drill.
     #[test]
     fn the_wheel_is_only_the_drills_over_the_glyph() {
         let wheel = iced::Event::Mouse(iced::mouse::Event::WheelScrolled {
@@ -1426,9 +1201,7 @@ mod tests {
         );
     }
 
-    /// Which events the canvas claims, and when. A press has to land on the glyph; everything
-    /// after it is claimed on the strength of the drag being under way, wherever the pointer
-    /// has got to — which is the asymmetry the whole gesture rests on.
+    /// A press has to land on the glyph; the rest of the drag is claimed wherever it goes.
     #[test]
     fn the_press_is_placed_and_the_rest_of_the_drag_is_not() {
         let display = RootDisplay::new(GRIP_BOUNDS.size());
@@ -1471,8 +1244,7 @@ mod tests {
         app.walk_the_scale.scale().root()
     }
 
-    /// Steps of drag travel, as the x a `DragDrillRoot` carries. The press is at zero, so the
-    /// arithmetic under test is the only thing deciding where a step falls.
+    /// Steps of drag travel, as the x a `DragDrillRoot` carries. The press is at zero.
     fn drags(app: &mut App, steps: f32) {
         let _ = app.update(Message::DragDrillRoot(steps * STEP_DISTANCE));
     }
@@ -1577,8 +1349,7 @@ mod tests {
         );
     }
 
-    /// The remainder is what makes a trackpad usable: its deltas arrive in pixels, far short
-    /// of a step each, and a drill that discarded them would never move at all.
+    /// Trackpad deltas arrive far short of a step each, so the remainder must carry.
     #[test]
     fn two_half_steps_of_scroll_make_one_semitone() {
         let mut app = drill_app(0, ScaleKind::Ionian);
@@ -1620,8 +1391,6 @@ mod tests {
         assert_eq!(root(&app), PitchClass::new(1), "the travel alone decides");
     }
 
-    /// A drag passes through roots on its way. None of them is a scale that was walked, so
-    /// none of them may show up as one.
     #[test]
     fn passing_through_roots_does_not_score() {
         let mut app = drill_app(0, ScaleKind::MinorPentatonic);
@@ -1688,9 +1457,7 @@ mod tests {
 
     #[test]
     fn changing_the_kind_restarts_the_sequence() {
-        // Diminished has eight degrees and Minor Pentatonic five, so an index carried over
-        // would be pointing past the end of the second — the case `Run::degree`'s `get`
-        // answers with `None` rather than a panic, and which this asserts never arises.
+        // eight degrees then five, so a carried-over index would point past the end
         let mut app = drill_app(0, ScaleKind::Diminished);
         for _ in 0..6 {
             answers(&mut app);
@@ -1718,8 +1485,6 @@ mod tests {
 
     #[test]
     fn the_screen_reopens_on_the_scale_it_was_left_on() {
-        // The CAGED window's rule rather than the Scale Trainer's: a learner comes back to
-        // what they were working on, and a drill that rerolled on entry would never let them.
         let mut app = drill_app(3, ScaleKind::Aeolian);
         answers(&mut app);
 
@@ -1749,9 +1514,7 @@ mod tests {
     fn earlier_wrong_answers_stay_marked_and_a_new_element_starts_clean() {
         let mut app = drill_app(0, ScaleKind::Ionian);
 
-        // Bound before the call rather than written inline: `presses(&mut app, target(&app))`
-        // takes the mutable borrow for the whole call, so the second argument's `&app` is a
-        // second borrow of something already borrowed mutably — E0502.
+        // bound first: `target(&app)` inline would borrow `app` while `presses` holds it mutably
         let first = target(&app).transpose(1);
         presses(&mut app, first);
         let second = target(&app).transpose(6);
@@ -1858,8 +1621,6 @@ mod tests {
         answers(&mut app);
         let marked = drill_markers(&app.walk_the_scale);
 
-        // Only the one degree that has been answered, and it is marked at every position
-        // carrying it — which is the honest drawing of a rule that judges pitch classes.
         assert!(!marked.is_empty());
         assert!(marked.iter().all(
             |marker| DRILL_NECK.pitch_class_at(marker.string, marker.fret)
@@ -1891,8 +1652,7 @@ mod tests {
 
     #[test]
     fn a_degree_is_accepted_anywhere_it_falls() {
-        // Every position carrying the asked-for pitch class answers, including ones lower on
-        // the neck than the element answered before — a sequence need not ascend.
+        // a sequence need not ascend
         for string in 0..NECK_STRINGS {
             for fret in 0..=DRILL_NECK.frets() {
                 let mut app = drill_app(0, ScaleKind::Ionian);
@@ -1952,9 +1712,7 @@ mod tests {
 
     #[test]
     fn a_slide_between_degrees_is_judged() {
-        // The detector breaks its run on a reading further than its tolerance from the one
-        // before, so a slide releases something other than a pitch on the way — which is why
-        // the drill needs no notion of a slide of its own.
+        // the detector releases a non-pitch reading mid-slide, so no slide handling is needed
         let mut app = drill_app(0, ScaleKind::Ionian);
         let _ = app.update(Message::ToggleScaleAnswering);
 
@@ -2063,7 +1821,6 @@ mod tests {
     fn the_four_states_read_differently_and_name_no_note() {
         use std::collections::HashSet;
 
-        // Every state the line can report, gathered from the words rather than the widget.
         let lines: HashSet<&str> = [
             State::NotStarted,
             State::NoInput,
@@ -2103,8 +1860,6 @@ mod tests {
             .listener()
             .expect("playing mode holds a listener");
 
-        // Whether this machine has an input decides which of the two it is; neither of them
-        // is the drill silently appearing to listen to something that is not there.
         assert!(matches!(
             listening_line(listener),
             "no input — press m to answer with the neck instead"
@@ -2129,7 +1884,7 @@ mod tests {
         let _ = app.update(Message::ToggleScaleNeck);
         assert!(app.walk_the_scale.neck_hidden());
 
-        // Swapping back needs no code of its own: the flag is dropped with the variant.
+        // swapping back needs no code: the flag is dropped with the variant
         let _ = app.update(Message::ToggleScaleAnswering);
         assert!(!app.walk_the_scale.neck_hidden());
     }
@@ -2143,8 +1898,7 @@ mod tests {
             Some(Duration::from_secs(180))
         );
 
-        // One jump rather than a hundred and twenty ticks. A countdown would still read
-        // 3:00 here; `started.elapsed()` cannot.
+        // a countdown would still read 3:00 here; `started.elapsed()` cannot
         app.walk_the_scale.rewind(Duration::from_secs(120));
 
         let left = app
@@ -2252,7 +2006,7 @@ mod tests {
         let mut app = app_with_seed(0);
         app.navigate_to(Screen::WalkTheScale);
         press_into(&mut app, "p", keyboard::Modifiers::empty());
-        // No `m`: the screen already opens playing, which is what makes `n` live.
+        // no `m`: the screen already opens playing, which is what makes `n` live
         press_into(&mut app, "t", keyboard::Modifiers::empty());
         press_into(&mut app, "n", keyboard::Modifiers::empty());
 
@@ -2287,8 +2041,7 @@ mod tests {
         press_into(&mut app, "m", keyboard::Modifiers::empty());
         press_into(&mut app, "n", keyboard::Modifiers::empty());
 
-        // The summary is not a drill, so the settings it would report have nothing to
-        // report about. `p` is the one key the screen still claims: another run.
+        // `p` is the one key the summary still claims: another run
         assert_eq!(app.walk_the_scale.answering(), Answering::Pressing);
         assert!(!app.walk_the_scale.neck_hidden());
 
@@ -2327,8 +2080,7 @@ mod tests {
         );
     }
 
-    /// An accelerator fires a widget without walking the ring onto it, and these two have no
-    /// widget to walk onto at all — so the ring has to be exactly where it was.
+    /// An accelerator fires a widget without moving the focus ring.
     #[test]
     fn the_root_keys_leave_the_focus_ring_alone() {
         let mut app = drill_app(0, ScaleKind::Ionian);
@@ -2340,13 +2092,7 @@ mod tests {
         assert_eq!(app.focused, FocusTarget::DrillKind(4));
     }
 
-    /// The ring's whole path on this screen, now that the root grid has gone: Back, the
-    /// sixteen kinds in the order the rows lay them out, then the run's controls.
-    ///
-    /// Pinned as deliberately as the path it replaces. Removing the root card also took the
-    /// screen down to one card, and a two-band split left over from the old layout would walk
-    /// the first three columns of every kind row before coming back for the rest — a wrong
-    /// order that nothing else here would notice.
+    /// The ring's whole path: Back, the sixteen kinds in row order, then the run's controls.
     #[test]
     fn the_ring_walks_back_then_the_kinds_then_the_controls() {
         let mut app = app_with_seed(0);
@@ -2370,8 +2116,6 @@ mod tests {
         );
     }
 
-    /// The drill sets its root on the glyph, so nothing in its ring names one — while the two
-    /// screens that still choose a root from a grid keep every one of their twelve stops.
     #[test]
     fn no_root_is_a_focus_stop_here_and_every_one_still_is_elsewhere() {
         let mut app = app_with_seed(0);
@@ -2385,8 +2129,7 @@ mod tests {
             "the drill stops on a root"
         );
 
-        // The first element is annotated so both closures coerce to the same fn pointer —
-        // two closures are two distinct types, and an array needs one.
+        // the first element is annotated so both closures coerce to one fn pointer type
         for (screen, is_a_root) in [
             (
                 Screen::ScaleTrainer,

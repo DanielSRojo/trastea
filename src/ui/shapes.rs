@@ -1,15 +1,5 @@
 //! The movable shapes, the voicings they place, and the arithmetic between them.
-//!
-//! A shape is instrument knowledge rather than theory, which is why it lives here and not
-//! in `music/` — the same reason `STANDARD_TUNING` and `pitch_class_at` sit in `ui`. It is
-//! not a screen's either: two screens place these shapes, and a screen importing another
-//! screen is what keeping each screen's state and views in one module exists to prevent.
-//!
-//! The curation stops at [`SHAPES`]. Which strings sound and which degree each carries is
-//! a thing guitarists know and no arithmetic produces; everything downstream of that table
-//! is arithmetic. Placing a shape adds one number to every offset, and changing a chord's
-//! quality moves only the strings whose degrees that quality alters. There is no per-chord
-//! entry, no per-root entry, and no per-position entry anywhere below.
+//! `SHAPES` is the only curated table; everything downstream of it is arithmetic.
 
 use crate::music::chords::{Chord, ChordQuality};
 use crate::music::notes::PitchClass;
@@ -17,23 +7,13 @@ use crate::music::notes::PitchClass;
 use super::chord_diagram::window_for;
 use super::neck::Neck;
 
-/// How many frets apart a shape's stopped notes may sit.
-///
-/// Three, not four: a hand covers four *frets*, which is a distance of three between the
-/// lowest and the highest. The five CAGED shapes all fit inside it, and the C and G shapes
-/// use every bit of it.
+/// How many frets apart a shape's stopped notes may sit: four frets span a distance of three.
 const REACH: u8 = 3;
 
-/// How many fingers a hand brings to the neck. A barre counts as one however many strings
-/// it covers.
+/// How many fingers a hand brings to the neck. A barre counts as one.
 const FINGERS: usize = 4;
 
 /// What one string does in a shape.
-///
-/// An enum rather than an `Option<u8>` with a comment, because a muted string and a string
-/// stopped at the shape's own index fret are different in kind, and the degree only means
-/// anything for the second. `Option<u8>` would leave the degree somewhere else, free to
-/// disagree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StringRole {
     Muted,
@@ -45,12 +25,7 @@ enum StringRole {
     },
 }
 
-/// Which of the five open major shapes a shape derives from — the letters CAGED is named for.
-///
-/// An enum rather than the letter inside a name string, because the reduced entries are also
-/// CAGED shapes: `voicings` for a major triad returns seven, and a caller wanting the five has
-/// no predicate without this. `match`ing it is exhaustive on purpose — a sixth shape would
-/// make the compiler name every place that has to decide about it.
+/// Which of the five open major shapes a shape derives from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CagedShape {
     C,
@@ -61,8 +36,7 @@ pub(super) enum CagedShape {
 }
 
 impl CagedShape {
-    /// How a shape of this letter is written, reduced or not. The one place the printed name
-    /// is built, so `Shape` and `Voicing` cannot disagree about it.
+    /// How a shape of this letter is written, reduced or not.
     fn name(self, reduction: Option<&str>) -> String {
         match reduction {
             Some(reduction) => format!("{} shape, {reduction}", self.letter()),
@@ -83,15 +57,10 @@ impl CagedShape {
 
 /// A movable shape: which strings sound, what each carries, and which quality's degrees
 /// the offsets were measured against.
-///
-/// `base` rather than a separate list of degree numbers. The two would be one thing to
-/// keep in step and the list is derivable, so the shape names the quality it was drawn
-/// from and the degrees follow.
 #[derive(Debug, Clone, Copy)]
 struct Shape {
     caged: CagedShape,
-    /// How this entry is reduced from the full shape, or `None` for the full one. Display only:
-    /// the identity is `caged`, and `None` is what makes a shape one of the five.
+    /// How this entry is reduced from the full shape, or `None` for one of the five. Display only.
     reduction: Option<&'static str>,
     strings: [StringRole; 6],
     base: ChordQuality,
@@ -100,12 +69,8 @@ struct Shape {
 
 use StringRole::{Muted, Sounded};
 
-/// One shape per string a root can sit on, per degree-set family, plus the rest of CAGED
-/// for the triads.
-///
-/// Every entry is a chord a guitarist would recognise at the nut — E and A major, Asus2,
-/// Esus4, E6 and A6, E7 and A7 — which is the check on the arithmetic below: placed at the
-/// nut, a shape has to come out as the open chord it was drawn from.
+/// The shape families. Placed at the nut, each entry has to come out as the open chord
+/// it was drawn from.
 const SHAPES: &[Shape] = &[
     // Triads, all five CAGED shapes.
     Shape {
@@ -257,7 +222,7 @@ const SHAPES: &[Shape] = &[
         root_string: 0,
     },
     // Suspensions. `1 2 5` and `1 4 5` are different degree sets, so neither can borrow
-    // the triad shapes above — see the placement rule in `Shape::place`.
+    // the triad shapes above.
     Shape {
         caged: CagedShape::E,
         reduction: None,
@@ -439,7 +404,7 @@ const SHAPES: &[Shape] = &[
         base: ChordQuality::Major6,
         root_string: 1,
     },
-    // Sevenths. The largest family — seven of the fifteen qualities share `1 3 5 7`.
+    // Sevenths. Seven of the fifteen qualities share `1 3 5 7`.
     Shape {
         caged: CagedShape::E,
         reduction: None,
@@ -501,11 +466,8 @@ const SHAPES: &[Shape] = &[
         base: ChordQuality::Dominant7,
         root_string: 1,
     },
-    // Reduced shapes, and the reason they are here: the six-string ones above only stay
-    // fingerable near the nut. Altering a quality drags strings apart, and a placement that
-    // needs a fifth finger is refused — which left ten of the twelve major sixths with no
-    // shape at all. Dropping a string or two costs a doubled note nobody misses and takes
-    // the A-shape sixth from two playable placements to twenty-two.
+    // Reduced shapes: the six-string ones above only stay fingerable near the nut, and
+    // dropping a string or two makes most alterations placeable again.
     Shape {
         caged: CagedShape::E,
         reduction: Some("four strings"),
@@ -664,12 +626,7 @@ const SHAPES: &[Shape] = &[
     },
 ];
 
-/// One way to play a chord: a fret per string, or nothing sounding there.
-///
-/// `x 3 2 0 1 0` is what guitarists already write, and this is that. Absolute frets rather
-/// than offsets from a window, so the window can be derived from the voicing and the two
-/// can never disagree — a diagram drawn against a stale window puts its dots at the wrong
-/// frets while still looking perfectly legible.
+/// One way to play a chord: an absolute fret per string, or nothing sounding there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Voicing {
     strings: [Option<u8>; 6],
@@ -677,8 +634,7 @@ pub(super) struct Voicing {
     index_fret: u8,
     caged: CagedShape,
     reduction: Option<&'static str>,
-    /// The shape's own fingering, carried into this placement. What [`Voicing::fingers`] uses
-    /// where it stands, and what it checks before deciding that.
+    /// The shape's own fingering, carried into this placement.
     fingering: [Option<u8>; 6],
 }
 
@@ -700,26 +656,19 @@ impl Voicing {
     }
 
     /// Whether this is one of the five, rather than a reduction of one.
-    ///
-    /// A field rather than a parse of the name: both reduced Major entries place for a major
-    /// triad, so `voicings` returns seven shapes and a caller wanting the five has nothing else
-    /// to ask.
     pub(super) fn is_caged(self) -> bool {
         self.reduction.is_none()
     }
 
-    /// The frets that a finger has to stop. Open strings are sounded by nobody.
+    /// The frets that a finger has to stop.
     fn stopped(self) -> impl Iterator<Item = u8> {
         self.strings.into_iter().flatten().filter(|&fret| fret > 0)
     }
 
     /// Which finger stops each string, or `None` where nothing does.
     ///
-    /// The shape's own fingering where it stands for this placement, and an ascending-fret
-    /// assignment where it does not. The shape has to be asked first because a released finger
-    /// is invisible to the frets: Em is `0 2 2 0 0 0`, and nothing in those numbers says the
-    /// index was lifted rather than never placed. The frets are the better authority the rest of
-    /// the time, which is most of the time. A real solver is still its own project.
+    /// The shape's own fingering where it stands, since a released finger is invisible to the
+    /// frets (Em is `0 2 2 0 0 0`); an ascending-fret assignment where it does not.
     pub(super) fn fingers(self) -> [Option<u8>; 6] {
         self.shape_fingering()
             .unwrap_or_else(|| self.ordered_fingering())
@@ -727,11 +676,9 @@ impl Voicing {
 
     /// The fingering carried from the shape, or `None` where it does not describe this placement.
     ///
-    /// It stops describing it whenever an alteration moves a string without asking the shape:
-    /// a fifth finger, a barred string held by something other than the first, one finger on two
-    /// unbarred strings, or a crossing — a higher finger below a lower one. Am is the everyday
-    /// case. Flattening the third drops the B string under its neighbours, so carrying the shape's
-    /// fingering would cross, and the sort takes over.
+    /// It stops describing it when an alteration needs a fifth finger, a barred string held by
+    /// something other than the first, one finger on two unbarred strings, or a crossing.
+    /// Am is the everyday case: the flattened third would cross.
     fn shape_fingering(self) -> Option<[Option<u8>; 6]> {
         let barre = self.barre_fret();
         let stopped = self.strings.map(|fret| fret.filter(|&fret| fret > 0));
@@ -775,14 +722,8 @@ impl Voicing {
     fn ordered_fingering(self) -> [Option<u8>; 6] {
         let barre = self.barre_fret();
 
-        // Ordered by `(fret, string)`, which is the whole rule: fingers go on in order of
-        // fret, and where two strings share a fret the lower one takes the earlier finger.
-        //
-        // Keying on the fret alone was the first attempt, and it is wrong on the two most
-        // common open chords in the instrument. G is `3 2 0 0 0 3` — two strings at the
-        // third fret with three strings between them, which one finger cannot reach, and
-        // D is `x x 0 2 3 2` for the same reason. Same fret means same finger only when
-        // the strings are barred, and that case is already handled above.
+        // Ordered by `(fret, string)`, not the fret alone: G is `3 2 0 0 0 3`, and one finger
+        // cannot reach two third-fret strings with three between them.
         let mut order: Vec<(u8, usize)> = (0..6)
             .filter_map(|string| {
                 let fret = self.strings[string].filter(|&fret| fret > 0)?;
@@ -800,9 +741,7 @@ impl Voicing {
             }
 
             let rank = order.iter().position(|&(_, at)| at == string)?;
-            // Fingers after the barre, or from the first finger when there is none. Past
-            // the fourth there is no finger to name, so the dot goes unlabelled rather
-            // than carrying one a hand does not have.
+            // Past the fourth finger the dot goes unlabelled.
             u8::try_from(rank)
                 .ok()?
                 .checked_add(if barre.is_some() { 2 } else { 1 })
@@ -810,12 +749,7 @@ impl Voicing {
         })
     }
 
-    /// Whether a hand has enough fingers for this.
-    ///
-    /// Four, with a barre counting as one however many strings it covers. A voicing needing
-    /// a fifth is refused with the placements that run off the neck or past a reach — it is
-    /// the same kind of unplayable, and a diagram that drew a dot it could not name a finger
-    /// for was the visible symptom of it not being checked.
+    /// Whether a hand has enough fingers for this, a barre counting as one.
     fn is_fingerable(self) -> bool {
         self.fingers()
             .iter()
@@ -826,24 +760,13 @@ impl Voicing {
     /// The fret a barre sits on: the lowest stopped one, when more than one string rests
     /// there *and* the voicing needs more fingers than a hand has.
     ///
-    /// The *lowest stopped* fret, not the shape's index fret, which is where this was wrong.
-    /// Altering a quality can drop a string below the fret its shape sits at — C♯°7 on the A
-    /// shape is `x 4 5 3 5 3`, sitting at the fourth with two strings at the third — and
-    /// keying on the index fret found no barre there, leaving five stopped strings for four
-    /// fingers. A finger bars the lowest thing it is holding; nothing about the shape's own
-    /// index fret enters into it.
-    ///
-    /// The strings resting on it need not be adjacent. A bar covers the ones between as
-    /// well, and a string stopped higher up simply sounds its own note instead — which is
-    /// how every barre chord with a shape on top of it works.
+    /// The lowest stopped fret, not the index fret: C♯°7 on the A shape is `x 4 5 3 5 3`.
+    /// The strings resting on it need not be adjacent.
     pub(super) fn barre_fret(self) -> Option<u8> {
         let lowest = self.stopped().min()?;
         let resting = self.stopped().filter(|&fret| fret == lowest).count();
 
-        // A hand has four fingers, so a barre is what happens when a voicing needs five.
-        // Below that there is no reason to lay one down: open D is `x x 0 2 3 2`, two
-        // strings on its lowest fret and barre-able in principle, and nobody plays it that
-        // way because three separate fingers are free and easier.
+        // No barre below five stopped strings: open D could bar `x x 0 2 3 2` but nobody does.
         (resting > 1 && self.stopped().count() > FINGERS).then_some(lowest)
     }
 }
@@ -852,9 +775,7 @@ impl Shape {
     /// This shape with every string stopped: the fingering of its barre chord.
     ///
     /// The first finger holds the index fret; the offsets above it take the rest in order, the
-    /// lower string first where two share one. Derived rather than recorded for the reason `base`
-    /// is a quality rather than a list of degrees — a table beside the offsets would be a second
-    /// thing to keep in step with them.
+    /// lower string first where two share one.
     fn movable_fingering(&self) -> [Option<u8>; 6] {
         let mut above: Vec<(u8, usize)> = self
             .strings
@@ -881,8 +802,6 @@ impl Shape {
     ///
     /// `None` when the shape cannot carry the quality or the placement is unplayable:
     /// a stopped fret below the nut, a stretch beyond `REACH`, or a fret past the neck.
-    /// A refusal is ordinary — most shapes cannot be played at most positions — so it is
-    /// an absent voicing rather than an error anyone reports.
     fn place(
         &self,
         root: PitchClass,
@@ -950,11 +869,7 @@ impl Shape {
     }
 
     /// Whether `kind` names the same degree numbers this shape was drawn against.
-    ///
-    /// The rule the whole arithmetic rests on. Altering `3` into `♭3` moves one finger;
-    /// a quality with no third at all leaves the string carrying it nowhere to go, and
-    /// muting that string would be an editorial decision made by arithmetic rather than
-    /// by a guitarist.
+    /// A quality missing a degree the shape holds is refused rather than muted.
     fn carries(&self, kind: ChordQuality) -> bool {
         let mut theirs: Vec<u8> = kind.degrees().collect();
         let mut ours: Vec<u8> = self.base.degrees().collect();
@@ -992,16 +907,11 @@ impl Shape {
         let fret = i16::from(index_fret) + i16::from(offset) + self.shift(degree, kind)?;
         let fret = u8::try_from(fret).ok()?;
 
-        // A pitch class because a shape is the same shape wherever it sits — which of twelve
-        // is all this arithmetic wants — and off `neck` because the tuning travels with it.
         neck.pitch_class_at(index, usize::from(fret))
     }
 }
 
-/// Every way the library can play `chord`, lowest position first.
-///
-/// Each shape is tried at every fret it could sit at rather than only at the first: a
-/// shape repeats up the neck an octave later, and both placements are worth showing.
+/// Every way the library can play `chord`, lowest position first, octave repeats included.
 pub(super) fn voicings(chord: Chord, neck: &Neck) -> Vec<Voicing> {
     let mut found: Vec<Voicing> = SHAPES
         .iter()
@@ -1017,12 +927,7 @@ pub(super) fn voicings(chord: Chord, neck: &Neck) -> Vec<Voicing> {
 }
 
 /// How a voicing's position reads: the nut, or the fret its diagram begins at.
-///
-/// Derived from the same `window_for` the diagram is drawn against rather than from the
-/// shape's own index fret, because the two can disagree — a diminished seventh built on the
-/// A shape sits at the third fret and reaches down to the second, so its window opens at
-/// the nut. Labelled by the shape it would read `3fr` above a picture of the nut, which is
-/// the caption and the picture telling the reader different things. One source, no drift.
+/// Read from `window_for` rather than the index fret, which can disagree with the diagram.
 pub(super) fn position_label(voicing: Voicing) -> String {
     let window = window_for(&voicing.strings());
 
@@ -1054,11 +959,8 @@ mod tests {
             .unwrap_or_else(|| panic!("{name} at {index_fret} is not offered for {chord}"))
     }
 
-    /// The names the entries carried when they were stored strings rather than a letter and a
-    /// reduction. Listed rather than derived, so this is a check on the derivation and not a
-    /// restatement of it.
-    /// Why `CAGED_NECK` is fifteen frets rather than twelve. The five shapes are the whole
-    /// cycle, and on a twelve-fret neck two thirds of the roots cannot complete it.
+    /// Why `CAGED_NECK` is fifteen frets rather than twelve: on twelve, most roots cannot
+    /// complete the cycle.
     #[test]
     fn the_cycle_completes_on_the_caged_neck_and_not_on_the_drills() {
         let letters = |root: PitchClass, neck: &Neck| {
@@ -1155,8 +1057,7 @@ mod tests {
             ]
         );
 
-        // The predicate has to survive placement, not just the table: a reduction that places
-        // is what a screen wanting the five would otherwise have to filter out by name.
+        // The predicate has to survive placement, not just the table.
         assert!(offered.iter().any(|voicing| !voicing.is_caged()));
         assert!(
             offered
@@ -1208,8 +1109,7 @@ mod tests {
 
     #[test]
     fn every_shape_has_a_string_at_its_index_fret() {
-        // What makes the offsets mean "from the index fret": the lowest stopped string of
-        // a shape sits at zero, so placing it at fret n puts a barre there.
+        // The lowest stopped string sits at zero, so placing a shape at fret n puts a barre there.
         for shape in SHAPES {
             let lowest = shape
                 .strings
@@ -1248,8 +1148,7 @@ mod tests {
 
     #[test]
     fn every_family_has_a_shape() {
-        // A quality with no shape family shows no diagram, which is specified but should
-        // never be true of the fifteen that ship.
+        // Specified, but should never be true of the fifteen that ship.
         for &kind in ChordQuality::ALL {
             assert!(
                 SHAPES.iter().any(|shape| shape.carries(kind)),
@@ -1260,8 +1159,7 @@ mod tests {
 
     #[test]
     fn the_open_chords_come_out_of_the_arithmetic() {
-        // The check on the whole table: placed at the nut, a shape has to reproduce the
-        // open chord it was drawn from. These are the shapes as a guitarist writes them.
+        // Placed at the nut, a shape has to reproduce the open chord it was drawn from.
         let cases: &[(u8, ChordQuality, &str, &[Option<u8>])] = &[
             (
                 4,
@@ -1364,8 +1262,7 @@ mod tests {
 
     #[test]
     fn a_voicing_sounds_the_chord_and_nothing_else() {
-        // The property that catches an arithmetic slip anywhere in placement or
-        // alteration: every sounded string has to be a chord tone, for every chord.
+        // Every sounded string has to be a chord tone, for every chord.
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
                 let chord = Chord::new(root, kind);
@@ -1442,10 +1339,7 @@ mod tests {
 
     #[test]
     fn a_caption_says_what_its_diagram_shows() {
-        // The label reads the window, not the shape's index fret, and the two do come
-        // apart: C diminished seventh sits on the A shape at the third fret but reaches
-        // down to the second, so the diagram opens at the nut. Captioned by the shape it
-        // would read `3fr` over a picture of the nut.
+        // C°7 sits on the A shape at the third fret but reaches the second, so it opens at the nut.
         let c_dim7 = Chord::new(pc(0), ChordQuality::Diminished7);
 
         for voicing in voicings(c_dim7, &DRILL_NECK) {
@@ -1480,9 +1374,7 @@ mod tests {
 
     #[test]
     fn a_placement_below_the_nut_is_refused() {
-        // The C shape holds its third on an open string, so flattening it would need a
-        // fret below the nut. C minor is therefore not a C shape at the nut — but it is
-        // reachable elsewhere.
+        // The C shape holds its third on an open string, so C minor is not a C shape at the nut.
         let c_minor = Chord::new(pc(0), ChordQuality::Minor);
 
         assert!(
@@ -1505,10 +1397,7 @@ mod tests {
 
     #[test]
     fn every_stopped_string_gets_a_finger() {
-        // The bug this exists for: `C♯°7` on the A shape is `x 4 5 3 5 3`, a shape sitting
-        // at the fourth fret with two strings dropped to the third by the alteration.
-        // `barre_fret` keyed on the shape's index fret, found no barre at 4, and left five
-        // stopped strings for four fingers — the fifth drew a dot with no number in it.
+        // `C♯°7` on the A shape is `x 4 5 3 5 3`: two strings drop below the index fret.
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
                 for voicing in voicings(Chord::new(root, kind), &DRILL_NECK) {
@@ -1530,7 +1419,6 @@ mod tests {
 
     #[test]
     fn a_barre_sits_on_the_lowest_stopped_fret() {
-        // Not on the shape's index fret, which is what it used to read.
         let c_sharp_dim7 = Chord::new(pc(1), ChordQuality::Diminished7);
         let voicing = voicings(c_sharp_dim7, &DRILL_NECK)
             .into_iter()
@@ -1547,9 +1435,7 @@ mod tests {
 
     #[test]
     fn a_voicing_within_a_hand_is_not_barred() {
-        // A barre is what happens when a chord needs a fifth finger. Open D is `x x 0 2 3 2`
-        // — two strings on its lowest fret, barre-able in principle, and fingered with three
-        // separate fingers by everyone who plays it.
+        // Open D is `x x 0 2 3 2`, barre-able in principle but fingered with three fingers.
         let open_d = only(Chord::new(pc(2), ChordQuality::Major), "D shape", 0);
 
         assert_eq!(open_d.barre_fret(), None);
@@ -1577,9 +1463,7 @@ mod tests {
 
     #[test]
     fn the_open_chords_are_fingered_the_way_they_are_taught() {
-        // The check on the rule, and the reason it orders by `(fret, string)` rather than
-        // by fret: G and D each put two strings on one fret with others between them, and
-        // keying on the fret alone gave both of those strings the same finger.
+        // G and D each put two strings on one fret with others between them.
         let cases: &[(u8, ChordQuality, &str, [Option<u8>; 6])] = &[
             // x 3 2 0 1 0 — ring, middle, index walking down the neck.
             (
@@ -1623,8 +1507,7 @@ mod tests {
                 "A shape",
                 [None, None, Some(2), Some(3), Some(1), None],
             ),
-            // 0 2 2 0 0 0 — the third falls open here, and the fingers that survive keep the
-            // numbers they had in E major rather than sliding down to the first and second.
+            // 0 2 2 0 0 0 — the third falls open; the other fingers keep their E major numbers.
             (
                 4,
                 ChordQuality::Minor,
@@ -1654,9 +1537,7 @@ mod tests {
 
     #[test]
     fn a_shape_fully_stopped_is_fingered_like_its_barre_chord() {
-        // The five CAGED triads as their barre chords are played. Every placement of a shape is
-        // this, less the strings that sound open, so these are the numbers the open chords above
-        // are derived from rather than a second record of them.
+        // The five CAGED triads as their barre chords are played.
         let cases: &[(&str, [Option<u8>; 6])] = &[
             (
                 "E shape",
@@ -1691,9 +1572,7 @@ mod tests {
 
     #[test]
     fn no_shape_skips_a_finger_or_doubles_one_above_its_index_fret() {
-        // The check on the derivation across every entry, not just the five pinned above. The
-        // first finger holds the index fret however many strings rest there; each finger above it
-        // holds one string, and they run without a gap.
+        // The first finger holds the index fret; each finger above holds one string, with no gap.
         for shape in SHAPES {
             let fingering = shape.movable_fingering();
 
@@ -1721,8 +1600,7 @@ mod tests {
 
     #[test]
     fn a_barred_shape_is_fingered_the_way_the_shape_records_it() {
-        // F major is the E shape with the nut's open strings under the bar. Nothing is released,
-        // so nothing is lowered, and the fingering is the shape's own.
+        // F major is the E shape with nothing released, so the fingering is the shape's own.
         let voicing = only(Chord::new(pc(5), ChordQuality::Major), "E shape", 1);
 
         assert_eq!(
@@ -1737,9 +1615,7 @@ mod tests {
 
     #[test]
     fn a_sharpened_degree_on_the_index_fret_keeps_the_first_finger_busy() {
-        // The E shape carries a fifth on its index fret, so sharpening it stops a string the
-        // first finger was holding. The index has work, nothing comes down, and no dot is
-        // numbered zero — which is what lowering on `index_fret == 0` instead would have done.
+        // The sharpened fifth stops a string the first finger held, so nothing is lowered.
         let voicing = only(Chord::new(pc(4), ChordQuality::Augmented), "E shape", 0);
 
         assert_eq!(
@@ -1766,7 +1642,7 @@ mod tests {
             Voicing {
                 strings,
                 index_fret: 0,
-                // Unread by `shape_fingering`; the frets and the fingering are the whole input.
+                // Unread by `shape_fingering`.
                 caged: CagedShape::E,
                 reduction: None,
                 fingering,
@@ -1837,10 +1713,7 @@ mod tests {
 
     #[test]
     fn only_an_open_string_changes_what_the_frets_alone_would_say() {
-        // Where a placement has no open string, release and lowering do nothing, so the carried
-        // fingering either agrees with the sort or contradicts the frets and is thrown away for
-        // it. A released finger is the one thing the frets cannot see, and this is the bound on
-        // where the two can differ.
+        // Without open strings, the carried fingering either agrees with the sort or is discarded.
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
                 for voicing in voicings(Chord::new(root, kind), &DRILL_NECK) {
@@ -1860,9 +1733,7 @@ mod tests {
 
     #[test]
     fn the_library_offers_the_same_voicings_however_the_fingers_are_numbered() {
-        // A placement is refused for needing a fifth finger when more than four strings need
-        // stopping off the barre, which is a property of the placement rather than of the
-        // numbering. 592 before this module learned to carry a shape's fingering, and after.
+        // A property of the placement rather than of the numbering.
         let total: usize = PitchClass::ALL
             .iter()
             .flat_map(|&root| ChordQuality::ALL.iter().map(move |&kind| (root, kind)))
@@ -1874,7 +1745,6 @@ mod tests {
 
     #[test]
     fn no_two_strings_share_a_finger_unless_they_are_barred() {
-        // The property the ordering guarantees, across every chord in the roster.
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
                 for voicing in voicings(Chord::new(root, kind), &DRILL_NECK) {

@@ -1,14 +1,6 @@
 //! The Tuner: what the app hears, named and measured.
 //!
-//! The screen is chromatic rather than six-string — it names the nearest of all twelve
-//! pitch classes in whatever octave it hears, and never snaps to an open string. A capo
-//! and an alternate tuning then need nothing said about them. The cost is stated rather
-//! than hidden: a string tuned a full semitone flat reads as the note it has become.
-//!
-//! The dial is the readout and the name is a label on it. That is not a presentation
-//! preference — a pitch moving smoothly across a semitone boundary changes its name
-//! abruptly while the sound does not, and a bend measured here crossed three names while
-//! travelling continuously.
+//! Chromatic: it names the nearest pitch in any octave and never snaps to an open string.
 
 use std::f32::consts::{FRAC_PI_2, PI};
 
@@ -28,31 +20,22 @@ use super::style::{
 };
 use super::{Message, note_label};
 
-/// How far from a pitch still counts as in tune.
-///
-/// Three cents rather than one: a guitar's own intonation moves a fretted note further
-/// than that, and a reading that refuses to settle is a reading nobody trusts.
+/// How far from a pitch still counts as in tune; a guitar's own intonation drifts further.
 const IN_TUNE_CENTS: f32 = 3.0;
 
-/// The widest deviation the dial shows. Past this the reading is the next note along,
-/// since `Pitch::nearest` never returns an offset beyond half a semitone.
+/// The widest deviation the dial shows; `Pitch::nearest` never exceeds half a semitone.
 const DIAL_RANGE_CENTS: f32 = 50.0;
 
-/// The dial's box. Fixed rather than filled: an arc is read as a shape, and a shape that
-/// changes proportion with the window is a different shape every time it is looked at.
+/// The dial's box, fixed so the arc keeps its proportions as the window resizes.
 const DIAL_SIZE: Size = Size::new(460.0, 235.0);
 
-/// The dial's track — between the app's hairline and its muted text, because the arc is a
-/// scale to read the dot against rather than a thing to read on its own.
+/// The dial's track, between the app's hairline and its muted text.
 const TRACK: Color = Color::from_rgb8(0x55, 0x55, 0x55);
 
 pub(super) struct Tuner {
-    /// The device and what it has heard. Owned rather than shared: two listening screens
-    /// each hold one, and only one of them ever has a stream open — `leaving_for` closes
-    /// it on the way out, which is what keeps that true.
+    /// Only one listening screen has a stream open; `leaving_for` closes it on the way out.
     listener: Listener,
-    /// How the pitch is named. Its own, like the Note Trainer's — a spelling chosen while
-    /// tuning has no business renaming anything else.
+    /// Separate from every other screen's spelling.
     spelling: Spelling,
 }
 
@@ -64,8 +47,6 @@ impl Tuner {
         }
     }
 
-    /// The device, for `App` to drive and for the tests to read. The views below reach the
-    /// field directly, being in this module.
     pub(super) fn listener(&self) -> &Listener {
         &self.listener
     }
@@ -74,7 +55,6 @@ impl Tuner {
         &mut self.listener
     }
 
-    /// Read by the screen's tests. The views are in this module and reach the field.
     #[cfg(test)]
     pub(super) fn spelling(&self) -> Spelling {
         self.spelling
@@ -88,8 +68,7 @@ impl Tuner {
     }
 
     /// Which way the string has to move, or `None` when it is in tune or nothing is
-    /// sounding. The view draws from this rather than comparing cents itself, so the mark
-    /// and the "in tune" colouring cannot disagree about where the boundary is.
+    /// sounding.
     pub(super) fn correction(&self) -> Option<Correction> {
         let (_, cents) = self.listener.reading()?;
 
@@ -138,8 +117,6 @@ fn ui_reading(tuner: &Tuner, focused: FocusTarget) -> Element<'static, Message> 
         .is_some_and(|(_, cents)| cents.value().abs() <= IN_TUNE_CENTS);
     let colour = if in_tune { SUCCESS } else { INK };
 
-    // `note_label` rather than `format!`: it draws the accidental as the music face's own
-    // glyph, which is what every other note in the app is drawn with.
     let name: Element<'static, Message> = match tuner.listener.reading() {
         Some((pitch, _)) => row![
             note_label(tuner.spelling.spell(pitch.pitch_class()), NAME_SIZE, colour),
@@ -150,19 +127,14 @@ fn ui_reading(tuner: &Tuner, focused: FocusTarget) -> Element<'static, Message> 
         .align_y(iced::Alignment::Center)
         .spacing(4)
         .into(),
-        // At the name's own size an em dash sets as a rule across the dial. Small enough
-        // to read as a dash, and still holding the slot so nothing shifts when a note lands.
+        // smaller, or at the name's size the dash sets as a rule across the dial
         None => text("—").size(NAME_SIZE / 2.4).color(MUTE).into(),
     };
 
-    // Two readings of the same thing, side by side: the hertz is what was measured and the
-    // cents is that measurement against the note it was given, so a learner who does not
-    // yet trust the dial has both halves of its reasoning.
     let (hz_label, cents_label) = match (tuner.listener.hz(), tuner.listener.reading()) {
         (Some(hz), Some((_, cents))) => (
             format!("HZ {hz:.1}"),
-            // `+ 0.0` because rounding keeps the sign it rounded away: a hair flat would
-            // otherwise print "-0 cents", which reads as a fault in the tuner.
+            // `+ 0.0` turns a rounded -0 into 0, so a hair flat does not print "-0 cents"
             format!("{:+.0} cents", cents.value().round() + 0.0),
         ),
         _ => (String::new(), String::new()),
@@ -173,8 +145,6 @@ fn ui_reading(tuner: &Tuner, focused: FocusTarget) -> Element<'static, Message> 
         State::NoInput => "no input",
         State::Silent => "listening, play a note...",
         State::Unnameable => "one string at a time",
-        // The dial says which way by where the dot sits; this says it in words, so the
-        // learner turning the peg does not have to hold "left means flat" as well.
         State::Reading => match tuner.correction() {
             None => "in tune",
             Some(Correction::Up) => "flat — tighten it",
@@ -215,10 +185,7 @@ const OCTAVE_SIZE: f32 = 44.0;
 
 /// The dial, with the note name stacked over it.
 ///
-/// A `stack` rather than canvas text because the name is two glyphs in two faces — the
-/// letter in the body font, the accidental in the music one — and `note_label` already
-/// composes that pair for every other screen. Placing it needs the canvas's geometry, so
-/// [`Dial`] hands out the padding rather than the view guessing at it.
+/// A `stack` rather than canvas text so the name can use `note_label`'s two-font glyphs.
 fn ui_dial<'a>(tuner: &Tuner, name: Element<'a, Message>) -> Element<'a, Message> {
     let dial = Dial::new(DIAL_SIZE);
 
@@ -250,20 +217,13 @@ fn ui_dial<'a>(tuner: &Tuner, name: Element<'a, Message>) -> Element<'a, Message
 }
 
 /// Where a reading sits on the track: −1 half a semitone flat, +1 half a semitone sharp.
-///
-/// Clamped even though `Pitch::nearest` never returns an offset outside the range — the
-/// clamp is what makes that a fact about this function rather than a fact about its caller.
 fn position_for(cents: f32) -> f32 {
     (cents / DIAL_RANGE_CENTS).clamp(-1.0, 1.0)
 }
 
 /// Where every part of the dial sits, derived once from its box.
 ///
-/// One struct for the same reason [`super::fretboard::Layout`] is one: two things read this
-/// geometry — the canvas that draws the arc and the overlay that centres the note name
-/// inside it — and a second copy of the arithmetic drifts the moment either changes. There
-/// is no hit-testing here and so no round-trip test; what stands in for it is a test that
-/// pins the track's three landmarks and one that checks the name lands where the dial says.
+/// Shared by the canvas and the name overlay so the two cannot drift apart.
 struct Dial {
     size: Size,
     center: Point,
@@ -271,8 +231,7 @@ struct Dial {
 }
 
 impl Dial {
-    /// How far either side of the top the track runs. Eighty degrees rather than ninety, so
-    /// the ends sit above the arc's widest point and lean towards the reader.
+    /// How far either side of the top the track runs.
     const HALF_SWEEP: f32 = 80.0 * PI / 180.0;
     /// Room above the top of the track for the target mark.
     const PAD_TOP: f32 = 40.0;
@@ -280,21 +239,18 @@ impl Dial {
     const EDGE: f32 = 56.0;
     const TRACK_WIDTH: f32 = 3.0;
     const DOT_RADIUS: f32 = 9.0;
-    /// The target mark: a triangle this wide and this tall, its point this far above the
-    /// track's top.
+    /// The target mark's triangle, and how far its point sits above the track.
     const MARK_HALF_WIDTH: f32 = 8.0;
     const MARK_HEIGHT: f32 = 10.0;
     const MARK_LIFT: f32 = 24.0;
-    /// How far beyond the track's radius the accidentals sit, and how big they are drawn.
+    /// The accidentals' offset beyond the track, and their size.
     ///
-    /// The size is an em rather than a height: a SMuFL glyph is drawn against a four-space
-    /// stave, so a flat at 44 sets about as tall as a letter at 26.
+    /// The size is a SMuFL em, so a flat at 44 sets about as tall as a letter at 26.
     const LABEL_GAP: f32 = 32.0;
     const LABEL_SIZE: f32 = 44.0;
 
     fn new(size: Size) -> Dial {
-        // Whichever bound bites first: the width at the track's widest point, or the height
-        // from the mark above the top down to the ends.
+        // whichever of width or height bounds the radius first
         let by_width = (size.width / 2.0 - Dial::EDGE) / Dial::HALF_SWEEP.sin();
         let by_height = (size.height - Dial::PAD_TOP - Dial::EDGE) / (1.0 - Dial::HALF_SWEEP.cos());
         let radius = by_width.min(by_height).max(1.0);
@@ -306,8 +262,8 @@ impl Dial {
         }
     }
 
-    /// The angle a position on the track sits at, measured the way `canvas` measures: zero
-    /// at the positive x-axis, growing clockwise, so straight up is −π/2.
+    /// The angle a position on the track sits at, in canvas terms: clockwise from +x, so up
+    /// is −π/2.
     fn angle_at(&self, position: f32) -> f32 {
         -FRAC_PI_2 + position * Dial::HALF_SWEEP
     }
@@ -325,8 +281,8 @@ impl Dial {
         self.radial(position, 0.0)
     }
 
-    /// Where the note name's centre belongs: a shade below the middle of the bowl, which is
-    /// where a run of cap-height glyphs looks centred rather than measures centred.
+    /// Where the note name's centre belongs: a shade below the middle of the bowl, where it
+    /// looks centred.
     fn name_center(&self) -> Point {
         let top = self.point_at(0.0).y;
         let ends = self.point_at(1.0).y;
@@ -336,8 +292,7 @@ impl Dial {
 
     /// The padding that drops a vertically centred overlay onto [`Dial::name_center`].
     ///
-    /// Centring in a box of height `h` with padding `p` on one side puts the content's
-    /// middle at `(h ∓ p) / 2`, so the shift wanted decides which side the padding goes on.
+    /// Centring in height `h` with padding `p` on one side puts the middle at `(h ∓ p) / 2`.
     fn name_padding(&self) -> Padding {
         let shift = 2.0 * self.name_center().y - self.size.height;
 
@@ -351,9 +306,7 @@ impl Dial {
 
 /// The dial as the canvas draws it: a track, the target, and the reading's place on it.
 struct Gauge {
-    /// Where the reading sits on the track, or `None` when nothing nameable is sounding —
-    /// which draws the track with no dot on it. Deliberately not a dot at the top, which
-    /// reads as a note that is perfectly in tune.
+    /// `None` draws no dot; a dot at the top would read as in tune.
     position: Option<f32>,
     in_tune: bool,
 }
@@ -391,8 +344,7 @@ impl<Message> canvas::Program<Message> for Gauge {
             },
         );
 
-        // The target: a triangle pointing down at the top of the track. Fixed, so the dot
-        // has something to arrive at rather than only a curve to sit somewhere on.
+        // the target: a triangle pointing down at the top of the track
         let tip = dial.radial(0.0, Dial::MARK_LIFT);
         let mark = Path::new(|path| {
             path.move_to(Point::new(
@@ -417,8 +369,7 @@ impl<Message> canvas::Program<Message> for Gauge {
                 font: MUSIC_FONT,
                 align_x: iced::widget::text::Alignment::Center,
                 align_y: iced::alignment::Vertical::Center,
-                // The accidentals are private-use codepoints, which basic shaping maps by
-                // luck rather than by rule.
+                // private-use codepoints need advanced shaping
                 shaping: iced::widget::text::Shaping::Advanced,
                 ..Text::default()
             });
@@ -435,13 +386,12 @@ impl<Message> canvas::Program<Message> for Gauge {
     }
 }
 
-/// The dial's geometry, which nothing else can assert on: the canvas draws into a frame the
-/// tests cannot read back, so what is pinned here is the arithmetic the drawing reads.
+/// The dial's geometry, since the canvas frame cannot be read back.
 #[cfg(test)]
 mod dial_tests {
     use super::*;
 
-    /// A sweep across the whole track, at a resolution finer than a pixel of movement.
+    /// A sweep across the whole track, finer than a pixel of movement.
     fn positions() -> impl Iterator<Item = f32> {
         (0u8..=200).map(|step| f32::from(step) / 100.0 - 1.0)
     }
@@ -459,7 +409,7 @@ mod dial_tests {
             (top.x - DIAL_SIZE.width / 2.0).abs() < 0.5,
             "the top of the track is off centre"
         );
-        // Canvas y grows downward, so the top of the arc is the smallest y.
+        // canvas y grows downward
         assert!(top.y < flat.y && top.y < sharp.y, "the arc is upside down");
         assert!(
             (flat.y - sharp.y).abs() < 0.5,
@@ -472,8 +422,6 @@ mod dial_tests {
         assert_eq!(position_for(0.0), 0.0);
         assert_eq!(position_for(-DIAL_RANGE_CENTS), -1.0);
         assert_eq!(position_for(DIAL_RANGE_CENTS), 1.0);
-        // Past the range the dot stops at the end rather than leaving the arc — a reading
-        // that far out is the next note along and the name has already changed.
         assert_eq!(position_for(DIAL_RANGE_CENTS * 2.0), 1.0);
     }
 
@@ -513,8 +461,7 @@ mod dial_tests {
             "the name is not inside the bowl of the arc"
         );
 
-        // The padding is what actually places it, and the canvas never sees the padding —
-        // this is the seam where the two readers of the geometry could drift apart.
+        // the padding places it, and the canvas never sees the padding
         let padding = dial.name_padding();
         let placed = (DIAL_SIZE.height + padding.top - padding.bottom) / 2.0;
         assert!(
@@ -533,12 +480,10 @@ mod screen_tests {
     use crate::ui::tests::press_into;
     use crate::ui::*;
 
-    /// A released reading at a given frequency, as the detector would produce one.
     fn heard(hz: f32) -> Heard {
         Heard::Pitch(Detection::synthesized(hz, 0.999))
     }
 
-    /// Drives the app to the Tuner and feeds it a reading, with no audio anywhere.
     fn tuned_to(hz: f32) -> App {
         let (mut app, _) = App::new();
         let _ = app.update(Message::Navigate(Screen::Tuner));
@@ -550,7 +495,6 @@ mod screen_tests {
     fn the_tuner_is_reachable_and_leavable_like_every_other_screen() {
         let (mut app, _) = App::new();
 
-        // Present in the menu, and as the eighth entry it has a digit.
         let entry = HOME_MENU
             .iter()
             .position(|item| item.screen == Screen::Tuner)
@@ -572,8 +516,7 @@ mod screen_tests {
 
     #[test]
     fn an_open_string_is_named_with_its_octave() {
-        // 82.41 Hz is the open low E. Naming it "E" would be the pitch-class answer, and
-        // the whole reason this screen needed absolute pitch.
+        // the open low E
         let app = tuned_to(82.41);
         let (pitch, cents) = app
             .tuner
@@ -593,8 +536,7 @@ mod screen_tests {
 
     #[test]
     fn a_badly_mistuned_string_reads_as_what_it_is() {
-        // A low E tuned a semitone flat sounds D#2, and the screen says so rather than
-        // calling it a very flat E. The trade chromatic buys, stated in the spec.
+        // a low E a semitone flat reads D#2, not a very flat E
         let app = tuned_to(77.78);
         let (pitch, _) = app.tuner.listener().reading().expect("a reading");
 
@@ -604,7 +546,7 @@ mod screen_tests {
 
     #[test]
     fn an_alternate_tuning_needs_no_setting() {
-        // Drop D: the lowest string at D2, with nothing having been configured.
+        // drop D
         let app = tuned_to(73.42);
         let (pitch, cents) = app.tuner.listener().reading().expect("a reading");
 
@@ -643,13 +585,10 @@ mod screen_tests {
     fn the_four_states_are_distinguishable() {
         let (mut app, _) = App::new();
 
-        // Before the screen is entered, nothing is being listened to.
         assert_eq!(app.tuner.listener().state(), listener::State::NotStarted);
 
         let _ = app.update(Message::Navigate(Screen::Tuner));
-        // Whether a device opened depends on the machine, so both are legitimate here —
-        // what matters is that silence and a reading are distinct from each other and
-        // from a failure, which the arms below assert.
+        // whether a device opened depends on the machine
         let opened = app.tuner.listener().error().is_none();
 
         let _ = app.update(Message::Heard(Heard::Silence));
@@ -687,7 +626,7 @@ mod screen_tests {
     fn a_strum_names_nothing() {
         let mut app = tuned_to(440.0);
 
-        // What the detector releases for a chord: nothing nameable, at any level.
+        // what the detector releases for a chord
         let _ = app.update(Message::Heard(Heard::Unpitched));
         assert!(app.tuner.listener().reading().is_none());
     }
@@ -701,7 +640,7 @@ mod screen_tests {
         let _ = app.update(Message::OpenDevices);
         assert!(app.tuner.listener().is_picking(), "the list did not open");
 
-        // The list claims the vertical pair while it is up, and clamps rather than wraps.
+        // clamps rather than wraps
         let offered = app.tuner.listener().devices().len();
         let _ = app.update(Message::FocusDown);
         let _ = app.update(Message::FocusDown);
@@ -717,12 +656,10 @@ mod screen_tests {
             "the highlight wrapped"
         );
 
-        // Esc closes the list rather than leaving the screen.
         let _ = app.update(Message::GoBack);
         assert!(!app.tuner.listener().is_picking());
         assert_eq!(app.screen, Screen::Tuner, "Esc left the screen as well");
 
-        // And then Esc does leave it.
         let _ = app.update(Message::GoBack);
         assert_eq!(app.screen, Screen::Home);
     }
@@ -744,7 +681,7 @@ mod screen_tests {
 
     #[test]
     fn i_renames_the_pitch_without_touching_any_other_screen() {
-        let mut app = tuned_to(233.08); // A#3 / Bb3 — one of the five with two names.
+        let mut app = tuned_to(233.08); // A#3 / Bb3
         let before = app.notation;
 
         press_into(&mut app, "i", keyboard::Modifiers::empty());
@@ -777,9 +714,7 @@ mod screen_tests {
         let (mut app, _) = App::new();
         let _ = app.update(Message::Navigate(Screen::Tuner));
 
-        // `a` widens the Note Trainer's pool, `r` rerolls on three other screens, and the
-        // library's `d` picks degrees — none of which this screen claims. `d` *is* claimed
-        // here, and means the device list, which is the point of a per-screen table.
+        // `a` and `r` are bound on other screens
         let spelling = app.tuner.spelling();
         for key in ["a", "r"] {
             let _ = app.update(Message::Key(
@@ -812,7 +747,6 @@ mod direction_tests {
         app
     }
 
-    /// A frequency a given number of cents from A4.
     fn off_by(cents: f32) -> f32 {
         440.0 * 2.0f32.powf(cents / 1200.0)
     }
@@ -842,9 +776,7 @@ mod direction_tests {
 
     #[test]
     fn the_correction_and_the_in_tune_colouring_agree_on_where_the_boundary_is() {
-        // Just inside and just outside, on both sides. The two must flip together — a dial
-        // that reads "in tune" beside a line saying "keep going" is the one failure this
-        // pairing can have.
+        // just inside and just outside `IN_TUNE_CENTS`, on both sides
         let inside = 2.9;
         let outside = 3.1;
 

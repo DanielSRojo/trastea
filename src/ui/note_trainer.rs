@@ -1,13 +1,4 @@
 //! The Note Trainer: the drill's state machine and the screen that draws it.
-//!
-//! Both halves live here so the state can keep its fields to itself. They are read all over
-//! the views below and nowhere else — `App` drives the drill through the handful of methods
-//! marked `pub(super)` and never touches what is behind them. Splitting the views out to the
-//! parent would mean opening every field up to it, which is the encapsulation this module
-//! exists to hold.
-//!
-//! What the neck *is* — its strings, its frets, the note under a finger — stays in the
-//! parent: that is the instrument, and the next trainer will want it on the same terms.
 
 use iced::{Color, Element, Padding};
 
@@ -24,17 +15,7 @@ use super::{Message, ROOT_BUTTON_SIZE, SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT
 use crate::music::notes::{PitchClass, Spelling};
 use crate::rng::Rng;
 
-/// What the Note Trainer is asking right now.
-///
-/// The variant *is* the drill direction — there is deliberately no separate `direction`
-/// field. Two encodings of one fact could disagree, and a `FindIt` prompt on screen while
-/// a `direction` field said `NameIt` is a state the view would render as nonsense. Here
-/// each payload is reachable only through the variant that owns it, so the mismatch does
-/// not exist to be guarded against.
-///
-/// The two directions carry genuinely different payloads, which is the other half of why
-/// this is an enum rather than a struct with a tag: *Name it* knows a position and wants a
-/// pitch class, *Find it* knows a pitch class and wants a position.
+/// What the Note Trainer is asking right now. The variant is the drill direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Prompt {
     /// A lit position; the answer names the note on it.
@@ -44,10 +25,6 @@ enum Prompt {
 }
 
 /// What the user offered in reply to a `Prompt`.
-///
-/// Shaped like `Prompt` because the two answer surfaces mirror the two directions. A
-/// mismatched pair is a wiring bug rather than something a user can produce, since the
-/// view only ever draws the surface the current prompt can accept.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Answer {
     Name(PitchClass),
@@ -55,9 +32,6 @@ enum Answer {
 }
 
 /// Which pitch classes prompts are drawn from.
-///
-/// Naturals first: it is a smaller map, and it has to be automatic before the accidentals
-/// between its notes mean anything.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Pool {
     Naturals,
@@ -86,33 +60,20 @@ impl Prompt {
     }
 }
 
-/// The Note Trainer's whole state.
-///
-/// No iced types here on purpose: the drill is a state machine, and keeping it one means
-/// the streak rules and the judging can be tested without a widget tree or a renderer.
+/// No iced types here, so the drill is testable without a widget tree.
 pub(super) struct NoteTrainer {
     prompt: Prompt,
     pool: Pool,
-    /// How this screen writes note names. Its own, not the scale trainer's — a spelling
-    /// chosen while practising scales has no business renaming the answer buttons here.
+    /// Separate from the scale trainer's spelling.
     spelling: Spelling,
     score: Score<Answer>,
     cursor: Position,
 }
 
 impl NoteTrainer {
-    /// Note the `&mut Rng` on this and on everything that redraws a prompt.
-    ///
-    /// The generator lives on `App` beside this struct, and a method here cannot reach it:
-    /// `&mut self.note_trainer` and `&mut self.rng` are two mutable borrows of one `App`.
-    /// Passing it in is the idiomatic answer, and it is also what keeps the drill seedable
-    /// from the tests. A second generator of its own would mean a second seed.
     pub(super) fn new(rng: &mut Rng) -> Self {
         let mut trainer = Self {
-            // Replaced by `draw_prompt` before anyone sees it; it exists only to give the
-            // rejection loop something to differ from. There is no `Default` for the same
-            // reason `App` has none — a constant first prompt would make every launch open
-            // on the same note.
+            // Replaced by `draw_prompt` before anyone sees it.
             prompt: Prompt::NameIt { string: 0, fret: 0 },
             pool: Pool::Naturals,
             spelling: Spelling::Sharps,
@@ -125,8 +86,6 @@ impl NoteTrainer {
     }
 
     /// Every position on the neck whose note is in the current pool.
-    ///
-    /// Allocates, which is fine at the once-per-prompt rate a human answers at.
     fn positions(&self) -> Vec<(usize, usize)> {
         let mut positions = Vec::new();
 
@@ -144,13 +103,8 @@ impl NoteTrainer {
         positions
     }
 
-    /// Draws a fresh prompt of `drill`, never the one already showing.
-    ///
-    /// Same rejection loop as `reroll_scale`. It terminates only because every pool holds
-    /// at least two distinct prompts — 7 naturals at the smallest — so the assertion below
-    /// is load-bearing rather than decorative: a future "drill one note" setting would
-    /// turn this into a hang, and a hang inside a rejection loop is a miserable bug to
-    /// find.
+    /// Draws a fresh prompt of `drill`, never the one already showing. Terminates only
+    /// because every pool holds at least two distinct prompts.
     fn draw_prompt(&mut self, drill: Drill, rng: &mut Rng) {
         self.prompt = rng.draw_other_than(self.prompt, |rng| match drill {
             Drill::NameIt => {
@@ -174,9 +128,7 @@ impl NoteTrainer {
             }
         });
 
-        // Both kinds of feedback belong to the prompt they were given against, so a new
-        // prompt arrives with a clean surface — and a skip or a toggle during the flash
-        // ends it, since every one of them comes through here.
+        // Feedback belongs to the prompt it was given against; a skip or toggle also ends the flash.
         self.score.next_prompt();
     }
 
@@ -186,14 +138,11 @@ impl NoteTrainer {
             (Prompt::NameIt { string, fret }, Answer::Name(named)) => {
                 DRILL_NECK.pitch_class_at(string, fret) == Some(named)
             }
-            // Any position carrying the note counts: a note really is in seven places
-            // within twelve frets, and none of them is more correct than another.
+            // Any position carrying the note counts.
             (Prompt::FindIt(target), Answer::Position { string, fret }) => {
                 DRILL_NECK.pitch_class_at(string, fret) == Some(target)
             }
-            // A mismatched pair is a wiring bug, not something a user can produce — the
-            // view only draws the surface the current prompt accepts. `false` rather than
-            // a panic, so the symptom is "every answer is wrong" instead of a crash.
+            // A mismatched pair is a wiring bug; `false` rather than a panic.
             _ => false,
         }
     }
@@ -204,52 +153,33 @@ impl NoteTrainer {
     }
 
     /// Answers with a note name — the *Name it* surface.
-    ///
-    /// `Answer` is built here rather than by the caller, which is what keeps it, `Prompt`,
-    /// and `Pool` private to this module: `App` names a pitch class or a position, and the
-    /// shape they travel in is the drill's own business.
     pub(super) fn answer_name(&mut self, pitch_class: PitchClass) {
         self.answer(Answer::Name(pitch_class));
     }
 
     /// Answers with a position, and takes the cursor there.
-    ///
-    /// The cursor follows, so the mouse and the keyboard never disagree about where it is —
-    /// and because a press *is* a move-then-answer, the two arrive as one call rather than
-    /// as an assignment the caller has to remember to make first.
     pub(super) fn answer_position(&mut self, string: usize, fret: usize) {
         self.cursor = Position { string, fret };
         self.answer(Answer::Position { string, fret });
     }
 
     /// Answers with wherever the cursor is sitting — what Enter on the neck does.
-    ///
-    /// The same thing a press on that position would send, reached the other way round: the
-    /// cursor is already there, so only the answer half of `answer_position` is left to do.
     pub(super) fn answer_at_cursor(&mut self) {
         let Position { string, fret } = self.cursor;
         self.answer(Answer::Position { string, fret });
     }
 
     /// Whether a correct answer is lit, which is the window the flash timer runs in.
-    ///
-    /// A question rather than the `Option` itself: the subscription only needs to know that
-    /// the pause is on, not what is being marked.
     pub(super) fn is_flashing(&self) -> bool {
         self.score.is_flashing()
     }
 
-    /// Which way the drill is running. The focus grid asks, because the answer surface — and
-    /// so what is focusable at all — differs between the two directions.
     pub(super) fn drill(&self) -> Drill {
         self.prompt.drill()
     }
 
-    /// Ends the flash a correct answer left on screen and draws the next prompt.
-    ///
-    /// A no-op when nothing is being marked, so a tick that outlived its flash — one that
-    /// crossed a skip, or landed after the screen was left — cannot retire a prompt the
-    /// learner is still reading.
+    /// Ends the flash and draws the next prompt. A no-op when nothing is being marked, so
+    /// a stale tick cannot retire the prompt on screen.
     pub(super) fn advance(&mut self, rng: &mut Rng) {
         if self.score.is_flashing() {
             let drill = self.prompt.drill();
@@ -281,9 +211,7 @@ impl NoteTrainer {
         self.draw_prompt(drill, rng);
     }
 
-    /// Cosmetic, unlike every other toggle here: it renames what is on screen and changes
-    /// nothing about the drill. Judging compares pitch classes, so it cannot even change
-    /// whether an answer is right.
+    /// Cosmetic: judging compares pitch classes, so it cannot change whether an answer is right.
     pub(super) fn toggle_spelling(&mut self) {
         self.spelling = match self.spelling {
             Spelling::Sharps => Spelling::Flats,
@@ -299,19 +227,12 @@ impl NoteTrainer {
         self.draw_prompt(drill, rng);
     }
 
-    /// Walks the cursor one position, stopping at the neck's edges rather than wrapping —
-    /// the same way the focus ring already behaves at the edge of a grid.
-    ///
-    /// Up is towards the nut, because the neck is drawn with the nut at the top.
+    /// Walks the cursor one position, stopping at the neck's edges rather than wrapping.
     pub(super) fn move_cursor(&mut self, direction: Direction) {
         self.cursor = self.cursor.step(direction);
     }
 }
 
-/// The Note Trainer.
-///
-/// Both directions share this one function, branching on the prompt's variant, because the
-/// header, the streak, and the neck are common to both — only the answer surface differs.
 pub(super) fn ui_note_trainer(
     trainer: &NoteTrainer,
     focused: FocusTarget,
@@ -327,7 +248,7 @@ pub(super) fn ui_note_trainer(
             ..Fretboard::default()
         },
         // Here the neck is the answer surface, so it takes a press handler and shows the
-        // cursor. Guesses stay marked on it until the prompt advances.
+        // cursor.
         Prompt::FindIt(_) => Fretboard {
             num_frets: DRILL_NECK.frets(),
             highlighted: position_markers(trainer),
@@ -371,8 +292,7 @@ pub(super) fn ui_note_trainer(
     .padding(32)
     .style(card_container);
 
-    // Only *Name it* has a second card; in *Find it* the neck already is the answer surface,
-    // so nothing goes here and the prompt card gets the room.
+    // Only *Name it* has a second card; in *Find it* the neck is the answer surface.
     let details = match trainer.prompt {
         Prompt::NameIt { .. } => column![prompt_card, note_answer_card(trainer, focused)],
         Prompt::FindIt(_) => column![prompt_card],
@@ -393,19 +313,8 @@ pub(super) fn ui_note_trainer(
         .into()
 }
 
-/// The position the *Name it* prompt is asking about, as a marker on the neck — or nothing
-/// at all in *Find it*, where the prompt is a note name in the card and the neck is the
-/// answer surface.
-///
-/// An unfilled ring, and deliberately so. A fill is what this screen uses to say "you put
-/// this here": the guesses in `position_markers` are filled, and so are the scale trainer's
-/// dots. The prompt is the opposite — a question about a spot with nothing on it yet — and a
-/// solid dot read as an answer already placed.
-///
-/// Unlabelled for a separate reason: a label would print the answer inside the question.
-///
-/// A `Vec` rather than an `Option<NoteMarker>` so it drops straight into `highlighted`, and
-/// so a prompt that ever wants two marks needs no new signature.
+/// The *Name it* prompt's position as an unfilled, unlabelled ring, since a fill means an
+/// answer placed and a label would print the answer.
 fn prompt_marker(trainer: &NoteTrainer) -> Vec<NoteMarker> {
     match trainer.prompt {
         Prompt::NameIt { string, fret } => vec![NoteMarker {
@@ -419,18 +328,8 @@ fn prompt_marker(trainer: &NoteTrainer) -> Vec<NoteMarker> {
     }
 }
 
-/// The positions guessed against the current prompt, as markers on the neck: the wrong ones
-/// in the danger colour, and the one that scored in the success colour.
-///
-/// Filled, both of them — that is what keeps them readable as answers rather than as the
-/// question. The ring belongs to the prompt alone; see `prompt_marker`.
-///
-/// The right answer comes last so it is drawn over the wrong ones, which matters only if a
-/// learner presses the same fret twice — and there the green is the newer news.
-///
-/// Only `Answer::Position` guesses can appear on a neck; a `Name` guess belongs to the other
-/// direction and is filtered out rather than being an error, since both lists are cleared
-/// whenever the prompt advances and the two can never mix in practice.
+/// The positions guessed against the current prompt, filled. The right answer comes last so
+/// it is drawn over a wrong one on the same fret.
 fn position_markers(trainer: &NoteTrainer) -> Vec<NoteMarker> {
     let marker = |answer: &Answer, color: Color| match *answer {
         Answer::Position { string, fret } => Some(NoteMarker {
@@ -458,11 +357,8 @@ fn position_markers(trainer: &NoteTrainer) -> Vec<NoteMarker> {
         .collect()
 }
 
-/// The header row: direction, pool, spelling, skip.
-///
-/// The first three are labelled with the mode they are *currently* in rather than with what
-/// pressing them would do, so the row doubles as a status line — there is nowhere else on
-/// this screen that says which way the drill is running.
+/// The header row: direction, pool, spelling, skip. Labelled with the current mode, so it
+/// doubles as a status line.
 fn note_trainer_controls(trainer: &NoteTrainer, focused: FocusTarget) -> Element<'static, Message> {
     use iced::widget::{row, text};
 
@@ -502,10 +398,7 @@ fn note_trainer_controls(trainer: &NoteTrainer, focused: FocusTarget) -> Element
     .into()
 }
 
-/// The twelve answer buttons.
-///
-/// All twelve under either pool: narrowing them to the seven naturals would make a wrong
-/// answer unreachable, and a drill you cannot fail teaches nothing.
+/// All twelve answer buttons under either pool, so a wrong answer stays reachable.
 fn note_answer_card(trainer: &NoteTrainer, focused: FocusTarget) -> Element<'static, Message> {
     use iced::Length;
     use iced::widget::{column, container};
@@ -572,8 +465,7 @@ fn note_answer_row(
             .width(Length::Fixed(ROOT_BUTTON_SIZE))
             .height(Length::Fixed(ROOT_BUTTON_SIZE))
             .padding(0)
-            // Right beats wrong: they cannot both be this button under one prompt, but if
-            // that ever changes, the answer that scored is the one worth showing.
+            // Right beats wrong, should both ever apply.
             .style(if was_right {
                 correct_answer_button
             } else if was_wrong {
@@ -686,9 +578,7 @@ mod tests {
         }
     }
 
-    /// Answers correctly and lets the flash run its course, which is what the timer does a
-    /// second later. Tests about the streak want the drill moving; the ones about the pause
-    /// itself call `answer` and stop there.
+    /// Answers correctly and lets the flash run its course, as the timer would.
     fn answer_and_advance(trainer: &mut NoteTrainer, rng: &mut Rng) {
         let answer = correct_answer(trainer);
         trainer.answer(answer);
@@ -705,8 +595,6 @@ mod tests {
         }
     }
 
-    /// The pause: a correct answer marks itself and holds the prompt, and the drill takes
-    /// nothing else until the flash ends.
     #[test]
     fn a_correct_answer_is_marked_and_holds_the_prompt() {
         let (mut trainer, mut rng) = trainer_with_seed(0xf1a5);
@@ -744,8 +632,6 @@ mod tests {
         assert_ne!(trainer.prompt, standing, "the flash never ended");
     }
 
-    /// The flash belongs to the prompt it was given against, so anything that retires that
-    /// prompt ends it — including the learner moving on before the second is up.
     #[test]
     fn moving_on_ends_the_flash_early() {
         let (mut trainer, mut rng) = trainer_with_seed(0xea51);
@@ -769,8 +655,7 @@ mod tests {
         }
     }
 
-    /// A tick can outlive its flash — one that crossed a skip, or arrived after the screen
-    /// was left. It must not retire the prompt now on screen.
+    /// A tick that crossed a skip or a screen change must not retire the prompt on screen.
     #[test]
     fn advancing_without_a_flash_does_nothing() {
         let (mut trainer, mut rng) = trainer_with_seed(0x71c4);
@@ -804,8 +689,6 @@ mod tests {
         );
     }
 
-    /// The prompt is only ever retired by a correct answer or a skip, so the learner can
-    /// keep trying — and every wrong guess stays marked while they do.
     #[test]
     fn wrong_answers_accumulate_until_the_prompt_advances() {
         let (mut trainer, mut rng) = trainer_with_seed(0x5eed);
@@ -832,8 +715,7 @@ mod tests {
         trainer.answer(wrongs[0]);
         assert_eq!(trainer.score.wrong().len(), before);
 
-        // The right answer joins them rather than clearing them: for as long as the flash
-        // is up, the learner can see what they tried and what it turned out to be.
+        // The right answer joins them rather than clearing them.
         trainer.answer(Answer::Name(actual));
         assert_eq!(trainer.score.wrong().len(), before);
 
@@ -870,12 +752,10 @@ mod tests {
         assert_eq!((trainer.score.streak(), trainer.score.best()), (0, 5));
     }
 
-    /// The point of judging by pitch class: a learner who thinks in flats is never marked
-    /// wrong for it.
     #[test]
     fn the_two_names_of_a_black_key_are_one_answer() {
         let (mut trainer, _) = trainer_with_seed(0);
-        // Open low E plus two semitones — F sharp, or G flat.
+        // Open low E plus two semitones — F♯, or G♭.
         trainer.prompt = Prompt::NameIt { string: 0, fret: 2 };
 
         let pitch_class = DRILL_NECK.pitch_class_at(0, 2).unwrap();
@@ -933,8 +813,6 @@ mod tests {
         );
     }
 
-    /// A note is in seven places within twelve frets, and the drill singles none of them
-    /// out.
     #[test]
     fn find_it_accepts_every_position_carrying_the_note() {
         let (mut trainer, _) = trainer_with_seed(0);
@@ -953,8 +831,7 @@ mod tests {
         assert!(accepted > 1, "G should appear more than once on the neck");
     }
 
-    /// Recorded rather than incidental: a mismatched pair means the view wired the wrong
-    /// answer surface to the prompt, and the chosen symptom is "always wrong", not a panic.
+    /// A mismatched pair is always wrong, not a panic.
     #[test]
     fn an_answer_of_the_wrong_shape_is_simply_wrong() {
         let (mut trainer, _) = trainer_with_seed(0);
@@ -982,7 +859,6 @@ mod tests {
         assert_eq!(trainer.prompt.drill(), Drill::NameIt);
     }
 
-    /// Spelling is the one toggle that is pure chrome.
     #[test]
     fn toggling_the_spelling_changes_nothing_but_the_names() {
         let (mut trainer, mut rng) = trainer_with_seed(8);
@@ -1000,7 +876,6 @@ mod tests {
         );
     }
 
-    /// The control says which spelling is running, so it has to move when the spelling does.
     #[test]
     fn the_spelling_control_wears_the_spelling_in_force() {
         let (mut trainer, _) = trainer_with_seed(8);
@@ -1043,12 +918,8 @@ mod tests {
         app
     }
 
-    /// Answers the current prompt correctly, through whichever message the view would send
-    /// for the direction in play. Which surface answers is the prompt's business, not the
-    /// caller's — the same reason `Prompt` carries the direction.
-    ///
-    /// The flash's timer message follows, standing in for the second the subscription
-    /// spends waiting, so the drill ends up where a learner would find it.
+    /// Answers the current prompt correctly through whichever message the view would send,
+    /// then sends the flash's timer message.
     fn answer_correctly(app: &mut App) {
         let message = match correct_answer(&app.note_trainer) {
             Answer::Name(pitch_class) => Message::AnswerNote(pitch_class),
@@ -1068,8 +939,6 @@ mod tests {
         assert!(app.note_trainer.score.wrong().is_empty());
     }
 
-    /// The screen never reopens on what it last showed, exactly as the scale trainer never
-    /// reopens on its last scale.
     #[test]
     fn reopening_the_note_trainer_draws_a_fresh_prompt() {
         let mut app = note_trainer_app(0xfa11);
@@ -1280,9 +1149,6 @@ mod tests {
         assert_eq!(markers[0].style, MarkerStyle::Filled);
     }
 
-    /// The prompt is a ring, not a dot. On a screen where a fill means "you put this here",
-    /// the question has to look unlike the answers — so this checks the shape as closely as
-    /// it checks the position.
     #[test]
     fn the_name_it_prompt_is_an_unfilled_ring() {
         let (mut trainer, mut rng) = trainer_with_seed(0x21e6);
@@ -1305,8 +1171,7 @@ mod tests {
             "the prompt printed its own answer"
         );
 
-        // ...and the other direction puts nothing of the prompt on the neck: there the note
-        // is named in the card and the neck is the answer surface.
+        // ...and the other direction puts nothing of the prompt on the neck.
         trainer.toggle_direction(&mut rng);
         assert!(
             prompt_marker(&trainer).is_empty(),
@@ -1314,8 +1179,6 @@ mod tests {
         );
     }
 
-    /// The other half of the neck's feedback: the position that scored is marked too, in
-    /// the success colour, for as long as the flash lasts.
     #[test]
     fn a_right_cursor_position_marks_the_neck_green() {
         let mut app = find_it_app(0x9e);
@@ -1343,8 +1206,6 @@ mod tests {
         assert!(position_markers(&app.note_trainer).is_empty());
     }
 
-    /// The *Name it* half of the same thing: the button that scored is filled in the success
-    /// colour, which is the state `note_answer_row` styles.
     #[test]
     fn a_right_answer_marks_its_button() {
         let mut app = note_trainer_app(0xb17);
@@ -1364,8 +1225,7 @@ mod tests {
         assert_eq!(app.note_trainer.score.correct(), None);
     }
 
-    /// The flash's tick is the clock talking, not the user, so it must not be spent
-    /// dismissing the help overlay the way a keypress would be.
+    /// The flash's tick is not a keypress, so it must not dismiss the help overlay.
     #[test]
     fn the_flash_ends_behind_the_help_overlay() {
         let mut app = note_trainer_app(0x4e19);
@@ -1383,8 +1243,7 @@ mod tests {
         assert_ne!(app.note_trainer.prompt, standing, "the drill stalled");
     }
 
-    /// A click reports through the fretboard's press handler, which is the same message the
-    /// canvas would publish, and it also drags the cursor along.
+    /// A click sends the canvas's press message and drags the cursor along.
     #[test]
     fn a_press_on_the_neck_answers_and_moves_the_cursor() {
         let mut app = find_it_app(0x5a);
@@ -1423,8 +1282,7 @@ mod tests {
             "d did not swap"
         );
 
-        // Focus is left where it was even though that widget is gone in the new direction;
-        // `step_focus` snaps a stale target back onto the grid on the next motion.
+        // Focus stays on a widget gone in the new direction; `step_focus` snaps it back.
         press_named(&mut app, Named::Tab);
         assert!(app.focusables().contains(&app.focused));
 
@@ -1453,8 +1311,7 @@ mod tests {
         }
     }
 
-    /// `i` toggles interval notation on the scale trainer and must stay inert on the Note
-    /// Trainer — now because that screen declares no `i`, not because it is empty.
+    /// `i` toggles interval notation on the scale trainer and must stay inert here.
     #[test]
     fn the_interval_notation_key_is_inert_on_the_note_trainer() {
         let mut app = note_trainer_app(0x11);
@@ -1490,12 +1347,8 @@ mod tests {
         }
     }
 
-    /// Builds the widget tree for every screen and every drill direction.
-    ///
-    /// A compiling view is not a working one: sizes, alignments, and `Length` combinations
-    /// are checked when the tree is constructed, not by the type system. This is the cheapest
-    /// stand-in for launching the app, and it covers the states a hand-drill would reach —
-    /// including one with wrong answers marked on both surfaces.
+    /// Builds the widget tree for every screen and drill direction, since layout is checked
+    /// at construction rather than by the type system.
     #[test]
     fn every_screen_builds_its_view() {
         let mut app = app_with_seed(0x21e0);
@@ -1510,8 +1363,7 @@ mod tests {
             app.help_open = false;
         }
 
-        // The scale drill, in every shape it draws: pressing, playing, with the neck hidden,
-        // and with a device picker up.
+        // The scale drill: pressing, playing, with the neck hidden, and with a picker up.
         app.open(Screen::WalkTheScale);
         let _ = app.view();
         let _ = app.update(Message::CycleScaleDuration);
@@ -1528,8 +1380,7 @@ mod tests {
         app.open(Screen::NoteTrainer);
 
         for _ in 0..2 {
-            // A wrong answer in whichever direction is current, so the feedback path is
-            // built too.
+            // A wrong answer in whichever direction is current, so the feedback path is built.
             let wrong = wrong_answer(&app.note_trainer);
             let message = match wrong {
                 Answer::Name(pitch_class) => Message::AnswerNote(pitch_class),

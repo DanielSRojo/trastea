@@ -1,28 +1,11 @@
-//! A small deterministic pseudo-random number generator.
-//!
-//! Trastea only ever needs to pick one item out of a list of a dozen or two, so
-//! this is a hand-written splitmix64 rather than a dependency on `rand`. The
-//! important property is not statistical quality but that the state lives
-//! somewhere and is *carried*: drawing a number takes `&mut self`, so two draws
-//! in a row cannot come out correlated the way two clock reads do.
-//!
-//! Seed it once and it is reproducible, which is what lets the tests here and in
-//! `ui` assert things about the sequence.
+//! A seedable splitmix64 generator, so tests can reproduce drill sequences.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 2^64 divided by the golden ratio, rounded to an odd number.
-///
-/// Any odd addend walks the whole of `u64` before repeating; this is the specific
-/// constant splitmix64 is defined with.
 const GOLDEN_GAMMA: u64 = 0x9e37_79b9_7f4a_7c15;
 
-/// A splitmix64 generator.
-///
-/// The state advances by adding [`GOLDEN_GAMMA`], and the output is that state
-/// run through two rounds of xor-shift-multiply. Because the state moves by
-/// addition rather than by shifting, no seed is degenerate — a plain xorshift is
-/// stuck at zero forever if it is ever seeded with zero, and this is not.
+/// The state advances by addition, so unlike xorshift no seed (not even zero) is degenerate.
 pub struct Rng {
     state: u64,
 }
@@ -33,26 +16,19 @@ impl Rng {
         Self { state: seed }
     }
 
-    /// Seeds from the wall clock, for a sequence that differs between runs.
-    ///
-    /// Call this once, at startup — reading the clock per draw is what made the
-    /// old `random_note`/`random_scale_kind` pair correlated.
+    /// Seeds from the wall clock. Call once at startup; clock reads per draw come out correlated.
     pub fn from_clock() -> Self {
         let since_epoch = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
 
-        // The nanoseconds occupy only the low 30 bits, so the seconds are shifted
-        // clear of them instead of xored on top.
+        // nanoseconds fit in the low 30 bits, so the seconds are shifted clear of them
         let seed = (since_epoch.as_secs() << 30) ^ u64::from(since_epoch.subsec_nanos());
 
         Self::from_seed(seed)
     }
 
-    /// Advances the state and returns the scrambled output.
-    ///
-    /// `wrapping_add`/`wrapping_mul` are the point of the algorithm, not a way to
-    /// dodge an overflow check: splitmix64 is defined in arithmetic modulo 2^64.
+    /// Wrapping arithmetic is intended: splitmix64 is defined modulo 2^64.
     fn next_u64(&mut self) -> u64 {
         self.state = self.state.wrapping_add(GOLDEN_GAMMA);
 
@@ -62,10 +38,7 @@ impl Rng {
         z ^ (z >> 31)
     }
 
-    /// A uniform index into a slice of `len` items.
-    ///
-    /// Plain modulo, no rejection sampling: the bias is on the order of
-    /// `len / 2^64`, which for the sizes here is around one part in 10^18.
+    /// A uniform index into a slice of `len` items. Modulo bias is about `len / 2^64`.
     ///
     /// # Panics
     ///
@@ -78,12 +51,7 @@ impl Rng {
 
     /// Draws with `draw` until it yields something other than `current`.
     ///
-    /// The rule every reroll and every fresh prompt follows — a press always changes what is on
-    /// screen — as one rejection loop. `draw` is handed the generator rather than capturing
-    /// it, so it can borrow whatever else it needs to build a candidate.
-    ///
-    /// Never returns if `draw` can only produce `current`. Callers whose pool could shrink
-    /// that far say so with a `debug_assert!` beside the call.
+    /// Never returns if `draw` can only produce `current`.
     pub fn draw_other_than<T: PartialEq>(
         &mut self,
         current: T,
@@ -105,8 +73,7 @@ mod tests {
 
     #[test]
     fn matches_the_reference_vectors() {
-        // The published splitmix64 outputs for a zero seed. If a constant or a
-        // shift is mistyped, this is what catches it.
+        // the published splitmix64 outputs for a zero seed
         let mut rng = Rng::from_seed(0);
 
         assert_eq!(rng.next_u64(), 0xe220_a839_7b1d_cdaf);
@@ -116,8 +83,6 @@ mod tests {
 
     #[test]
     fn a_zero_seed_is_not_degenerate() {
-        // The trap a plain xorshift would fall into: seeded with zero it emits
-        // zeroes forever.
         let mut rng = Rng::from_seed(0);
         let drawn: HashSet<u64> = (0..64).map(|_| rng.next_u64()).collect();
 
@@ -137,8 +102,7 @@ mod tests {
 
     #[test]
     fn adjacent_seeds_do_not_produce_adjacent_output() {
-        // Seeds one apart are what two clock reads a few hundred nanoseconds apart
-        // look like; the scrambler has to pull them far apart.
+        // seeds one apart are what two close clock reads look like
         let first = Rng::from_seed(1).next_u64();
         let second = Rng::from_seed(2).next_u64();
 
@@ -176,8 +140,7 @@ mod tests {
         let mut rng = Rng::from_seed(7);
         let mut current = 0;
 
-        // Two values is the smallest pool the loop can end on, so every draw that repeats
-        // has to be rejected rather than returned.
+        // a pool of two forces every repeat to be rejected
         for _ in 0..200 {
             let next = rng.draw_other_than(current, |rng| rng.below(2));
             assert_ne!(next, current);

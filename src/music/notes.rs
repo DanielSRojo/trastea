@@ -1,18 +1,12 @@
 use std::fmt;
 
-/// One of twelve pitch classes. All arithmetic lives here.
+/// One of twelve pitch classes, always 0..=11. All arithmetic lives here.
 ///
-/// The field is private because it carries an invariant — always 0..=11 — and
-/// `new` is the only way in. There is deliberately no `Display`: naming a pitch
-/// class means choosing a letter, and that choice needs context this type does
-/// not have. See [`Spelling::spell`] and `Scale::spell`.
+/// No `Display`: naming one needs a spelling. See [`Spelling::spell`] and `Scale::spell`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PitchClass(u8);
 
 impl PitchClass {
-    /// A fixed-size array, unlike the slices elsewhere: a miscount is then a
-    /// compile error. It does not catch a thirteenth pitch class going unlisted,
-    /// but there will never be one.
     pub const ALL: [PitchClass; 12] = [
         PitchClass::new(0),
         PitchClass::new(1),
@@ -29,11 +23,6 @@ impl PitchClass {
     ];
 
     /// The seven pitch classes a letter names without an accidental — the white keys.
-    ///
-    /// Pitch classes rather than [`Letter`]s, because the callers that want this want to
-    /// draw one at random and compare it to what is under a fret, and a letter would have
-    /// to be converted at every such use. `Letter::ALL` stays private for the reason its
-    /// own comment gives.
     pub const NATURALS: [PitchClass; 7] = [
         PitchClass::new(0),  // C
         PitchClass::new(2),  // D
@@ -53,30 +42,22 @@ impl PitchClass {
     }
 
     pub fn transpose(self, semitones: u8) -> PitchClass {
-        // `semitones % 12` first, so the sum cannot exceed 22 and overflow a u8.
+        // `semitones % 12` first, so the sum cannot overflow a u8
         PitchClass::new(self.0 + semitones % 12)
     }
 
     /// `transpose` for a step that can go down.
-    ///
-    /// `rem_euclid` and not `%`, because `%` keeps the sign of the dividend: `(-1) % 12` is
-    /// `-1`, while `(-1).rem_euclid(12)` is 11 — the semitone below, by the same modular add.
     pub fn shift(self, semitones: i32) -> PitchClass {
-        // 0..=11 after `rem_euclid`, so the cast cannot truncate.
         self.transpose(semitones.rem_euclid(12) as u8)
     }
 
     /// How many semitones up from `self` to `other`, within the octave: always 0..=11.
-    ///
-    /// Upward, because a pitch class has no octave to sit below another in — E up to C is 8,
-    /// never -4.
     pub fn semitones_up_to(self, other: PitchClass) -> u8 {
         (other.0 + 12 - self.0) % 12
     }
 }
 
-/// The seven letter names, ordered from C rather than A, so `as usize` indexes
-/// [`Letter::ALL`] and `step` is one modular add.
+/// The seven letter names, ordered from C so `as usize` indexes [`Letter::ALL`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Letter {
     C,
@@ -89,8 +70,6 @@ pub enum Letter {
 }
 
 impl Letter {
-    /// Private: `step` is the only reason this list exists, and nothing outside
-    /// this module needs to enumerate letters.
     const ALL: [Letter; 7] = [
         Letter::C,
         Letter::D,
@@ -154,8 +133,7 @@ impl Accidental {
         }
     }
 
-    /// `None` beyond ±2. Triple accidentals are unreachable in this domain, so
-    /// they stay unrepresentable rather than being rounded into range.
+    /// `None` beyond ±2; triple accidentals are unrepresentable.
     pub fn from_offset(offset: i8) -> Option<Accidental> {
         match offset {
             -2 => Some(Accidental::DoubleFlat),
@@ -167,15 +145,7 @@ impl Accidental {
         }
     }
 
-    /// The typewriter spelling, for text the fretboard canvas draws: that canvas
-    /// draws with one font, so the SMuFL glyphs the cards use cannot appear inside
-    /// a marker. The empty string for a natural is the point of the table as much
-    /// as the glyphs are — an explicit ♮ would be wrong in a note name and wrong
-    /// in a scale degree alike.
-    ///
-    /// Shared rather than written out at each use: `Note` and `Interval` both
-    /// render an accidental followed by something, and two copies of this table
-    /// would be two things to keep in step.
+    /// The typewriter spelling for canvas text, which cannot use SMuFL glyphs. Empty for a natural.
     pub fn ascii(self) -> &'static str {
         match self {
             Accidental::DoubleFlat => "bb",
@@ -186,8 +156,7 @@ impl Accidental {
         }
     }
 
-    /// The accidental said aloud. `None` for a natural, which is not said at all — the
-    /// same reason `accidental_glyph` draws nothing for one.
+    /// The accidental said aloud, or `None` for a natural.
     pub fn spoken(self) -> Option<&'static str> {
         match self {
             Accidental::DoubleFlat => Some("double flat"),
@@ -199,11 +168,7 @@ impl Accidental {
     }
 }
 
-/// A note as written: a letter plus an accidental.
-///
-/// The fields are public because there is no invariant to hold — every pair is a
-/// legitimate note, B♯ and F♭♭ included — so private fields would buy nothing
-/// but ceremony.
+/// A note as written: a letter plus an accidental. Every pair is legitimate, B♯ and F♭♭ included.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Note {
     pub letter: Letter,
@@ -211,7 +176,7 @@ pub struct Note {
 }
 
 impl Note {
-    /// The note said aloud, for prose rather than for a label — `C♯` reads "C sharp".
+    /// The note said aloud — `C♯` reads "C sharp".
     pub fn spoken(self) -> String {
         match self.accidental.spoken() {
             Some(accidental) => format!("{} {accidental}", self.letter),
@@ -219,7 +184,6 @@ impl Note {
         }
     }
 
-    /// Total and infallible — the direction that needs no context.
     pub fn pitch_class(self) -> PitchClass {
         let semitone =
             i16::from(self.letter.natural_semitone()) + i16::from(self.accidental.offset());
@@ -230,15 +194,7 @@ impl Note {
 }
 
 /// How far `target` sits from `letter`'s natural pitch, as the nearest signed
-/// distance in −5..=6.
-///
-/// The fold is the fiddly part: `rem_euclid(12)` gives 0..=11, then anything
-/// above 6 has 12 subtracted. Without it a difference reads as +11 where −1 is
-/// meant, and no accidental covers +11.
-///
-/// Here rather than beside either caller: `scales` and `chords` both spell a
-/// degree by forcing its letter and asking what accidental corrects the pitch,
-/// and two copies of this fold would be two things to keep in step.
+/// distance in −5..=6, so a difference reads −1 rather than +11.
 pub fn nearest_offset(target: PitchClass, letter: Letter) -> i8 {
     let raw = (i16::from(target.semitone()) - i16::from(letter.natural_semitone())).rem_euclid(12);
     let folded = if raw > 6 { raw - 12 } else { raw };
@@ -246,8 +202,7 @@ pub fn nearest_offset(target: PitchClass, letter: Letter) -> i8 {
     i8::try_from(folded).expect("the fold yields -5..=6")
 }
 
-/// ASCII, for the fretboard markers — see `Accidental::ascii`. The cards spell the
-/// same notes with SMuFL glyphs instead.
+/// ASCII, for the fretboard markers.
 impl fmt::Display for Note {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}{}", self.letter, self.accidental.ascii())
@@ -262,8 +217,6 @@ pub enum Spelling {
 }
 
 impl Spelling {
-    /// The seven naturals are the same under both; the five black keys are the
-    /// whole of the difference.
     pub fn spell(self, pitch_class: PitchClass) -> Note {
         let (letter, accidental) = match (pitch_class.semitone(), self) {
             (0, _) => (Letter::C, Accidental::Natural),
@@ -291,16 +244,8 @@ impl Spelling {
 
     /// What a black key is usually called — `C♯`, `E♭`, `F♯`, `A♭`, `B♭`.
     ///
-    /// This never spells anything. `Scale::new` derives a scale's spelling by
-    /// arithmetic and consults this only for the eleven scales where the two
-    /// candidates come out equally economical — at which point which name is used
-    /// is a fact about what musicians call things, and no formula derives it. That
-    /// is what keeps it from being the table of key signatures the spelling
-    /// arithmetic exists to avoid: it picks between two finished answers rather
-    /// than producing one.
-    ///
-    /// The seven naturals share the flats arm because they spell identically under
-    /// both, so any answer is right for them.
+    /// Only a tie-breaker for `Scale::new` when both spellings are equally economical;
+    /// it never spells anything itself.
     pub fn conventional_for(pitch_class: PitchClass) -> Spelling {
         match pitch_class.semitone() {
             1 | 6 => Spelling::Sharps,
@@ -322,7 +267,6 @@ mod tests {
                 assert_eq!(from.transpose(up), to, "{from:?} up {up} is not {to:?}");
             }
         }
-        // E up to C, not down: a pitch class has no octave to sit below another in.
         assert_eq!(PitchClass::new(4).semitones_up_to(PitchClass::new(0)), 8);
     }
 
@@ -347,8 +291,7 @@ mod tests {
         }
     }
 
-    /// Built from the letters rather than trusting the literal semitones, so a typo in
-    /// `NATURALS` fails here instead of quietly drilling the wrong notes.
+    /// Built from the letters, so a typo in `NATURALS` fails here.
     #[test]
     fn the_naturals_are_exactly_what_the_letters_spell() {
         let from_letters: Vec<PitchClass> = [
@@ -366,10 +309,6 @@ mod tests {
 
         assert_eq!(PitchClass::NATURALS.to_vec(), from_letters);
     }
-
-    // No test that the naturals spell without an accidental under both spellings, nor
-    // that five accidentals are left over: both follow from the assertion above pinning
-    // `NATURALS` to the letters, combined with `the_naturals_agree_under_both_spellings`.
 
     #[test]
     fn transpose_test() {
@@ -406,14 +345,12 @@ mod tests {
             );
         }
 
-        // Triple accidentals have no representation, by design.
         assert_eq!(Accidental::from_offset(3), None);
         assert_eq!(Accidental::from_offset(-3), None);
     }
 
     #[test]
     fn pitch_class_on_the_enharmonic_edges() {
-        // Where an off-by-one in the fold surfaces first.
         let cases = [
             (Letter::B, Accidental::Sharp, 0),
             (Letter::C, Accidental::Flat, 11),
@@ -476,8 +413,6 @@ mod tests {
 
     #[test]
     fn the_black_keys_have_a_conventional_name() {
-        // The five that have two names, and the one each is usually called. Written
-        // out rather than derived: the point of the function is that this is data.
         let cases = [
             (1, Letter::C, Accidental::Sharp),
             (3, Letter::E, Accidental::Flat),
@@ -500,7 +435,6 @@ mod tests {
 
     #[test]
     fn a_naturals_convention_names_the_same_note_either_way() {
-        // Why the naturals can share an arm rather than needing seven of their own.
         for pitch_class in PitchClass::NATURALS {
             let conventional = Spelling::conventional_for(pitch_class).spell(pitch_class);
 
@@ -511,7 +445,6 @@ mod tests {
 
     #[test]
     fn display_is_ascii_for_the_fretboard_markers() {
-        // What a canvas marker draws — one font, so no SMuFL glyphs here.
         assert_eq!(
             Note {
                 letter: Letter::B,

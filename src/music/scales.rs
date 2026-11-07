@@ -24,15 +24,7 @@ pub enum ScaleKind {
     Diminished, // Symmetric diminished
 }
 
-/// All three fields are private, and the third is why the first two are.
-///
-/// `spelling` is derived from `root` and `kind` rather than chosen — see `new`. It
-/// is stored rather than recomputed on read because deriving it means spelling the
-/// whole scale, and spelling the scale starts from the root note; resolving once in
-/// `new` is what breaks that cycle. But a private `spelling` beside a public `root`
-/// would be theatre: `scale.root = other` would compile and leave the spelling
-/// derived from a root the scale no longer has. Sealing all three is what actually
-/// makes a misspelled `Scale` unrepresentable outside this module.
+/// All fields are private: `spelling` is derived from `root` and `kind`, so none may change alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Scale {
     root: PitchClass,
@@ -49,19 +41,8 @@ impl Scale {
         self.kind
     }
 
-    /// Names a scale the way it would be taught. Nobody teaches `A♯ Ionian` — it
-    /// spells `A♯ B♯ C𝄪 D♯ E♯ F𝄪 G𝄪`, and a learner reading `G𝄪` off a fret has to
-    /// translate it back to A before they can play it. `B♭ Ionian` is the same
-    /// shapes with names that can be read at a glance.
-    ///
-    /// Fewer double accidentals wins; then fewer accidentals overall. That is one
-    /// tuple comparison rather than two hand-written ones, because `Ord` on tuples
-    /// is already lexicographic.
-    ///
-    /// The rule has no thumb on the scale for either spelling — it reaches `G♯
-    /// Aeolian` and `D♭ Ionian` by the same arithmetic. Where it reaches neither,
-    /// `Spelling::conventional_for` decides; see its comment for why a table is the
-    /// honest answer there and nowhere else.
+    /// Picks the spelling a scale would be taught in: fewest double accidentals, then
+    /// fewest accidentals overall, with `Spelling::conventional_for` breaking ties.
     pub fn new(root: PitchClass, kind: ScaleKind) -> Self {
         let candidate = |spelling| Scale {
             root,
@@ -77,19 +58,10 @@ impl Scale {
         }
     }
 
-    /// How much ink this spelling costs: `(double accidentals, total accidental
-    /// distance)`.
+    /// How much ink this spelling costs: `(double accidentals, total accidental distance)`.
     ///
-    /// The doubles come first deliberately, and the pair that makes it load-bearing
-    /// is harmonic minor on pitch class 8: `G♯ A♯ B C♯ D♯ E F𝄪` and `A♭ B♭ C♭ D♭ E♭
-    /// F♭ G` both spend six accidentals, but only the first needs a double sharp.
-    /// Summed into one number they tie and fall through to convention, which would
-    /// pick `A♭` for pitch class 8 by luck. Compared in this order, `A♭` wins for a
-    /// reason.
-    ///
-    /// Measured by spelling the scale and looking, rather than from a table of which
-    /// roots are troublesome — so it stays correct if a kind's intervals ever change,
-    /// as Whole Tone's already have.
+    /// Doubles come first so harmonic minor on pitch class 8, six accidentals either
+    /// way, picks `A♭` because `G♯` needs an `F𝄪` rather than by falling to convention.
     fn spelling_cost(self) -> (usize, u32) {
         self.notes()
             .iter()
@@ -103,26 +75,11 @@ impl Scale {
         self.spelling.spell(self.root)
     }
 
-    /// Every degree spelled: the degree number forces the letter, and the
-    /// accidental is whatever the arithmetic then demands. No lookup tables, no
-    /// sharp-or-flat heuristic, no key signatures.
+    /// Every degree spelled: the degree number forces the letter, and the accidental
+    /// is whatever the arithmetic then demands.
     ///
-    /// Total rather than fallible, which takes more than "only 24 roots exist" to
-    /// justify — the root's accidental is only one of three ±1 terms that sum
-    /// into a degree's offset. The other two: the degree's own alteration (±1),
-    /// and how far that letter's natural distance sits from the major scale's
-    /// distance for that degree (±1 again) — naively ±3 in total, except the
-    /// extremes cannot align. That third term is +1 exactly where a natural
-    /// root's major scale sharpens the degree and −1 exactly where it flattens
-    /// one, and the only flat any natural root's major scale needs is F major's
-    /// B♭ on degree 4 — which is also the only degree these formulas ever
-    /// sharpen (`AugmentedFourth`) and one they never flatten. So a +1 alteration
-    /// can only ever meet a third term of 0 or −1, and a −1 alteration can only
-    /// meet 0 or +1 — either way the sum stays within ±2. See
-    /// `every_scale_spells_without_failing`, which pins this by exhaustion across
-    /// all 384 reachable scales rather than leaving the argument in prose alone,
-    /// and `docs/superpowers/specs/2026-07-30-note-spelling-design.md`'s "Why
-    /// double accidentals are enough" for the full derivation.
+    /// Total because a degree's offset never exceeds ±2, which
+    /// `every_scale_spells_without_failing` pins by exhaustion over all 384 scales.
     pub fn notes(self) -> Vec<Note> {
         let root = self.root_note();
 
@@ -140,27 +97,15 @@ impl Scale {
             .collect()
     }
 
-    /// This scale's name for a pitch class, or `None` when the pitch class is not
-    /// in the scale. The `Option` is the membership test.
+    /// This scale's name for a pitch class, or `None` when it is not in the scale.
     pub fn spell(self, pitch_class: PitchClass) -> Option<Note> {
         self.notes()
             .into_iter()
             .find(|note| note.pitch_class() == pitch_class)
     }
 
-    /// This scale's *degree* for a pitch class — the interval-shaped counterpart of
-    /// `spell`, and `None` on the same pitch classes, since both search the one
-    /// formula. Together they are the two things there are to say about a fretboard
-    /// marker: what it is called, and what job it does.
-    ///
-    /// Not `Interval::between(self.root_note(), note)`, which would reach the same
-    /// answer by spelling the pitch and reading the letters back off it — a
-    /// round trip through a fallibility of its own (a distance outside the
-    /// thirteen), leaving a caller with two failure modes that mean different
-    /// things. The formula states the degree directly, so this asks it directly.
-    ///
-    /// Independent of `spelling`, unlike `spell`: a degree is a position in the
-    /// formula, and no choice of sharps or flats moves it.
+    /// This scale's degree for a pitch class, or `None` when it is not in the scale.
+    /// Independent of `spelling`: no choice of sharps or flats moves a degree.
     pub fn degree(self, pitch_class: PitchClass) -> Option<Interval> {
         self.kind
             .intervals()
@@ -441,16 +386,7 @@ impl ScaleKind {
                 Interval::MinorSixth,
                 Interval::MinorSeventh,
             ],
-            // Looks like an oversight — the textbook formula is 1 2 3 ♯4 ♯5 ♯6,
-            // which this is not — but it is deliberate. `AugmentedFifth` and
-            // `AugmentedSixth` do not exist among `Interval`'s thirteen variants,
-            // and per `Interval::ALL`'s doc comment, `AugmentedSixth` would push
-            // an `A♯` root past the ±2 bound `notes()`'s `expect` relies on. So
-            // `MinorSixth`/`MinorSeventh` is also the choice that keeps spelling
-            // total. It also matches this branch's deleted `intervalic()` string
-            // for Whole Tone, `"1 2 3 ♯4 ♭6 ♭7"` — before this branch the card
-            // read ♭6 while the fretboard rendered G♯, so this is a consistency
-            // fix as well as a load-bearing one.
+            // ♭6 ♭7 rather than the textbook ♯5 ♯6, which would push an A♯ root past ±2
             ScaleKind::WholeTone => &[
                 Interval::Unison,
                 Interval::MajorSecond,
@@ -480,12 +416,10 @@ mod tests {
     use Accidental::{DoubleFlat, DoubleSharp, Flat, Natural, Sharp};
     use Letter::{A, B, C, D, E, F, G};
 
-    /// A written note, for the expectation tables below.
     fn spelled(letter: Letter, accidental: Accidental) -> Note {
         Note { letter, accidental }
     }
 
-    /// The semitones a scale spans above its root.
     fn semitones(kind: ScaleKind) -> Vec<u8> {
         kind.intervals()
             .iter()
@@ -493,13 +427,11 @@ mod tests {
             .collect()
     }
 
-    /// A pitch class from its semitone, for the tables below.
     fn pc(semitone: u8) -> PitchClass {
         PitchClass::new(semitone)
     }
 
-    /// A scale's pitch classes, sorted, for comparing scales that share notes but
-    /// start in different places. Spelling does not affect these.
+    /// A scale's pitch classes, sorted, for comparing scales that start in different places.
     fn pitch_classes(root: PitchClass, kind: ScaleKind) -> Vec<u8> {
         let mut classes: Vec<u8> = Scale {
             root,
@@ -516,9 +448,7 @@ mod tests {
 
     #[test]
     fn all_lists_every_kind() {
-        // Adding a variant already fails to compile in name, feel, common_usage
-        // and intervals, which all match exhaustively. ALL is the one place the
-        // compiler cannot help, so the count is pinned here instead.
+        // the one list the compiler cannot check for a new variant
         assert_eq!(ScaleKind::ALL.len(), 16);
     }
 
@@ -562,11 +492,7 @@ mod tests {
 
     #[test]
     fn the_tritone_kinds_use_the_degree_they_are_written_with() {
-        // ♯4 and ♭5 are the same distance, so putting one where the other belongs
-        // is invisible to every semitone-based test here. It shows up only once a
-        // scale is spelled from a root — which reference_scales_have_the_textbook_notes
-        // now catches for Blues and Diminished, but not for Lydian or WholeTone.
-        // This is the assertion that keeps all five apart.
+        // ♯4 and ♭5 are the same distance, so only the degree number keeps them apart
         for kind in [ScaleKind::Lydian, ScaleKind::WholeTone] {
             let intervals = kind.intervals();
             assert!(
@@ -598,8 +524,6 @@ mod tests {
 
     #[test]
     fn the_seven_diatonic_modes_share_one_pitch_class_set() {
-        // Each mode rooted on its own degree of C major must yield exactly C major's
-        // notes. One wrong interval anywhere in the seven breaks this.
         let c_major = pitch_classes(pc(0), ScaleKind::Ionian);
 
         for (root, kind) in [
@@ -634,8 +558,6 @@ mod tests {
 
     #[test]
     fn the_symmetric_scales_repeat_under_transposition() {
-        // Whole tone maps onto itself a whole step up, and the diminished scale a
-        // minor third up. Getting one of their steps wrong breaks the symmetry.
         assert_eq!(
             pitch_classes(pc(0), ScaleKind::WholeTone),
             pitch_classes(pc(2), ScaleKind::WholeTone)
@@ -648,17 +570,8 @@ mod tests {
 
     #[test]
     fn every_scale_spells_without_failing() {
-        // 12 pitch classes × 2 spellings × 16 kinds = 384. The domain is closed
-        // and tiny, so this is a real proof that ±2 accidentals are enough — and
-        // it is what licenses the expect inside notes().
-        //
-        // Deliberately builds literals rather than going through `Scale::new`, which
-        // looks like an oversight and is the opposite. `new` steers away from the
-        // spellings that cost the most accidentals, so iterating it would stop
-        // covering exactly the combinations most likely to strain the ±2 bound. Those
-        // combinations stay representable in this module — `spelling_cost` builds them
-        // on every call — so the licence the expect needs is over what can be
-        // represented, not over what `new` returns.
+        // 12 pitch classes × 2 spellings × 16 kinds = 384; this licenses the expect in notes().
+        // Builds literals rather than using `Scale::new`, which avoids the costliest spellings.
         let mut checked = 0;
 
         for spelling in [Spelling::Sharps, Spelling::Flats] {
@@ -679,9 +592,7 @@ mod tests {
                         kind.name()
                     );
 
-                    // The two spelling paths — the 12-arm Spelling::spell table
-                    // for a bare pitch class, and this letter-walking algorithm
-                    // for a scale degree — must name the same note for the root.
+                    // Spelling::spell and the letter walk must agree on the root
                     assert_eq!(
                         notes[0],
                         scale.root_note(),
@@ -716,9 +627,7 @@ mod tests {
 
     #[test]
     fn seven_note_scales_use_each_letter_once() {
-        // True by construction — degrees 1..7 are seven distinct letter steps —
-        // but it is exactly the property F Ionian violated, so it gets pinned.
-        // The eight-note kinds correctly reuse a letter and are excluded.
+        // the eight-note kinds correctly reuse a letter and are excluded
         let mut checked = 0;
 
         for spelling in [Spelling::Sharps, Spelling::Flats] {
@@ -759,7 +668,7 @@ mod tests {
 
     #[test]
     fn reference_scales_have_the_textbook_notes() {
-        // Ordered from the root and wrapping past B, not sorted by pitch.
+        // ordered from the root and wrapping past B, not sorted by pitch
         let cases: &[(u8, Spelling, ScaleKind, &[Note])] = &[
             (
                 5,
@@ -818,7 +727,6 @@ mod tests {
                 ],
             ),
             (
-                // The ♭5 is the blue note, and it is spelled E♭, not D♯.
                 9,
                 Spelling::Sharps,
                 ScaleKind::Blues,
@@ -832,7 +740,6 @@ mod tests {
                 ],
             ),
             (
-                // Eight notes, so E and G each appear twice — as they are written.
                 0,
                 Spelling::Flats,
                 ScaleKind::Diminished,
@@ -848,7 +755,6 @@ mod tests {
                 ],
             ),
             (
-                // Five notes, so letters B and F go unused — the pentatonic gap.
                 9,
                 Spelling::Sharps,
                 ScaleKind::MinorPentatonic,
@@ -880,8 +786,7 @@ mod tests {
 
     #[test]
     fn the_double_accidental_extremes_are_reached_and_not_exceeded() {
-        // The two furthest scales in the domain. If the fold in notes() is wrong,
-        // these break first.
+        // the two furthest scales in the domain
         let g_sharp_harmonic_minor = Scale {
             root: pc(8),
             spelling: Spelling::Sharps,
@@ -913,10 +818,8 @@ mod tests {
             kind: ScaleKind::Ionian,
         };
 
-        // Pitch class 10 is in F major, and in it the name is B♭ — not A♯.
         assert_eq!(f_ionian.spell(pc(10)), Some(spelled(B, Flat)));
         assert_eq!(f_ionian.spell(pc(5)), Some(spelled(F, Natural)));
-        // Pitch class 6 (F♯/G♭) is not in F major at all.
         assert_eq!(f_ionian.spell(pc(6)), None);
     }
 
@@ -928,8 +831,6 @@ mod tests {
             kind: ScaleKind::Ionian,
         };
 
-        // The same three pitch classes spell_names… asks about, read as jobs
-        // rather than names: pitch class 10 is B♭ *because* it is the fourth.
         assert_eq!(f_ionian.degree(pc(10)), Some(Interval::PerfectFourth));
         assert_eq!(f_ionian.degree(pc(5)), Some(Interval::Unison));
         assert_eq!(f_ionian.degree(pc(6)), None);
@@ -937,8 +838,6 @@ mod tests {
 
     #[test]
     fn degree_is_the_same_under_both_spellings() {
-        // The claim the fretboard leans on when the ♯♭ toggle is pressed in
-        // interval notation: nothing moves, and no label changes.
         for root in PitchClass::ALL {
             for &kind in ScaleKind::ALL {
                 let sharps = Scale {
@@ -967,9 +866,6 @@ mod tests {
 
     #[test]
     fn degree_and_spell_agree_on_membership() {
-        // 12 roots × 2 spellings × 16 kinds × 12 pitch classes. Both read the one
-        // formula, and this is what holds them to it — a marker that gets a name
-        // gets a degree, and one that gets neither is genuinely not in the scale.
         for spelling in [Spelling::Sharps, Spelling::Flats] {
             for root in PitchClass::ALL {
                 for &kind in ScaleKind::ALL {
@@ -996,9 +892,6 @@ mod tests {
 
     #[test]
     fn degree_recovers_the_formula_in_order() {
-        // Asked of a scale's own notes, degree() must give the formula back exactly
-        // — the interval-side counterpart of every_scale_spells_without_failing,
-        // and what licenses the expect below being unreachable in the app.
         for spelling in [Spelling::Sharps, Spelling::Flats] {
             for root in PitchClass::ALL {
                 for &kind in ScaleKind::ALL {
@@ -1032,10 +925,7 @@ mod tests {
 
     #[test]
     fn no_kind_uses_one_pitch_class_twice() {
-        // What makes degree()'s `find` well-defined rather than order-dependent: a
-        // kind holding both a ♯4 and a ♭5 would put two degrees on one pitch class,
-        // and the first listed would shadow the second. No kind does — and if one is
-        // ever added, this fails before the fretboard starts lying.
+        // a kind holding both ♯4 and ♭5 would let the first shadow the second in degree()
         for &kind in ScaleKind::ALL {
             let mut seen: Vec<u8> = Vec::new();
 
@@ -1051,7 +941,6 @@ mod tests {
         }
     }
 
-    /// A scale's notes as text, for the naming tables below.
     fn spelled_scale(semitone: u8, kind: ScaleKind) -> String {
         Scale::new(pc(semitone), kind)
             .notes()
@@ -1063,18 +952,8 @@ mod tests {
 
     #[test]
     fn a_scale_is_named_the_way_it_is_taught() {
-        // The rule's whole job, stated as the names rather than as the rule — so a
-        // change to `spelling_cost` that still satisfies its own arithmetic but starts
-        // naming scales wrongly fails here.
-        //
-        // The four cases are chosen to pin it from four directions:
-        //   - pitch class 1 Ionian: D♭ (5 flats) over the theoretical C♯ (7 sharps).
-        //   - pitch class 10 Ionian: B♭, avoiding A♯ Ionian's three double sharps.
-        //   - pitch class 1 Harmonic Minor: C♯, avoiding D♭'s B𝄫 — the same rule
-        //     running the other way, which is what shows it is not "prefer flats".
-        //   - pitch class 8 Aeolian and Mixolydian: G♯ for one and A♭ for the other,
-        //     the same pitch class landing on different spellings because the kind
-        //     changed. No fixed table of root names could do that.
+        // pitch class 1 Harmonic Minor goes to C♯, which shows the rule is not "prefer flats";
+        // pitch class 8 lands on G♯ or A♭ depending on the kind
         let cases: &[(u8, ScaleKind, &str)] = &[
             (1, ScaleKind::Ionian, "Db Eb F Gb Ab Bb C"),
             (10, ScaleKind::Ionian, "Bb C D Eb F G A"),
@@ -1095,11 +974,6 @@ mod tests {
 
     #[test]
     fn doubles_are_weighed_before_the_total() {
-        // Why `spelling_cost` returns a pair rather than one number. Harmonic minor on
-        // pitch class 8 spends six accidentals either way, so a single total ties and
-        // falls through to convention — which for pitch class 8 is flats, and would
-        // reach A♭ by luck. Comparing doubles first reaches it for a reason: only the
-        // G♯ candidate needs a double sharp.
         let sharps = Scale {
             root: pc(8),
             kind: ScaleKind::HarmonicMinor,
@@ -1126,9 +1000,7 @@ mod tests {
 
     #[test]
     fn an_exact_tie_takes_the_conventional_name() {
-        // The eleven scales where the arithmetic has nothing left to say. Both of
-        // these spend six accidentals with no doubles either way, so the only thing
-        // that separates F♯ from G♭ and D♯ from E♭ is what the note is called.
+        // no doubles and six accidentals either way, so only convention separates these
         assert_eq!(
             spelled_scale(6, ScaleKind::Ionian),
             "F# G# A# B C# D# E#",
@@ -1143,10 +1015,7 @@ mod tests {
 
     #[test]
     fn only_the_symmetric_two_keep_a_double_accidental() {
-        // Written as an allowlist rather than a loose skip, so that a kind added later
-        // that cannot be spelled cleanly has to be admitted here deliberately instead
-        // of slipping past. Six notes and eight notes cannot be spread over seven
-        // letters without a double; every other scale can be, and is.
+        // an allowlist, so a new kind that cannot spell cleanly must be admitted deliberately
         let irreducible = [(1, ScaleKind::WholeTone), (3, ScaleKind::Diminished)];
 
         for root in PitchClass::ALL {
@@ -1174,11 +1043,6 @@ mod tests {
 
     #[test]
     fn naming_never_moves_the_scale() {
-        // The names are the only thing the rule chooses. Whatever it picks, the scale
-        // is still the same pitch classes in the same order — which is what the neck
-        // draws and what `degree` reads. Replaces the UI's
-        // `toggling_spelling_moves_no_marker_but_relabels_at_least_one`, over all 192
-        // combinations rather than one root spelled two ways.
         for root in PitchClass::ALL {
             for &kind in ScaleKind::ALL {
                 let scale = Scale::new(root, kind);

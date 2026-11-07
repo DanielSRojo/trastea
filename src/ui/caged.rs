@@ -1,12 +1,5 @@
-//! The CAGED window: one root's five shapes tiled along one neck, and the screen that draws
-//! them.
-//!
-//! State and views in one module so the state's fields stay private — the arrangement the
-//! three other stateful screens use, and for the same reason.
-//!
-//! The screen holds no shape data. What it shows is [`super::shapes::voicings`] filtered and
-//! ordered, which is what keeps the cycle a consequence of the placement arithmetic rather
-//! than a second thing to keep in step with it.
+//! The CAGED window: one root's five shapes tiled along one neck.
+//! Holds no shape data; it shows `super::shapes::voicings` filtered and ordered.
 
 use crate::music::chords::{Chord, ChordQuality};
 use crate::music::notes::PitchClass;
@@ -28,39 +21,25 @@ use super::{
     SUMMARY_NAME_SIZE, intervalic_text, marker_label, note_label, root_square,
 };
 
-/// The quality the window shows. Major because it is the only one whose shapes are a cycle:
-/// minor yields three, and the diminished and augmented triads one or two. The screen is
-/// written against a `Chord` so admitting the others is a selector rather than a rewrite.
+/// Major, because it is the only quality whose shapes form a cycle.
 const QUALITY: ChordQuality = ChordQuality::Major;
 
-/// How wide the two cards are. Twice the root selector's own width, which is what the row of
-/// shape pills needs and what keeps the twelve roots from floating in the middle of a card
-/// stretched to the window.
+/// Twice the root selector's width, which is what the row of shape pills needs.
 const DETAILS_WIDTH: f32 = ROOT_SELECTOR_CARD_WIDTH * 2.0 + 16.0;
 
-/// Which root the window is showing, and which of its shapes is picked.
-///
-/// The cycle itself is not here. It is derived from `root` wherever it is wanted, the way
-/// `ChordLibrary::rows` derives its list every draw — a cached `Vec<Voicing>` would be a
-/// field free to disagree with the root beside it.
+/// Which root is shown and which of its shapes is picked.
+/// The cycle is derived from `root` rather than cached, so it cannot disagree with it.
 pub(super) struct Caged {
     root: PitchClass,
-    /// An index into the derived order, not a `CagedShape`: the order's length depends on the
-    /// quality, so an index into what was found cannot name a shape that is not there.
+    /// An index into the derived cycle, whose length depends on the quality.
     selected: usize,
 }
 
-/// The shapes for `root`, lowest first — one placement per letter, being the lowest fret each
-/// sits at.
-///
-/// The lowest rather than every placement, because a shape recurs an octave up and CAGED means
-/// five windows rather than eleven. Ordering by fret is the whole derivation: nothing here says
-/// C-A-G-E-D, and the letters come out as a rotation of it anyway.
+/// The shapes for `root`, one per letter at its lowest fret, ordered by fret.
+/// Nothing here says C-A-G-E-D; the order falls out of the placement arithmetic.
 fn cycle(root: PitchClass) -> Vec<Voicing> {
     let mut found: Vec<Voicing> = Vec::new();
 
-    // A `for` rather than a fold: the membership test reads as what it is, and the accumulator
-    // a fold would thread through would say nothing the loop does not.
     for voicing in voicings(Chord::new(root, QUALITY), &CAGED_NECK) {
         if voicing.is_caged() && !found.iter().any(|seen| seen.caged() == voicing.caged()) {
             found.push(voicing);
@@ -106,8 +85,7 @@ impl Caged {
         }
     }
 
-    /// Walks the cycle, stopping at the ends rather than wrapping — the rule the focus grid
-    /// and the library's list both follow.
+    /// Walks the cycle, stopping at the ends rather than wrapping.
     pub(super) fn move_selection(&mut self, delta: isize) {
         let count = self.shapes().len();
         if count == 0 {
@@ -118,24 +96,18 @@ impl Caged {
         self.selected = next as usize;
     }
 
-    /// Called when the screen opens. The root and the selection survive leaving it, so this
-    /// only re-establishes the invariant `clamp` keeps.
+    /// Called when the screen opens; the root and selection survive leaving it.
     pub(super) fn enter(&mut self) {
         self.clamp();
     }
 
-    /// Keeps `selected` pointing at a shape that exists. `saturating_sub` covers the empty
-    /// cycle, which no major triad produces but which a later quality could.
+    /// Keeps `selected` pointing at a shape that exists, including in an empty cycle.
     fn clamp(&mut self) {
         self.selected = self.selected.min(self.shapes().len().saturating_sub(1));
     }
 }
 
 /// What claims a position on the neck.
-///
-/// Three states rather than two booleans threaded to the call site: a position the selected
-/// shape shares with a neighbour is a different thing to draw from one either owns alone, and
-/// that difference is the overlap the screen exists to show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Claim {
     Selected,
@@ -144,12 +116,8 @@ enum Claim {
 }
 
 impl Claim {
-    /// Colour carries the claim; `MarkerStyle` carries the root. Those are the two dimensions
-    /// `NoteMarker` already has, which is what keeps `fretboard.rs` — and its round-trip test —
-    /// out of this change.
-    ///
-    /// `LINK` rather than `INK` for the selected shape: `INK` is pure white and the fretboard
-    /// draws every label white, so a filled `INK` dot would swallow its own text.
+    /// `LINK` rather than `INK` for the selected shape: the fretboard draws every label white,
+    /// so a filled `INK` dot would swallow its own text.
     fn color(self) -> Color {
         match self {
             Claim::Selected => LINK,
@@ -168,9 +136,6 @@ struct Claimed {
 }
 
 /// The positions a placement sounds, as `(string, fret)`.
-///
-/// Takes the `Voicing` by value and returns an iterator borrowing nothing — `Voicing` is `Copy`
-/// and `strings()` hands back an array, so there is no lifetime to thread here.
 fn sounded(shape: Voicing) -> impl Iterator<Item = (usize, usize)> {
     shape
         .strings()
@@ -180,9 +145,7 @@ fn sounded(shape: Voicing) -> impl Iterator<Item = (usize, usize)> {
 }
 
 /// Every position any shape in the cycle sounds, once each, with what claims it.
-///
-/// Once each is the point: adjacent shapes genuinely land on the same fret of the same string,
-/// and drawing two dots there would either stack them or let one win silently.
+/// Adjacent shapes share positions, and two dots there would stack.
 fn claims(shapes: &[Voicing], selected: usize) -> Vec<Claimed> {
     let mut found: Vec<Claimed> = Vec::new();
 
@@ -219,10 +182,7 @@ fn caged_markers(caged: &Caged, notation: Notation) -> Vec<NoteMarker> {
     claims(&shapes, caged.selected())
         .into_iter()
         .filter_map(|at| {
-            // Every sounded string of a placement carries one of the chord's notes — the
-            // library's `a_voicing_sounds_the_chord_and_nothing_else` walks all of them. `?`
-            // rather than `expect` so a lapse loses a dot that a test counts, instead of
-            // taking the process down mid-draw.
+            // `?` rather than `expect`: a lapse loses a dot a test counts rather than panicking.
             let pitch_class = CAGED_NECK.pitch_class_at(at.string, at.fret)?;
             let note = chord.spell(pitch_class)?;
             let degree = chord.degree(pitch_class)?;
@@ -238,8 +198,7 @@ fn caged_markers(caged: &Caged, notation: Notation) -> Vec<NoteMarker> {
                 fret: at.fret,
                 label: marker_label(notation, note, degree),
                 color: claim.color(),
-                // The root filled, the third and the fifth ringed. Finding the root inside a
-                // shape is the skill CAGED teaches, so it does not wait on reading a label.
+                // The root filled, the third and the fifth ringed.
                 style: if degree.number() == 1 {
                     MarkerStyle::Filled
                 } else {
@@ -250,9 +209,8 @@ fn caged_markers(caged: &Caged, notation: Notation) -> Vec<NoteMarker> {
         .collect()
 }
 
-/// Which string carries the shape's root, counted the way guitarists count — the low E is the
-/// sixth. Derived from the degrees on the neck rather than from the shape's own record of it,
-/// so the caption describes the dots that are drawn.
+/// Which string carries the shape's root, counted so the low E is the sixth.
+/// Derived from the degrees on the neck so the caption matches the dots drawn.
 fn root_string(chord: Chord, shape: Voicing) -> Option<usize> {
     sounded(shape)
         .find(|&(string, fret)| {
@@ -288,9 +246,7 @@ fn shape_caption(caged: &Caged) -> String {
     }
 }
 
-/// The count, stated rather than assumed. Five is what a major triad happens to yield; a
-/// quality whose shapes cannot all be placed yields fewer, and the screen has to be able to
-/// say so without contradicting the neck beside it.
+/// Stated rather than assumed: a quality whose shapes cannot all be placed yields fewer.
 fn count_caption(shapes: &[Voicing]) -> String {
     match shapes.len() {
         1 => "1 shape".to_string(),
@@ -309,9 +265,7 @@ pub(super) fn ui_caged(
     let chord = Chord::new(caged.root(), QUALITY);
     let shapes = caged.shapes();
 
-    // Display only: no press handler and no cursor. The shapes are walked with the pills and
-    // the arrows, so the neck stays a picture — which is also why nothing here needs the
-    // fretboard's hit-testing.
+    // Display only: no press handler, so the fretboard's hit-testing goes unused.
     let fb = Fretboard {
         num_frets: CAGED_NECK.frets(),
         highlighted: caged_markers(caged, notation),
@@ -399,10 +353,7 @@ pub(super) fn ui_caged(
         .padding(32)
         .style(card_container);
 
-    // Both cards to one width, and that width capped: the pills row is the widest thing
-    // either of them holds, and a card stretched to the whole window would leave the roots
-    // an island in the middle of it. The row is then centred rather than left-aligned, so
-    // what is left over sits either side of the screen instead of all down one edge.
+    // One capped width for both cards so the roots do not float in a window-wide card.
     let details = column![summary_card, root_selector_card]
         .width(Length::Fixed(DETAILS_WIDTH))
         .spacing(16);
@@ -421,9 +372,7 @@ pub(super) fn ui_caged(
         .into()
 }
 
-/// One row of the root selector. Named by the chord a press would build, the way the Scale
-/// Trainer's rows are named by the scale — so pitch class 1 reads `D♭` here, since a major
-/// triad on it costs two flats where `C♯` would cost three sharps.
+/// One root-selector row, named by the major triad a press builds, so pitch class 1 reads `D♭`.
 fn caged_root_row(
     pitch_classes: &[PitchClass],
     root: PitchClass,
@@ -458,8 +407,7 @@ mod tests {
         cycle(root).into_iter().map(Voicing::caged).collect()
     }
 
-    /// The property the whole screen rests on: nothing in `cycle` names an order, and the order
-    /// that comes out is the one the system is named for.
+    /// Nothing in `cycle` names an order, and the one that comes out is C-A-G-E-D.
     #[test]
     fn every_root_spells_a_rotation_of_caged() {
         const RING: [CagedShape; 5] = [
@@ -516,8 +464,7 @@ mod tests {
                 "{root:?} is out of order: {frets:?}"
             );
 
-            // One window per letter. `voicings` offers an octave repeat of some shapes, and
-            // showing both would make a five-shape system a six- or seven-shape one.
+            // One window per letter, though `voicings` also offers octave repeats.
             let mut seen = shapes.iter().map(|v| v.caged()).collect::<Vec<_>>();
             let before = seen.len();
             seen.dedup();
@@ -566,8 +513,7 @@ mod tests {
             assert_eq!(drawn, 1, "{at:?} is drawn {drawn} times");
         }
 
-        // A position only the selected shape reaches is not shared. The G shape's own root on
-        // the low E at the eighth fret is inside no other window.
+        // The G shape's root on the low E at the eighth fret is inside no other window.
         let alone: Vec<(usize, usize)> = markers
             .iter()
             .filter(|&&(.., color, _)| color == Claim::Selected.color())
@@ -627,8 +573,7 @@ mod tests {
 
     #[test]
     fn every_shape_in_the_cycle_reaches_the_neck() {
-        // No dot is dropped by the `?` chain in `caged_markers`: what the shapes sound and
-        // what the neck draws are the same set of positions.
+        // No dot is dropped by the `?` chain in `caged_markers`.
         for root in PitchClass::ALL {
             let mut caged = Caged::new();
             caged.select_root(root);

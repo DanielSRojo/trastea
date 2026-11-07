@@ -1,17 +1,11 @@
-//! The instrument: what its strings are tuned to, how long a neck is, and a place on one.
-//! Instrument knowledge rather than theory, which is why it is here and not in `music/`, and
-//! shared by every screen that draws a neck, which is why it is not in any one of them.
+//! The instrument: string tuning, neck length, and a place on one.
 
 use crate::music::notes::PitchClass;
 use crate::music::pitch::Pitch;
 
 use super::focus::Direction;
 
-/// Concert pitch — what the strings sound, not what a guitarist reads. Guitar is a
-/// transposing instrument: its music is written an octave above where it sounds, so the
-/// low E is written E3 and sounds the E2 named here. Getting this wrong is silent, because
-/// everything an octave out still tunes correctly against itself; only a frequency catches
-/// it, which is what `the_open_strings_sound_the_frequencies_a_tuner_expects` is for.
+/// Concert pitch, not written: the low E written E3 sounds the E2 named here.
 pub(super) const STANDARD_TUNING: [Pitch; 6] = [
     midi(40), // E2
     midi(45), // A2
@@ -21,10 +15,7 @@ pub(super) const STANDARD_TUNING: [Pitch; 6] = [
     midi(64), // E4
 ];
 
-/// `Pitch::from_midi` in const position, for the tuning above.
-///
-/// The panic is the point: it fires at compile time, so a typo in the tuning is a build
-/// failure rather than a `None` the neck would have to answer for at runtime.
+/// `Pitch::from_midi` in const position, so a typo in the tuning panics at compile time.
 const fn midi(number: u8) -> Pitch {
     match Pitch::from_midi(number) {
         Some(pitch) => pitch,
@@ -37,31 +28,18 @@ pub(super) const CURSOR_HOME: Position = Position { string: 0, fret: 0 };
 pub(super) const NECK_STRINGS: usize = STANDARD_TUNING.len();
 
 /// A neck: what its strings are tuned to, and how many frets it has.
-///
-/// A named value rather than a `frets: usize` parameter threaded through the placement
-/// arithmetic, because the screens no longer agree on the answer. `place(.., 12)` and
-/// `place(.., 15)` are both well-typed and swapping them silently lengthens or shortens a
-/// neck; `DRILL_NECK` and `CAGED_NECK` are named once where they are chosen.
-///
-/// The tuning travels with the fret count because [`Neck::pitch_class_at`] needs both, and
-/// taking the bound from `self` while reaching for a global for the notes is the worse of the
-/// two. There is one tuning, and both consts name it.
 pub(super) struct Neck {
     tuning: [Pitch; NECK_STRINGS],
     frets: usize,
 }
 
-/// The neck the three drills and the Chord Library draw. Twelve frets covers every pitch class
-/// on every string, which is all a drill needs.
+/// Twelve frets covers every pitch class on every string.
 pub(super) const DRILL_NECK: Neck = Neck {
     tuning: STANDARD_TUNING,
     frets: 12,
 };
 
-/// The neck the CAGED window draws. Fifteen because twelve truncates the cycle — eight of the
-/// twelve roots lose a shape to the neck's end, and C major loses its D shape, which reaches the
-/// thirteenth fret. Fourteen is the shortest that holds every shape; fifteen is taken because
-/// the inlays fall on 3-5-7-9-12-15, so the neck ends on a marked fret.
+/// Fourteen is the shortest that holds every CAGED shape; fifteen ends on an inlay.
 pub(super) const CAGED_NECK: Neck = Neck {
     tuning: STANDARD_TUNING,
     frets: 15,
@@ -73,11 +51,6 @@ impl Neck {
     }
 
     /// The pitch sounding at a position on this neck, or `None` off it.
-    ///
-    /// `Option` rather than an index that panics: the callers are a click and a cursor, and a
-    /// bounds bug should misjudge one answer rather than take the process down. The fret is
-    /// bounded by `self.frets`, so the `i8` conversion cannot fail for any neck this app
-    /// draws — but it is fallible all the same, on the same reasoning.
     fn pitch_at(&self, string: usize, fret: usize) -> Option<Pitch> {
         (fret <= self.frets)
             .then(|| self.tuning.get(string))
@@ -85,28 +58,13 @@ impl Neck {
             .and_then(|open| open.transpose(i8::try_from(fret).ok()?))
     }
 
-    /// The note at a position on this neck, or `None` off it.
-    ///
-    /// Derived from [`Neck::pitch_at`] rather than computed beside it. Two parallel
-    /// computations would only be unlikely to disagree; this one cannot, which is what the
-    /// spec asks for. `the_two_readings_of_a_position_agree_everywhere` guards against
-    /// someone un-deriving it.
+    /// Derived from [`Neck::pitch_at`] so the two readings cannot disagree.
     pub(super) fn pitch_class_at(&self, string: usize, fret: usize) -> Option<PitchClass> {
         self.pitch_at(string, fret).map(Pitch::pitch_class)
     }
 }
 
-/// One place on the neck.
-///
-/// Here rather than in a trainer, because a position is a fact about the instrument and
-/// not about any one drill — the same reason `pitch_class_at` and `STANDARD_TUNING` live
-/// in this module.
-///
-/// Named fields rather than a bare `(usize, usize)`. A pair is unambiguous where a prompt
-/// holds exactly one position, which is why the Note Trainer's prompts still use one; the
-/// Interval Trainer's *Name it* prompt holds two of them, and a root swapped with a target is a silent bug
-/// that inverts every interval on screen — a minor third read back as a major sixth, with
-/// nothing failing to compile. `Position { string, fret }` makes that swap unwriteable.
+/// Named fields so a root and target cannot be silently swapped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Position {
     pub(super) string: usize,
@@ -114,17 +72,12 @@ pub(super) struct Position {
 }
 
 impl Position {
-    /// The pitch class sounding here, or `None` off the neck — `Neck::pitch_class_at`'s
-    /// `Option` and its reasoning, reached through the named fields.
-    ///
-    /// Bound to `DRILL_NECK` because only the drills hold a `Position`, and they all draw that
-    /// neck. A neck parameter here would be threaded through a dozen call sites to vary nothing.
+    /// Bound to `DRILL_NECK`, the only neck the drills draw.
     pub(super) fn pitch_class(self) -> Option<PitchClass> {
         DRILL_NECK.pitch_class_at(self.string, self.fret)
     }
 
-    /// One arrow's move across the drill neck, stopping at its edges rather than wrapping — a
-    /// cursor that wrapped from the high E to the low one would look like it had jumped.
+    /// One arrow's move across the drill neck, stopping at its edges rather than wrapping.
     pub(super) fn step(self, direction: Direction) -> Position {
         let Position { string, fret } = self;
         match direction {
@@ -149,10 +102,6 @@ impl Position {
 }
 
 /// Every position on the neck, paired with the pitch class sounding there.
-///
-/// The pitch class is carried along rather than asked for again later, which is what keeps
-/// an `expect` out of the drawing code: a position that yielded `None` never enters the
-/// list, so everything downstream has one in hand.
 pub(super) fn neck() -> Vec<(Position, PitchClass)> {
     (0..NECK_STRINGS)
         .flat_map(|string| (0..=DRILL_NECK.frets()).map(move |fret| Position { string, fret }))
@@ -164,9 +113,7 @@ pub(super) fn neck() -> Vec<(Position, PitchClass)> {
 mod tests {
     use super::*;
 
-    /// Pins the octave convention, which a pitch-class test cannot: a tuning an
-    /// octave out spells every scale identically and tunes correctly against itself. Only
-    /// a frequency catches it. A guitarist's written low E is E3 and sounds the E2 here.
+    /// Pins the octave convention, which only a frequency can catch.
     #[test]
     fn the_open_strings_sound_the_frequencies_a_tuner_expects() {
         for (string, expected) in [
@@ -199,7 +146,7 @@ mod tests {
 
     #[test]
     fn a_fretted_position_sounds_what_the_open_string_above_it_does() {
-        // The fifth fret of the low E is the open A — the thing every guitarist tunes by.
+        // The fifth fret of the low E is the open A.
         assert_eq!(
             DRILL_NECK.pitch_at(0, 5),
             Some(STANDARD_TUNING[1]),
@@ -207,9 +154,6 @@ mod tests {
         );
     }
 
-    /// The claim `pitch_class_at` rests on now that it is a derivation of `pitch_at`. It
-    /// would pass trivially today; it exists to fail the day someone computes the two
-    /// separately again.
     #[test]
     fn the_two_readings_of_a_position_agree_everywhere() {
         for neck in [&DRILL_NECK, &CAGED_NECK] {
@@ -271,8 +215,7 @@ mod tests {
 
     #[test]
     fn each_neck_answers_only_for_its_own_frets() {
-        // The same string and the same fret, answered differently by the two necks — which is
-        // the whole reason the fret count travels in a value rather than a constant.
+        // The same string and fret, answered differently by the two necks.
         for fret in 13..=CAGED_NECK.frets() {
             assert_eq!(
                 CAGED_NECK.pitch_class_at(0, fret),

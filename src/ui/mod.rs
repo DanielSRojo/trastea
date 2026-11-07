@@ -51,31 +51,19 @@ use style::{
 };
 
 /// How long a correct answer stays lit before the next prompt replaces it.
-///
-/// Long enough to register as an answer being *marked* rather than as the screen
-/// flickering, and short enough that a learner on a run never waits on it.
 const ANSWER_FLASH: Duration = Duration::from_secs(1);
-/// Tall enough for a scale kind whose name wraps to two lines — `Minor Pentatonic` and
-/// friends — *plus* the interval formula under it. iced lays a `Shrink` child out against
-/// the space that is left, so a column that runs out gives its last child a height of zero
-/// and the formula silently stops drawing rather than overflowing. The fit test below
-/// derives the budget this has to clear.
+/// Tall enough for a two-line kind name plus the formula. iced gives a `Shrink` child that
+/// runs out of room a height of zero rather than overflowing.
 const SUMMARY_CARD_HEIGHT: f32 = 280.0;
-/// The three text sizes the summary card has to stack inside `SUMMARY_CARD_HEIGHT`. Named
-/// rather than inlined so `summary_card_fits_a_two_line_name` budgets against the same
-/// numbers the card draws with — a copy of them would drift silently, which is the whole
-/// failure that test exists to catch.
+/// Named so the fit test budgets against the same sizes the card draws with.
 const SUMMARY_ROOT_SIZE: f32 = 56.0;
 const SUMMARY_NAME_SIZE: f32 = 34.0;
 const SUMMARY_FORMULA_SIZE: f32 = 24.0;
 const ROOT_SELECTOR_CARD_WIDTH: f32 = 320.0;
-/// Tall enough for `KIND_ROW_WIDTHS`'s six rows; the root selector shares the constant and
-/// has room to spare. Sized by the same rule as `SUMMARY_CARD_HEIGHT`, and for the same
-/// reason — a fixed height a column outgrows costs the last row entirely, not visibly.
+/// Tall enough for `KIND_ROW_WIDTHS`'s six rows; the root selector shares it.
 const SELECTOR_CARD_HEIGHT: f32 = 400.0;
 const ROOT_BUTTON_SIZE: f32 = 50.0;
-/// The scale-kind pills' text size. Named for the reason the summary card's sizes are:
-/// `selector_card_fits_every_kind_row` budgets the card's height against it.
+/// Named so `selector_card_fits_every_kind_row` budgets against it.
 const KIND_BUTTON_SIZE: f32 = 16.0;
 
 pub struct App {
@@ -83,61 +71,28 @@ pub struct App {
     history: Vec<Screen>,
     scale: Scale,
     focused: FocusTarget,
-    /// Owned rather than reached for globally, so every draw is a state change the
-    /// borrow checker can see. Note this makes `App` un-`Default`-able on purpose:
-    /// a `Default` seed would have to be a constant, and an app that replays the
-    /// same scales every launch is worse than no `Default` at all.
+    /// Owned rather than global, which is also why `App` has no `Default`: it would fix the seed.
     rng: Rng,
-    /// Whether the help overlay is up.
-    ///
-    /// A flag rather than a `Screen`, so the screen underneath stays the active one. The
-    /// overlay lists *its* keys and reads them from `self.screen` directly, instead of
-    /// recovering them from the top of the navigation history.
+    /// A flag rather than a `Screen`, so the screen underneath stays the active one.
     help_open: bool,
-    /// What the fretboard's markers say. Lives here rather than on `Scale` — see
-    /// `Notation`.
+    /// What the fretboard's markers say. Not on `Scale`, so it survives a reroll.
     notation: Notation,
-    /// The Note Trainer's drill. Its own struct rather than seven more fields here, so its
-    /// rules stay testable without an `App`.
     note_trainer: NoteTrainer,
-    /// The Interval Trainer's drill, on the same terms and for the same reasons.
     interval_trainer: IntervalTrainer,
-    /// The played drill: its prompt, its streak, and the device it listens to.
     play_the_interval: PlayTheInterval,
-    /// The Chord Library's query and selections. Its own struct for the reason the two
-    /// drills have one: the fields are read all over its views and nowhere else.
     chord_library: ChordLibrary,
-    /// The CAGED window's root and selection, on the same terms.
     caged: Caged,
-    /// The scale drill: its own scale, which element of the sequence it is asking for, how
-    /// it is answered, and the device it listens to when that is by playing.
     walk_the_scale: WalkTheScale,
-    /// The Tuner's device, detector state and reading. Holds the open audio stream, which
-    /// is why it lives on `App` rather than inside a subscription — iced hashes a
-    /// subscription recipe rather than its captured values, so a stream owned there would
-    /// be dropped and rebuilt whenever that hash changed. See `Message::Key`, which
-    /// documents the same hazard in its milder form.
+    /// Holds the open audio stream, which a subscription would drop whenever its hash changed.
     tuner: Tuner,
 }
 
-/// What the fretboard's markers are labelled with: the notes' names, or the degrees
-/// they occupy in the scale.
-///
-/// A UI type, unlike `Spelling`, which sits on `Scale`. Spelling earns its place
-/// there because it changes what the notes *are called* — `Scale::notes` and
-/// `Scale::spell` both read it, and a name is music rather than chrome. This
-/// changes nothing about the scale; it picks which of two true things about an
-/// already-determined scale gets drawn, so `music/` has no business knowing about
-/// it.
-///
-/// Keeping it off `Scale` also keeps it from being replaced along with one: the mode
-/// has to survive a reroll, and it would not if it travelled with the scale.
+/// What the fretboard's markers are labelled with: the notes' names, or their scale degrees.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Notation {
     Notes,
     Intervals,
-    /// Which finger stops a string. Only a chord diagram has one to show, which is why
-    /// `cycle_for` exists rather than a plain three-way rotation.
+    /// Which finger stops a string. Only a chord diagram has one, hence `cycle_for`.
     Fingers,
 }
 
@@ -152,10 +107,7 @@ pub enum Screen {
     ChordLibrary,
     Caged,
     Tuner,
-    /// The drill that walks a scale by degree. Its own screen rather than a mode of the
-    /// Scale Trainer, for the reason `PlayTheInterval` is not a mode of the Interval
-    /// Trainer: a reference and a drill are two things to look at, and one screen holding
-    /// both had two jobs and one keyboard.
+    /// The drill that walks a scale by degree.
     WalkTheScale,
 }
 
@@ -169,134 +121,85 @@ pub enum Message {
     RerollScale,
     /// Answers a *Name it* prompt with a note name.
     AnswerNote(PitchClass),
-    /// Answers a *Find it* prompt with a position — and what a press on the neck sends.
-    ///
-    /// The variant's constructor is passed to `Fretboard::on_press` as a plain
-    /// `fn(usize, usize) -> Message`, which is why it takes two loose `usize`s rather than
-    /// a tuple or an `Answer`.
+    /// Answers a *Find it* prompt with a position; also what a press on the neck sends.
+    /// Loose `usize`s so the constructor fits `Fretboard::on_press`'s `fn(usize, usize)`.
     ChooseNotePosition(usize, usize),
     SkipPrompt,
-    /// The end of the flash a correct answer leaves on screen: retires the answered prompt
-    /// and draws the next one. Sent by the timer in `App::subscription`, never by a widget.
+    /// Retires the flashed prompt and draws the next. Sent only by the timer.
     AdvancePrompt,
     ToggleDrillDirection,
     TogglePool,
-    /// The Note Trainer's spelling, not the scale's — see `NoteTrainer::spelling`.
+    /// The Note Trainer's spelling, not the scale's.
     ToggleNoteSpelling,
     /// The Tuner's, which names what it hears and moves no other screen.
     ToggleTunerSpelling,
     /// Answers a *Name it* prompt on the Interval Trainer with an interval.
     AnswerInterval(Interval),
-    /// Answers the Interval Trainer's *Find it* prompt with a position — and what a press
-    /// on that screen's neck sends.
-    ///
-    /// Two loose `usize`s for the reason `ChooseNotePosition` takes them: the bare variant
-    /// constructor is handed to `Fretboard::on_press` as a `fn(usize, usize) -> Message`.
+    /// Answers the Interval Trainer's *Find it* prompt with a position; also what a press on
+    /// that screen's neck sends.
     ChooseIntervalPosition(usize, usize),
     SkipIntervalPrompt,
     ToggleIntervalDirection,
-    /// The end of the Interval Trainer's answer flash. Its own variant rather than a shared
-    /// `AdvancePrompt` routed by screen, so a tick cannot retire the other trainer's prompt.
+    /// The end of the Interval Trainer's flash. Per screen, so a tick cannot cross screens.
     AdvanceIntervalPrompt,
     /// Selects one chord in the library's list, by its index among the rows on show.
     SelectChordRow(usize),
-    /// Selects one of the selected chord's voicings. A press anywhere inside a diagram
-    /// sends this, so selection does not depend on which position was pressed.
+    /// Selects one of the selected chord's voicings; a press anywhere inside a diagram sends it.
     SelectVoicing(usize),
     /// Picks a notation outright, by its index in the screen's `Notation::cycle_for`.
-    ///
-    /// Distinct from `ToggleNotation`, which advances: the library shows all three options
-    /// at once, and a press on one of them means that one rather than the next.
     SetNotation(usize),
     /// Picks the root the CAGED window shows.
     SelectCagedRoot(PitchClass),
     /// Picks one shape of the CAGED cycle, by its place in the derived order.
     SelectCagedShape(usize),
-    /// A different root for the CAGED window. Its own variant rather than `RerollScale`,
-    /// which would replace the Scale Trainer's scale from another screen.
+    /// A different root for the CAGED window, without touching the Scale Trainer's scale.
     RerollCagedRoot,
-    /// One tick of the audio poll: take whatever has arrived, analyse it, and fold the
-    /// result into the screen listening. Sent by the timer in `App::subscription` while a
-    /// listening screen is showing and a device is open, and never by a widget.
-    ///
-    /// Named for what it carries rather than for the screen that wanted it, because two
-    /// screens listen now. `App::listener` is what routes it, and the reason routing by
-    /// the screen on show is sound is that only one of them can hold the device.
+    /// One tick of the audio poll, routed by `App::listener` to the screen holding the device.
     AudioPoll,
-    /// A released reading, applied directly.
-    ///
-    /// `cfg(test)`: the running app reaches the same state through `AudioPoll`, which
-    /// analyses real audio. This is the seam the screens' tests drive instead, so a screen
-    /// assertion needs no device — the same arrangement the trainers use for a neck press.
+    /// A released reading, applied directly. The test seam in place of `AudioPoll`.
     #[cfg(test)]
     Heard(Heard),
     /// Opens the input device list.
     OpenDevices,
     /// Chooses a device by its place in the offered list.
     ChooseDevice(usize),
-    /// Skips the played drill's prompt. Its own variant rather than `SkipIntervalPrompt`,
-    /// which would replace the Interval Trainer's prompt from another screen.
+    /// Skips the played drill's prompt.
     SkipPlayPrompt,
-    /// The played drill's flash timer. Its own variant for the reason the other two have
-    /// theirs: a tick left behind on one screen must not retire another screen's prompt.
+    /// The played drill's flash timer.
     AdvancePlayPrompt,
     /// Starts another run after one has ended on its duration.
     StartWalkTheScale,
-    /// Picks the kind the drill walks. Its own variant rather than `SelectScaleKind`, which
-    /// would move the Scale Trainer's scale from here.
+    /// Picks the kind the drill walks.
     SelectDrillKind(ScaleKind),
-    /// The root display's drag, as the three moments it has. Each carries the cursor's x in
-    /// window coordinates rather than in the canvas's, since the gesture outlives the
+    /// The root display's drag. x is in window coordinates, since the gesture outlives the
     /// pointer's stay over the canvas and only differences are read.
     GrabDrillRoot(f32),
     DragDrillRoot(f32),
     DropDrillRoot,
-    /// The wheel over the root display, in steps rather than in the `ScrollDelta` it came
-    /// from: a line and a pixel are two units for one movement, and the canvas is where they
-    /// stop being two.
+    /// The wheel over the root display, already converted from `ScrollDelta` to steps.
     ScrollDrillRoot(f32),
     /// `[` and `]`: the root a semitone down or up, from wherever the ring is standing.
     StepDrillRoot(i32),
-    /// A different scale to drill. Its own variant rather than `RerollScale`, for the reason
-    /// `RerollCagedRoot` is one.
+    /// A different scale to drill.
     RerollDrillScale,
     /// Swaps how the drill is answered — a press on the neck, or a note played.
     ToggleScaleAnswering,
     /// Cycles the run's duration: off, three, five, ten minutes.
     CycleScaleDuration,
-    /// Hides the neck, so a degree is found from memory. Inert while pressing, where the
-    /// neck is the surface the answer is given on.
+    /// Hides the neck, so a degree is found from memory. Inert while answering by pressing.
     ToggleScaleNeck,
-    /// Answers the drill's current element with a position — what a press on the Scale
-    /// Trainer's neck sends while a run is going.
-    ///
-    /// Two loose `usize`s for the reason `ChooseNotePosition` takes them: the bare variant
-    /// constructor is handed to `Fretboard::on_press` as a `fn(usize, usize) -> Message`.
+    /// Answers the drill's current element with a position from the Scale Trainer's neck.
     ChooseScalePosition(usize, usize),
-    /// The end of the drill's completed-sequence flash. Its own variant for the reason the
-    /// other three have theirs: a tick left behind on one screen must not retire another's.
+    /// The end of the drill's completed-sequence flash.
     AdvanceScaleSequence,
     /// One second of a timed run, which is what spends its duration.
     WalkTheScaleTick,
-    /// A key press, straight from the subscription and not yet meaning anything.
-    ///
-    /// The subscription used to translate keys inside its own closure, which worked only
-    /// while translation read no state. A focused text box makes it stateful, and a closure
-    /// capturing that state would be built once and kept: iced hashes a subscription recipe
-    /// rather than the values its closure closed over, so the stream would go on running
-    /// with the flag it started with. Carrying the raw key to `update` — where `&mut self`
-    /// is in hand — removes the question rather than answering it.
+    /// A raw key press, translated in `update` rather than the subscription: iced keys a
+    /// subscription by its recipe hash, so a closure capturing state would go stale.
     Key(keyboard::Key, keyboard::Modifiers),
-    /// A character key that may be an accelerator on the current screen.
-    ///
-    /// Carries the character rather than an action because `translate_key` has no screen
-    /// to look it up against; `update` resolves it, and ignores the ones nothing claims.
+    /// A character key that may be an accelerator on the current screen; `update` resolves it.
     Accelerate(char),
     /// Puts the cursor in a screen's search box. Sent by `/` and by `Ctrl+K`.
-    ///
-    /// Not an `Accelerate`, because the two keys that send it are not characters a screen
-    /// claims: `Ctrl+K` is carved out of `COMMAND_MODIFIERS` by name, and both have to
-    /// reach one target rather than whichever focusable a screen happens to list.
     OpenSearch,
     ToggleHelp,
     FocusNext,
@@ -315,14 +218,10 @@ struct MenuItem {
     screen: Screen,
 }
 
-/// The Home menu, in the order it is drawn.
-///
-/// The buttons, the focus grid's item count, and the digit accelerators are all built from
-/// this, so a trainer added here gains all three at once and cannot end up with a button
-/// but no key, or a key labelled with the wrong name.
 /// How often the Tuner asks for audio while it is showing.
 const AUDIO_POLL: std::time::Duration = std::time::Duration::from_millis(10);
 
+/// The Home menu, in draw order; its buttons, focus grid and digit accelerators derive from it.
 const HOME_MENU: [MenuItem; 8] = [
     MenuItem {
         label: "Scale Trainer",
@@ -370,8 +269,7 @@ const HOME_MENU_ITEMS: usize = HOME_MENU.len();
 
 impl App {
     pub fn new() -> (Self, Task<Message>) {
-        // The generator is built before the struct, because the trainer's opening prompt is
-        // drawn from it and a struct literal cannot borrow a field it is still building.
+        // built first because the trainer's opening prompt is drawn from it
         let mut rng = Rng::from_clock();
         let note_trainer = NoteTrainer::new(&mut rng);
         let interval_trainer = IntervalTrainer::new(&mut rng);
@@ -399,10 +297,7 @@ impl App {
 
     /// Dispatches the message, then keeps the chord list scrolled to its selection.
     ///
-    /// Split from `dispatch` rather than folded into every arm that moves the selection:
-    /// the selection moves from the arrows, from a click, and from the query changing under
-    /// it, and threading a `Task` back out of each would spread one concern across all of
-    /// them. Comparing before and after asks the question once, where the answer is known.
+    /// Comparing before and after here saves every arm that moves the selection a `Task`.
     pub fn update(&mut self, message: Message) -> Task<Message> {
         let was = self.chord_library.selected_row();
         let task = self.dispatch(message);
@@ -415,22 +310,15 @@ impl App {
     }
 
     fn dispatch(&mut self, message: Message) -> Task<Message> {
-        // A raw key is resolved before anything else, because until it is translated it is
-        // not yet one of the messages the arms below are written against. `translate_key`
-        // never yields another `Key`, so this recurses exactly once.
+        // `translate_key` never yields another `Key`, so this recurses exactly once
         if let Message::Key(key, modifiers) = message {
-            // The one branch that asks whether the search box has the keyboard, and the
-            // reason translation moved here from the subscription. While the box holds
-            // focus almost everything is text — `j` types rather than moving, `?` types
-            // rather than opening the help — so the key must not reach `translate_key` at
-            // all. What the box declines (a command-modified key, say) falls through.
+            // while the search box has focus almost every key is text, so it must not reach
+            // `translate_key`; what the box declines falls through
             if self.screen == Screen::ChordLibrary && self.chord_library.search_focused() {
                 match self.chord_library.handle_key(&key, modifiers) {
                     KeyOutcome::Ignored => {}
                     KeyOutcome::Handled => return Task::none(),
-                    // Enter hands the keyboard to the shapes, which is where a learner who
-                    // has just found their chord wants to be: the list claims the arrows,
-                    // so left and right walk the voicings straight away.
+                    // Enter hands the keyboard to the shapes, so left and right walk the voicings
                     KeyOutcome::Accepted => {
                         self.focused = FocusTarget::ChordList;
 
@@ -440,17 +328,13 @@ impl App {
             }
 
             return match translate_key(key, modifiers) {
-                // `dispatch`, not `update`: the wrapper has already taken its "before"
-                // reading, and recursing through it would take a second one that could
-                // only ever agree with the first.
+                // `dispatch`, not `update`: the wrapper has already taken its before reading
                 Some(message) => self.dispatch(message),
                 None => Task::none(),
             };
         }
 
-        // The flash timer is the clock talking, not the user, so it is handled ahead of the
-        // overlay: a tick that arrived while the help panel was up would otherwise be
-        // spent dismissing a panel the learner is still reading.
+        // ahead of the overlay, so a tick does not dismiss the help panel
         if matches!(message, Message::AdvancePrompt) {
             self.note_trainer.advance(&mut self.rng);
             return Task::none();
@@ -471,26 +355,19 @@ impl App {
             return Task::none();
         }
 
-        // The run's clock, like the flash timers: a tick that arrived while the help panel
-        // was up must spend the duration rather than dismiss the panel.
+        // ahead of the overlay, so a tick spends the duration rather than dismissing the panel
         if matches!(message, Message::WalkTheScaleTick) {
             self.walk_the_scale.tick();
             return Task::none();
         }
 
-        // The audio poll, for the same reason and much more urgently: it ticks every
-        // 10 ms, so an overlay that a tick could dismiss was on screen for one frame. The
-        // reading also keeps up to date behind the panel rather than going stale and
-        // having to re-confirm when it closes.
+        // ahead of the overlay too: it ticks every 10 ms, so the panel would last one frame
         if matches!(message, Message::AudioPoll) {
             self.poll_audio();
             return Task::none();
         }
 
-        // The overlay is modal: while it is up, anything at all dismisses it and nothing
-        // else happens. Handling it here rather than per-message is what spares `GoBack`
-        // from having to mean two things, and stops an accelerator from firing blind
-        // behind a panel the user is still reading.
+        // the overlay is modal: anything dismisses it and nothing else happens
         if self.help_open {
             self.help_open = false;
             return Task::none();
@@ -498,16 +375,13 @@ impl App {
 
         match message {
             Message::Navigate(screen) => self.open(screen),
-            // Esc closes the device list before it leaves the screen, the way it leaves
-            // the library's search box without leaving the library.
+            // Esc closes the device list before it leaves the screen
             Message::GoBack if self.is_picking() => {
                 if let Some(listener) = self.listener() {
                     listener.close_picker();
                 }
             }
-            // And leaves the drill before it leaves the screen, which is what `Esc` does to
-            // the library's search box: the run is the modal thing here, and a learner
-            // pressing Esc mid-sequence means "stop asking", not "take me Home".
+            // and leaves the drill before it leaves the screen
             Message::GoBack
                 if self.screen == Screen::WalkTheScale && self.walk_the_scale.is_running() =>
             {
@@ -536,9 +410,7 @@ impl App {
             }
             // Both handled above, before the help overlay gets a say.
             Message::AdvanceScaleSequence | Message::WalkTheScaleTick => {}
-            // Every arm below borrows `self.note_trainer` and `self.rng` at once. That is
-            // allowed because they are disjoint fields — the same reason the drill's methods
-            // take the generator as a parameter instead of reaching for it.
+            // these borrow `self.note_trainer` and `self.rng` at once, as disjoint fields
             Message::AnswerNote(pitch_class) => self.note_trainer.answer_name(pitch_class),
             Message::ChooseNotePosition(string, fret) => {
                 self.note_trainer.answer_position(string, fret)
@@ -562,8 +434,6 @@ impl App {
             Message::AdvanceIntervalPrompt => {}
             Message::SkipPlayPrompt => self.play_the_interval.skip(&mut self.rng),
             Message::AdvancePlayPrompt => {}
-            // Handled above too, and earliest of all: by here it has already become one of
-            // the other arms, or nothing.
             // Handled above, ahead of the help overlay — see the early return there.
             Message::AudioPoll => {}
             #[cfg(test)]
@@ -586,9 +456,7 @@ impl App {
             Message::SelectCagedShape(index) => self.caged.select_shape(index),
             Message::RerollCagedRoot => self.reroll_caged_root(),
             Message::Accelerate(c) => return self.accelerate(c),
-            // Scoped to the one screen with a box, the way an accelerator a screen does
-            // not claim is inert there. `Ctrl+K` reaches here from anywhere, so the guard
-            // is what keeps it from focusing a box nobody can see.
+            // only the library has a box, and `Ctrl+K` arrives from any screen
             Message::OpenSearch => {
                 if self.screen == Screen::ChordLibrary {
                     self.chord_library.focus_search();
@@ -602,9 +470,7 @@ impl App {
             Message::FocusLeft => self.move_focus(Direction::Left),
             Message::FocusRight => self.move_focus(Direction::Right),
             Message::ActivateFocused => {
-                // While the list is up, Enter means "this one" rather than "fire whatever
-                // the ring is on" — the ring is behind a modal and pressing it would
-                // reopen the list that is already open.
+                // while the list is up, Enter picks a device rather than firing the ring
                 match self.listener().and_then(|listener| listener.picking()) {
                     Some(index) => {
                         if let Some(listener) = self.listener() {
@@ -618,11 +484,7 @@ impl App {
         Task::none()
     }
 
-    /// Opens a screen from anywhere — a click, a Tab-and-Enter, or a digit accelerator.
-    ///
-    /// Entering the scale trainer draws a fresh scale, so it never reopens on the one it
-    /// last showed. That rule lives here rather than at each entry point, which is what
-    /// keeps the menu button and the accelerator from drifting apart.
+    /// Opens a screen from anywhere, so every entry point shares the same entry rules.
     fn open(&mut self, screen: Screen) {
         let wants_fresh_scale = screen == Screen::ScaleTrainer;
         let wants_fresh_prompt = screen == Screen::NoteTrainer;
@@ -635,9 +497,7 @@ impl App {
 
         self.navigate_to(screen);
 
-        // The device opens on entering rather than on a press: a tuner that has to be
-        // started is a tuner that looks broken for as long as it takes to notice. Failing
-        // is a state the screen draws, so a machine with no input still gets a screen.
+        // opens on entering, so the tuner never looks broken; failing is a state the screen draws
         if wants_to_listen && let Some(listener) = self.listener() {
             listener.listen();
         }
@@ -646,15 +506,12 @@ impl App {
             self.reroll_scale();
         }
 
-        // The scale is what it was left on — a learner comes back to what they are working
-        // on, which is the CAGED window's rule rather than the Scale Trainer's — while the
-        // run itself is fresh and the best streak persists.
+        // the scale is kept; the run is fresh and the best streak persists
         if wants_a_fresh_walk {
             self.walk_the_scale.enter();
         }
 
-        // Same rule as the scale trainer's: the screen never reopens on what it last
-        // showed. Settings and the best streak persist; the run does not.
+        // a fresh scale each visit; settings and the best streak persist
         if wants_fresh_prompt {
             self.note_trainer.enter(&mut self.rng);
         }
@@ -667,19 +524,13 @@ impl App {
             self.play_the_interval.enter(&mut self.rng);
         }
 
-        // The library opens ready to be typed into: it is a thing you come to in order to
-        // look something up, and a focus ring parked on Back would make the first keystroke
-        // do nothing. `enter` clears the query for the reason the trainers draw a fresh
-        // prompt — the screen never reopens on what it last showed — and the root it
-        // established survives, so an empty box still means "that root, every quality".
+        // opens with the search box focused; `enter` clears the query but keeps the root
         if wants_the_search_box {
             self.chord_library.enter();
             self.focused = FocusTarget::SearchBox;
         }
 
-        // Unlike the trainers, this screen reopens on what it last showed: it is a reference
-        // rather than a run, so the root a learner was working on is what they came back for.
-        // `enter` only re-establishes the selection's invariant.
+        // a reference, so it reopens on what it last showed
         if wants_the_caged_window {
             self.caged.enter();
         }
@@ -700,39 +551,26 @@ impl App {
         }
     }
 
-    /// What a screen has to put down on the way out.
-    ///
-    /// The screens that listen hold an open capture device, and an audio interface is a
-    /// device other programs want. Both navigation paths call this, which
-    /// is what stops the two from disagreeing about it.
+    /// What a screen has to put down on the way out, such as an open capture device.
     fn leaving_for(&mut self, next: &Screen) {
         if self.screen == *next {
             return;
         }
 
-        // A run does not outlive the screen it is on: its clock would go on spending a
-        // duration behind a screen nobody is looking at, and `leave` is also what puts the
-        // device down when the run was listening.
+        // a run's clock must not keep spending behind a screen nobody is looking at
         if self.screen == Screen::WalkTheScale {
             self.walk_the_scale.leave();
         }
 
-        // Asked of the screen being left rather than of the one being entered, and before
-        // `self.screen` moves — which is what makes moving between the two listening
-        // screens close one stream before the other opens, rather than holding both.
+        // asked before `self.screen` moves, so one stream closes before the other opens
         if let Some(listener) = self.listener() {
             listener.stop();
         }
     }
 
-    /// The device of whichever screen is listening, or `None` on the screens that do not.
+    /// The device of whichever screen is listening.
     ///
-    /// Routing by the screen on show is sound here, and would not be for the trainers'
-    /// flash timers: both trainers can genuinely be mid-flash at once, while only one
-    /// screen can hold the device — `leaving_for` closes it on the way out, so a reading
-    /// arriving for a screen that is not showing has no screen it could have come from.
-    /// That invariant is what this helper rests on, and what the test asserting one stream
-    /// at a time exists to protect.
+    /// Routing by the screen on show is sound only because `leaving_for` closes the device.
     fn listener(&mut self) -> Option<&mut Listener> {
         match self.screen {
             Screen::Tuner => Some(self.tuner.listener_mut()),
@@ -759,26 +597,19 @@ impl App {
         self.listener_ref().is_some_and(Listener::is_listening)
     }
 
-    /// Whether the run's one-second clock should tick. Named rather than inlined in
-    /// `subscription` because a `Subscription` cannot be inspected, and this is the part a
-    /// test can reach.
+    /// Whether the run's one-second clock should tick. Split out because a `Subscription` cannot
+    /// be inspected.
     fn wants_run_clock(&self) -> bool {
         self.screen == Screen::WalkTheScale && self.walk_the_scale.is_running()
     }
 
     /// One tick of audio, folded into the screen that asked for it.
-    ///
-    /// Not `listener().poll()` alone: a drill has to see the reading to judge it, so the
-    /// screen is given what was released rather than left to read it back off the device
-    /// afterwards. The Tuner wants nothing beyond the fold, and says so by doing nothing.
     fn poll_audio(&mut self) {
         match self.screen {
             Screen::Tuner => {
                 self.tuner.listener_mut().poll();
             }
-            // The drill has to see the reading to judge it, so the fold and the judging
-            // happen in one call rather than the screen reading it back off the device
-            // afterwards — two readers of one reading are two readers free to disagree.
+            // fold and judge in one call, so there is only one reader of the reading
             Screen::PlayTheInterval => {
                 if let Some(heard) = self.play_the_interval.listener_mut().poll() {
                     self.play_the_interval.apply(heard);
@@ -794,8 +625,7 @@ impl App {
         }
     }
 
-    /// A released reading, handed to the screen listening. The seam the screens' tests
-    /// drive in place of a device.
+    /// A released reading, handed to the screen listening. The test seam in place of a device.
     #[cfg(test)]
     fn hear(&mut self, heard: Heard) {
         match self.screen {
@@ -815,11 +645,6 @@ impl App {
     }
 
     /// Picks a new scale, never the one already on screen.
-    ///
-    /// Root and kind are drawn from the same advancing stream, so the second draw
-    /// cannot be a function of the first. Rerolling onto the current scale would
-    /// make the button look broken, so that one outcome is rejected and redrawn —
-    /// which is also why the very first scale of a session is never C Ionian.
     fn reroll_scale(&mut self) {
         let current = (self.scale.root(), self.scale.kind());
         let (root, kind) = self.rng.draw_other_than(current, |rng| {
@@ -831,8 +656,7 @@ impl App {
         self.set_scale(root, kind);
     }
 
-    /// A different root than the one on show, so a press always changes the neck — the rule
-    /// `reroll_scale` follows, with one field to draw instead of two.
+    /// A different root than the one on show.
     fn reroll_caged_root(&mut self) {
         let root = self.rng.draw_other_than(self.caged.root(), |rng| {
             PitchClass::ALL[rng.below(PitchClass::ALL.len())]
@@ -840,20 +664,16 @@ impl App {
         self.caged.select_root(root);
     }
 
-    /// The one place a `Scale` is built, because its spelling is derived from the
-    /// root and the kind together: changing either has to re-derive it, and five
-    /// call sites each calling `Scale::new` would be five chances to pass a stale
-    /// field. See `Scale::new` for what is being derived.
+    /// The one place a `Scale` is built, since its spelling derives from root and kind together.
     fn set_scale(&mut self, root: PitchClass, kind: ScaleKind) {
         self.scale = Scale::new(root, kind);
     }
 
-    /// Flips what the markers say. Nothing about the scale moves — see `Notation`.
+    /// Flips what the markers say. Nothing about the scale moves.
     fn toggle_notation(&mut self) {
         self.notation = match self.notation {
             Notation::Notes => Notation::Intervals,
-            // A scale has no fingering, so this field never holds `Fingers` — the library
-            // keeps its own setting, and the two screens no longer move each other.
+            // a scale has no fingering, so this never holds `Fingers`
             Notation::Intervals | Notation::Fingers => Notation::Notes,
         };
     }
@@ -874,15 +694,9 @@ impl App {
 
     /// Arrow keys: moves one cell within the screen's focus grid, stopping at edges.
     ///
-    /// Except on the neck, which claims the motion keys while focused and moves its own
-    /// cursor instead. That is a deliberate special case rather than a mechanism: the neck
-    /// is a grid of seventy-eight positions, and reaching them by anything other than the
-    /// arrows would cost more than Tab becoming the only way out. If a second such widget
-    /// ever appears, that is the time to generalise — not before.
+    /// The focused neck is a deliberate special case that claims them for its own cursor.
     fn move_focus(&mut self, direction: Direction) {
-        // The device list claims the vertical pair outright while it is open, the way the
-        // CAGED pills claim the horizontal one: choosing is one gesture rather than
-        // focus-then-activate. It is modal, so this comes before every other claim.
+        // the open device list is modal and claims up and down before anything else
         if self.is_picking() {
             let delta = match direction {
                 Direction::Up => -1,
@@ -910,8 +724,7 @@ impl App {
             return;
         }
 
-        // The list claims all four: up and down walk the chords, left and right walk the
-        // selected chord's voicings. Tab is still the way out, as it is on the two necks.
+        // up and down walk the chords, left and right walk the voicings
         if self.focused == FocusTarget::ChordList {
             match direction {
                 Direction::Up => self.chord_library.move_row(-1),
@@ -922,9 +735,7 @@ impl App {
             return;
         }
 
-        // The pills claim the horizontal pair only, as the library's list claims all four:
-        // walking the cycle is one gesture rather than focus-then-activate. Up and down still
-        // leave the row, since there is nowhere further along it to go.
+        // the pills claim left and right only; up and down still leave the row
         if let FocusTarget::CagedShape(_) = self.focused {
             let delta = match direction {
                 Direction::Left => Some(-1),
@@ -948,13 +759,8 @@ impl App {
     }
 
     /// Fires the accelerator `c` names on the current screen, if it names one.
-    ///
-    /// A miss is silent: `translate_key` forwards every character it does not recognise as
-    /// a motion, so most of what arrives here is nothing at all.
     fn accelerate(&mut self, c: char) -> Task<Message> {
-        // Offered to the screen first, because `gg` is a *pair* of keys and the accelerator
-        // table maps one key to one action — it has nowhere to keep "a `g` is pending". A
-        // screen that wants a motion of its own takes it here and the table never sees it.
+        // offered to the screen first, since the table has nowhere to keep the pending `g` of `gg`
         if self.screen == Screen::ChordLibrary && self.chord_library.motion(c) {
             return Task::none();
         }
@@ -966,8 +772,7 @@ impl App {
 
         match fires {
             Some(Fires::Widget(target)) => self.activate(target),
-            // `dispatch`, as for a translated key, and its task handed back rather than
-            // dropped, so a message that has an effect to run keeps it.
+            // `dispatch`, as for a translated key, with its task handed back
             Some(Fires::Message(message)) => return self.dispatch(message),
             None => {}
         }
@@ -975,9 +780,7 @@ impl App {
         Task::none()
     }
 
-    /// Performs `target`'s action. Focus is left alone: an accelerator fires a widget
-    /// without walking the ring onto it, so the only focus changes here are the ones
-    /// the action itself causes — navigating resets focus exactly as a click would.
+    /// Performs `target`'s action without walking the focus ring onto it.
     fn activate(&mut self, target: FocusTarget) {
         match target {
             FocusTarget::HomeMenuItem(index) => {
@@ -1022,8 +825,7 @@ impl App {
                     self.set_scale(self.scale.root(), kind);
                 }
             }
-            // Enter on the neck answers with wherever the cursor is sitting, which is the
-            // same thing a click on that position would send.
+            // the same as a click on the cursor's position
             FocusTarget::Fretboard => self.note_trainer.answer_at_cursor(),
             FocusTarget::NoteAnswer(index) => {
                 if let Some(&pitch_class) = PitchClass::ALL.get(index) {
@@ -1037,8 +839,7 @@ impl App {
             FocusTarget::SkipPrompt => self.note_trainer.skip(&mut self.rng),
             FocusTarget::SearchBox => self.chord_library.focus_search(),
             FocusTarget::NotationChoice(index) => self.chord_library.set_notation(index),
-            // Nothing to fire: the list is browsed with the arrows rather than activated,
-            // and a chord is already selected the moment the ring reaches it.
+            // nothing to fire: a chord is selected as soon as the ring reaches it
             FocusTarget::ChordList => {}
             FocusTarget::IntervalFretboard => self.interval_trainer.answer_at_cursor(),
             FocusTarget::IntervalAnswer(index) => {
@@ -1115,10 +916,7 @@ impl App {
 
     pub fn subscription(&self) -> Subscription<Message> {
         let keys = keyboard::listen().filter_map(|event| {
-            // `modified_key`, not `key`: iced reports `key` *without* modifiers applied, so
-            // Shift+/ arrives there as `/` and `?` could never match. `modified_key` is the
-            // character the user actually typed, which is also what makes Shift+R read as
-            // `R` — unbound — rather than as a plain `r` that would reroll.
+            // `modified_key`, since `key` arrives without modifiers and Shift+/ would read as `/`
             let keyboard::Event::KeyPressed {
                 modified_key,
                 modifiers,
@@ -1127,21 +925,12 @@ impl App {
             else {
                 return None;
             };
-            // Deliberately no translation here — see `Message::Key`. The closure captures
-            // nothing, which is what keeps this stream correct when the state that decides
-            // what a key means starts changing.
+            // no translation here; see `Message::Key`
             Some(Message::Key(modified_key, modifiers))
         });
 
-        // The flash's timer, alive only while one is on screen. Starting the stream with
-        // the flash is what puts its first tick a second later; an always-on timer would
-        // land anywhere between nothing and a full second after the answer, which is the
-        // one thing a fixed pause must not do. It also keeps the app idle the rest of the
-        // time, since nothing else here ticks.
-        // Each trainer's flash gets its own timer and its own message. Only one screen is
-        // ever on show, but a flash left behind on the other one keeps its timer alive until
-        // it is retired — harmless, because `advance` is a no-op once the prompt has moved
-        // on, and because a tick can only reach the trainer its variant names.
+        // only while a flash is on screen, so its first tick lands a full second after the
+        // answer. Each trainer has its own, so a tick cannot retire another screen's prompt.
         let mut streams = vec![keys];
 
         if self.note_trainer.is_flashing() {
@@ -1160,21 +949,14 @@ impl App {
             streams.push(iced::time::every(ANSWER_FLASH).map(|_| Message::AdvanceScaleSequence));
         }
 
-        // One second is the resolution the readout needs — `4:59` — and anything finer would
-        // redraw for nothing. Gated on a run rather than on the screen, so an untimed run
-        // ticks no more than a timed one needs.
+        // one second is the resolution the readout needs
         if self.wants_run_clock() {
             streams
                 .push(iced::time::every(Duration::from_secs(1)).map(|_| Message::WalkTheScaleTick));
         }
 
-        // Only while the Tuner is showing and a device is open, so nothing ticks on any
-        // other screen. Ten milliseconds is a little under the hop the detector wants, so
-        // a window is picked up in the tick after it completes rather than one later.
-        //
-        // Note what does *not* travel in this closure: the stream lives on `App`, because
-        // iced hashes a subscription recipe rather than its captured values and would
-        // otherwise drop and rebuild the device whenever that hash changed.
+        // 10 ms is a little under the detector's hop, so a window is picked up the tick after
+        // it completes
         if self.is_listening() {
             streams.push(iced::time::every(AUDIO_POLL).map(|_| Message::AudioPoll));
         }
@@ -1183,9 +965,7 @@ impl App {
     }
 }
 
-/// The back arrow's size. Larger than the 18 the body font wore, because the maths face
-/// draws an arrow against its own optical size rather than a cap height — at 18 the mark
-/// came out as a rule with a nick in it.
+/// The back arrow's size. The maths face needs more than the body's 18 to read as an arrow.
 const BACK_ARROW_SIZE: f32 = 22.0;
 
 fn with_top_bar(
@@ -1258,15 +1038,8 @@ fn ui_home(focused: FocusTarget) -> Element<'static, Message> {
     with_top_bar("Trastea", content.into(), false, focused)
 }
 
-/// Each button is named by the scale pressing it would build, so the label is a
-/// promise the press keeps. That means a label moves when the *kind* selection
-/// moves — pitch class 10 reads `A♯` under Minor Pentatonic and `B♭` under Ionian —
-/// which is the fact the whole naming rule is about: the same fret is called
-/// different things depending on what you are playing over it.
-///
-/// The message a press sends and the focus target a button answers to are both parameters,
-/// because the Scale Trainer and the scale drill each own their own scale — a shared grid
-/// that hard-coded `Message::SelectRoot` would move the trainer's scale from the drill.
+/// Each button is named by the scale pressing it would build, so labels move with the kind.
+/// The message and focus target are parameters because the trainer and the drill each own a scale.
 fn root_note_row(
     pitch_classes: &[PitchClass],
     scale: Scale,
@@ -1297,7 +1070,7 @@ fn root_note_row(
         })
 }
 
-/// The kind pills. Parameterised like `root_note_row` and for the same reason.
+/// The kind pills, parameterised like `root_note_row`.
 fn scale_kind_row(
     kinds: &[ScaleKind],
     selected: ScaleKind,
@@ -1326,10 +1099,7 @@ fn scale_kind_row(
         })
 }
 
-/// One square root button, wrapped in its focus ring.
-///
-/// Shared by the Scale Trainer and the CAGED window. The two differ only in what names a root
-/// and what a press on one means, so both are parameters and the geometry is not.
+/// One square root button, wrapped in its focus ring. Shared by the Scale Trainer and CAGED.
 fn root_square(
     label: iced::widget::Row<'static, Message>,
     is_selected: bool,
@@ -1373,8 +1143,7 @@ fn note_label(
 ) -> iced::widget::Row<'static, Message> {
     use iced::widget::{row, text};
 
-    // `Pixels` is `Copy`, so resolving the conversion once lets both the letter and the
-    // accidental share it — `impl Into<Pixels>` itself would be moved by the first `size`.
+    // resolved once because `impl Into<Pixels>` would be moved by the first `size`
     let size = size.into();
     let label = row![text(note.letter.to_string()).size(size).color(color)].spacing(0);
 
@@ -1389,8 +1158,7 @@ fn note_label(
     }
 }
 
-/// The SMuFL glyph for an accidental. `None` for a natural: a natural sign would
-/// be wrong in a note label, and the major scale's degrees carry no glyph.
+/// The SMuFL glyph for an accidental. `None` for a natural, which a label never shows.
 fn accidental_glyph(accidental: Accidental) -> Option<char> {
     match accidental {
         Accidental::DoubleFlat => Some(SMUFL_DOUBLE_FLAT),
@@ -1401,14 +1169,8 @@ fn accidental_glyph(accidental: Accidental) -> Option<char> {
     }
 }
 
-/// The glyph (if any) and the degree digit that together label one interval in
-/// the formula card — e.g. Blues's ♭5 is `(Some(SMUFL_FLAT), 5)`.
-///
-/// Split out as a pure decision rather than a rendered `String` because the two
-/// parts render in different fonts — the glyph in `MUSIC_FONT`, the digit in the
-/// body font — so `intervalic_text` still needs two separate `text` widgets per
-/// token; this is what lets that per-part font split be tested without building
-/// an iced widget tree.
+/// The glyph (if any) and degree digit labelling one formula interval, e.g. Blues's ♭5 is
+/// `(Some(SMUFL_FLAT), 5)`. Split because the two parts render in different fonts.
 fn interval_token(interval: Interval) -> (Option<char>, u8) {
     (accidental_glyph(interval.alteration()), interval.number())
 }
@@ -1441,17 +1203,11 @@ fn intervalic_text(intervals: &'static [Interval]) -> iced::widget::Row<'static,
         })
 }
 
-/// The text inside one marker — a note's name, or the job it does in the scale.
-///
-/// A pure decision split out of `scale_markers` for the reason `interval_token` is
-/// split out of `intervalic_text`: it is the part worth testing, and testing it
-/// here needs no widget tree and no canvas.
+/// The text inside one marker: a note's name, or the job it does in the scale.
 fn marker_label(notation: Notation, note: Note, degree: Interval) -> String {
     match notation {
         Notation::Notes => note.to_string(),
-        // A scale has no fingering. The library keeps its own setting now, so this field
-        // never actually holds `Fingers`; the arm is here to keep the match total rather
-        // than to describe anything the screen can reach.
+        // unreachable here, since the library keeps its own fingering setting
         Notation::Intervals | Notation::Fingers => degree.to_string(),
     }
 }
@@ -1490,10 +1246,6 @@ mod tests {
     }
 
     /// An app parked on `screen`, for the focus-layout methods.
-    ///
-    /// `focus_grid` and `focusables` read `self` rather than a bare `&Screen`, because a
-    /// screen's shape can depend on state — so asking what is focusable means having an
-    /// app to ask.
     pub(super) fn app_on(screen: Screen) -> App {
         let mut app = app_with_seed(0);
         app.screen = screen;
@@ -1525,9 +1277,7 @@ mod tests {
             seen.insert(scale_indices(&app));
         }
 
-        // Reseeding from the clock on every draw made root and kind both functions
-        // of the same instant, so only lcm(12, 16) = 48 of the 192 pairs could ever
-        // come up — C Dorian, for one, was unreachable.
+        // a clock-seeded draw per roll once left only lcm(12, 16) = 48 of the 192 pairs reachable
         let total = PitchClass::ALL.len() * ScaleKind::ALL.len();
         assert_eq!(
             seen.len(),
@@ -1559,21 +1309,9 @@ mod tests {
         }
     }
 
-    // `toggling_spelling_renames_the_scale_without_moving_it` and
-    // `rerolling_leaves_the_spelling_alone` stood here. Both tested a control that no
-    // longer exists, and neither survives as a repair: spelling is not a user setting
-    // to be preserved across a reroll, it is derived from the root and kind. What the
-    // first of them really protected — that naming a scale never moves it — is now
-    // `naming_never_moves_the_scale` in `music/scales.rs`, asserted across all 192
-    // combinations rather than one. The rest is carried by `Scale`'s private fields,
-    // which is the better place for it: a test could only check the paths it thought
-    // to walk, where the type rules the bad state out everywhere at once.
-
     #[test]
     fn selecting_a_root_names_it_the_way_it_is_taught() {
-        // The headline case, asserted where it reaches the screen: pitch class 10 under
-        // Ionian is B♭ major, not the A♯ major that would put three double sharps on
-        // the neck.
+        // pitch class 10 under Ionian is B♭ major, not A♯ major
         let mut app = app_with_seed(7);
         let _ = app.update(Message::SelectScaleKind(ScaleKind::Ionian));
         let _ = app.update(Message::SelectRoot(PitchClass::new(10)));
@@ -1591,10 +1329,7 @@ mod tests {
 
     #[test]
     fn a_root_button_is_named_by_the_scale_pressing_it_builds() {
-        // The label is a promise; this is the promise being kept. Both kinds are
-        // checked because the label moves with the kind — pitch class 10 reads A♯
-        // under Minor Pentatonic and B♭ under Ionian — and a rule that only held for
-        // one of them would be worse than no rule.
+        // both kinds, since the label moves with the kind
         for kind in [ScaleKind::Ionian, ScaleKind::MinorPentatonic] {
             let mut app = app_with_seed(5);
             let _ = app.update(Message::SelectScaleKind(kind));
@@ -1615,10 +1350,7 @@ mod tests {
 
     #[test]
     fn a_natural_renders_no_glyph_and_the_rest_map_to_smufl() {
-        // A natural sign would be wrong in a note label and in a formula alike,
-        // which is why this returns Option rather than a char. The four glyph
-        // constants are hand-written, so a swapped pair would otherwise compile
-        // and pass every other test in this file.
+        // the glyph constants are hand-written, so a swapped pair would otherwise compile
         assert_eq!(accidental_glyph(Accidental::Natural), None);
         assert_eq!(accidental_glyph(Accidental::Flat), Some(SMUFL_FLAT));
         assert_eq!(accidental_glyph(Accidental::Sharp), Some(SMUFL_SHARP));
@@ -1634,19 +1366,14 @@ mod tests {
 
     /// Presses a character key with the given modifiers held.
     ///
-    /// `c` is the *modified* key — the character the keyboard actually produces, which is
-    /// what the subscription feeds `translate_key`. So Shift+/ is `press("?", SHIFT)` and
-    /// Shift+r is `press("R", SHIFT)`; writing those as `"/"` or `"r"` would describe an
-    /// event no keyboard sends, which is exactly how `?` shipped broken behind a passing
-    /// test.
+    /// `c` is the modified key, so Shift+/ is `press("?", SHIFT)`, not `press("/", SHIFT)`.
     pub(super) fn press(c: &str, modifiers: keyboard::Modifiers) -> Option<Message> {
         translate_key(keyboard::Key::Character(c.into()), modifiers)
     }
 
     /// Every screen, so a new one cannot quietly escape the checks that sweep them all.
     pub(super) fn every_screen() -> [Screen; 9] {
-        // No `_` arm, so a new `Screen` stops this compiling until it is listed — the array
-        // below is the next line to change.
+        // no `_` arm, so a new `Screen` stops this compiling until it is listed
         match Screen::default() {
             Screen::Home
             | Screen::ScaleTrainer
@@ -1672,34 +1399,20 @@ mod tests {
         ]
     }
 
-    /// The state a keypress could disturb.
-    ///
-    /// `translate_key` no longer answers "is this key bound?" — it forwards every
-    /// unrecognised character for the screen to resolve — so the absence of a binding is
-    /// only observable here, as the absence of a change.
+    /// The state a keypress could disturb; an unbound key shows only as no change here.
     fn snapshot(app: &App) -> (Screen, FocusTarget, PitchClass, ScaleKind, Notation, usize) {
         (
             app.screen.clone(),
             app.focused,
             app.scale.root(),
             app.scale.kind(),
-            // The scale's spelling was watched here too. It is derived from the two
-            // fields above now, so it cannot move on its own and watching it would only
-            // restate them.
-            //
-            // Without `notation` the tests below would watch `i` do nothing and call
-            // that a pass.
+            // without `notation`, `i` doing nothing would pass
             app.notation,
             app.history.len(),
         )
     }
 
-    /// Presses a character key and lets the app act on whatever it translates to.
-    /// Drives a key press the way the subscription does: as a raw `Message::Key` into
-    /// `update`, which is where translation now happens. `press` above still probes
-    /// `translate_key` directly, because it is still a pure function and a test that can
-    /// say "this produced no message" is stronger than one that can only say "nothing
-    /// changed".
+    /// Drives a key press the way the subscription does: as a raw `Message::Key` into `update`.
     pub(super) fn press_into(app: &mut App, c: &str, modifiers: keyboard::Modifiers) {
         let _ = app.update(Message::Key(keyboard::Key::Character(c.into()), modifiers));
     }
@@ -1810,9 +1523,7 @@ mod tests {
         }
     }
 
-    /// Shift+h delivers the capital, not the lowercase letter with a flag set. An earlier    /// Shift+h delivers the capital, not the lowercase letter with a flag set. An earlier
-    /// version of this test pressed `"h"` with SHIFT — which no keyboard produces — and
-    /// passed only because the guard rejected every modifier, Shift included.
+    /// Shift+h delivers the capital, not the lowercase letter with a flag set.
     #[test]
     fn capital_letters_are_unbound() {
         for screen in every_screen() {
@@ -1841,8 +1552,7 @@ mod tests {
         }
     }
 
-    /// The one character key admitted while a command modifier is held. `COMMAND_MODIFIERS`
-    /// still suppresses everything else, which the test above is what proves.
+    /// The one character key admitted while a command modifier is held.
     #[test]
     fn ctrl_k_is_the_only_hole_in_the_command_modifiers() {
         assert!(matches!(
@@ -1907,8 +1617,7 @@ mod tests {
     #[test]
     fn i_is_inert_on_screens_that_do_not_claim_it() {
         for screen in every_screen() {
-            // Read from the table rather than listed here, so a screen that takes up `i`
-            // exempts itself instead of turning this into a failure to edit by hand.
+            // read from the table, so a screen that takes up `i` exempts itself
             if accelerators_for(&screen, Notation::Notes, &WalkTheScale::new())
                 .iter()
                 .any(|&(key, ..)| key == 'i')
@@ -1926,9 +1635,7 @@ mod tests {
         }
     }
 
-    /// The scale drill's two, on the same terms as `i` above: read from the table, so a
-    /// screen that takes a bracket up exempts itself rather than making this a failure to
-    /// edit by hand.
+    /// The scale drill's brackets, read from the table like `i` above.
     #[test]
     fn the_brackets_are_inert_on_screens_that_do_not_claim_them() {
         for screen in every_screen() {
@@ -1951,8 +1658,7 @@ mod tests {
         }
     }
 
-    /// The mode is a preference, not a property of what is on screen — so nothing that
-    /// replaces the scale may quietly put the neck back into note names.
+    /// The mode is a preference, so nothing that replaces the scale may reset it.
     #[test]
     fn the_notation_survives_everything_that_replaces_the_scale() {
         let mut app = app_with_seed(0x5a1e);
@@ -1977,9 +1683,7 @@ mod tests {
         );
     }
 
-    /// Sharper than comparing snapshots: if `r` on Home reached the reroll at all it would
-    /// consume draws, so an identically seeded app that never pressed it would diverge.
-    /// Equal scales here mean the key did not touch the generator, let alone the scale.
+    /// Equal scales against an identically seeded app mean `r` never touched the generator.
     #[test]
     fn r_outside_the_scale_trainer_does_not_even_advance_the_rng() {
         let mut pressed = app_with_seed(0x1de17);
@@ -1999,8 +1703,7 @@ mod tests {
         );
     }
 
-    /// An accelerator fires its target without walking the ring onto it, so an action that
-    /// stays on the screen must leave focus exactly where the user left it.
+    /// An accelerator that stays on the screen must leave focus where the user left it.
     #[test]
     fn an_in_screen_accelerator_leaves_focus_alone() {
         let mut app = app_with_seed(0xf0c05);
@@ -2015,8 +1718,7 @@ mod tests {
     #[test]
     fn the_chord_library_is_reachable_from_the_menu() {
         let mut app = app_with_seed(0xc40d);
-        // The library is the sixth entry, so it takes the sixth digit — both derived
-        // from `HOME_MENU`, which is why a screen inserted above it needed nothing else.
+        // the library is the sixth `HOME_MENU` entry, so it takes the sixth digit
         press_into(&mut app, "6", keyboard::Modifiers::empty());
 
         assert_eq!(app.screen, Screen::ChordLibrary);
@@ -2112,8 +1814,7 @@ mod tests {
 
     #[test]
     fn escape_leaves_the_box_before_it_leaves_the_screen() {
-        // `navigate_to` rather than `app_on`, because the second half of this needs a
-        // history for `GoBack` to pop.
+        // `navigate_to` rather than `app_on`, so `GoBack` has a history to pop
         let mut app = app_with_seed(0xe5c);
         app.navigate_to(Screen::ChordLibrary);
         press_into(&mut app, "/", keyboard::Modifiers::empty());
@@ -2148,8 +1849,7 @@ mod tests {
 
     #[test]
     fn enter_moves_the_ring_from_the_box_to_the_shapes() {
-        // Type to find it, enter to look at it: the arrows have to walk the voicings the
-        // moment the box lets go, without a Tab in between.
+        // the arrows walk the voicings the moment the box lets go
         let mut app = app_with_seed(0x3117);
         app.open(Screen::ChordLibrary);
 
@@ -2208,8 +1908,7 @@ mod tests {
         press_into(&mut app, "g", keyboard::Modifiers::empty());
         assert_eq!(app.chord_library.selected_row(), last);
 
-        // And anything between the two halves cancels it, so a stale `g` cannot turn the
-        // next keystroke into a jump.
+        // and anything between the two halves cancels it
         press_into(&mut app, "i", keyboard::Modifiers::empty());
         press_into(&mut app, "g", keyboard::Modifiers::empty());
         assert_eq!(app.chord_library.selected_row(), last, "a stale g fired");
@@ -2246,8 +1945,7 @@ mod tests {
 
     #[test]
     fn a_notation_button_picks_that_notation_rather_than_the_next() {
-        // The difference between three buttons and one that cycles: pressing the second
-        // means the second, from wherever the setting happens to be.
+        // pressing the second means the second, wherever the setting is
         let mut app = app_on(Screen::ChordLibrary);
 
         for (index, expected) in [
@@ -2264,18 +1962,14 @@ mod tests {
 
     #[test]
     fn the_library_opens_on_fingers_and_leaves_the_scale_trainer_alone() {
-        // Fingers is what a learner opening this screen wants: it answers "how do I play
-        // this". The Scale Trainer has no fingering and keeps its own setting, so picking
-        // one here cannot change what that screen labels its markers with.
+        // Fingers here; the Scale Trainer keeps its own setting
         let mut app = app_with_seed(0xf14);
         app.open(Screen::ChordLibrary);
 
         assert_eq!(app.chord_library.notation(), Notation::Fingers);
         assert_eq!(app.notation, Notation::Notes, "the scale trainer moved");
 
-        // Out of the box first: `d` is a note name, so while the box has the keyboard it
-        // has to type rather than switch modes, or `d` could never begin a search for a D
-        // chord. See `the_mode_keys_type_while_the_box_has_focus`.
+        // out of the box first: `d` is a note name, so a focused box would type it
         press_named(&mut app, Named::Escape);
         press_into(&mut app, "d", keyboard::Modifiers::empty());
 
@@ -2285,9 +1979,7 @@ mod tests {
 
     #[test]
     fn the_mode_keys_type_while_the_box_has_focus() {
-        // The collision worth stating: `n`, `d` and `f` are all note names, so a focused
-        // search box must take them as text. The screen opens with the box focused, so the
-        // mode keys are a thing you reach for after `Esc` — exactly as `/` and `i` are.
+        // `n`, `d` and `f` are note names, so a focused search box takes them as text
         let mut app = app_with_seed(0x4b0);
         app.open(Screen::ChordLibrary);
 
@@ -2319,8 +2011,7 @@ mod tests {
 
     #[test]
     fn i_still_cycles_now_that_the_buttons_are_separate() {
-        // The keyboard keeps its one-key habit: `i` names whichever button comes next, so
-        // its accelerator target moves with the setting rather than being fixed.
+        // `i` names whichever button comes next, so its target moves with the setting
         let mut app = app_on(Screen::ChordLibrary);
         app.chord_library.set_notation(0);
 
@@ -2353,9 +2044,7 @@ mod tests {
         }
     }
 
-    /// The counterpart to `an_in_screen_accelerator_leaves_focus_alone`: when the action
-    /// navigates, focus does move — because navigating moves it, not because the
-    /// accelerator did. This distinction only became visible once Home had keys.
+    /// When the action navigates, focus moves because navigating moves it.
     #[test]
     fn a_navigating_accelerator_resets_focus_on_the_new_screen() {
         for (index, item) in HOME_MENU.iter().enumerate() {
@@ -2368,9 +2057,7 @@ mod tests {
 
             assert_eq!(app.screen, item.screen, "{key} opened the wrong screen");
 
-            // The ring lands on the screen's first focusable, except where the screen
-            // asks for somewhere else: the library opens with the caret in its search
-            // box, since looking something up starts with typing.
+            // the first focusable, except the library, which opens in its search box
             let landed = match item.screen {
                 Screen::ChordLibrary => FocusTarget::SearchBox,
                 _ => app_on(item.screen.clone()).focusables()[0],
@@ -2380,8 +2067,7 @@ mod tests {
         }
     }
 
-    /// Shift is how `?` is typed. Were it filtered out the way Cmd, Ctrl, and Alt are, the
-    /// overlay would be unreachable on most keyboards.
+    /// Shift is how `?` is typed, so it must not be filtered like Cmd, Ctrl and Alt.
     #[test]
     fn the_help_key_survives_its_own_shift() {
         assert!(matches!(
@@ -2434,8 +2120,7 @@ mod tests {
         }
     }
 
-    /// The overlay is a layer, not a screen: it contributes nothing focusable, so opening
-    /// and dismissing it must leave the focus ring exactly where it was.
+    /// The overlay contributes nothing focusable, so it must leave the focus ring where it was.
     #[test]
     fn help_preserves_focus_and_adds_no_targets() {
         let mut app = app_with_seed(0x0fc5);
@@ -2453,8 +2138,7 @@ mod tests {
         assert_eq!(app.focused, FocusTarget::Root(4));
     }
 
-    /// Pressing a named key and letting the app act on it, for the keys `press` cannot
-    /// build because they produce no character.
+    /// Presses a named key, for the keys `press` cannot build because they produce no character.
     pub(super) fn press_named(app: &mut App, named: Named) {
         let _ = app.update(Message::Key(
             keyboard::Key::Named(named),
@@ -2506,8 +2190,7 @@ mod tests {
         }
     }
 
-    /// Key translation reads no application state, so the same press must mean the same
-    /// thing everywhere — screen scoping happens after this point, not inside it.
+    /// Key translation reads no application state, so a press means the same on every screen.
     #[test]
     fn translation_does_not_vary_by_state() {
         let pressed = press("r", keyboard::Modifiers::empty());
@@ -2551,13 +2234,11 @@ mod tests {
 
     #[test]
     fn selector_card_fits_every_kind_row() {
-        // As in `summary_card_fits_a_two_line_name`: iced's default relative line height,
-        // and the card's own `.spacing(12)` and `.padding(32)` from `ui_scale_trainer`.
+        // iced's default line height, and the card's `.spacing(12)` and `.padding(32)`
         const TEXT_LINE_HEIGHT: f32 = 1.3;
         const COLUMN_SPACING: f32 = 12.0;
         const CARD_PADDING: f32 = 32.0;
-        // A pill is its text, the button's own `.padding([8, 12])`, and the 3px `focus_ring`
-        // wrapped round it. Only the vertical half of each matters here.
+        // a pill is its text, the button's `.padding([8, 12])` and the 3px `focus_ring`
         const BUTTON_PADDING_Y: f32 = 8.0;
         const FOCUS_RING_PADDING: f32 = 3.0;
 
@@ -2576,20 +2257,16 @@ mod tests {
 
     #[test]
     fn summary_card_fits_a_two_line_name() {
-        // iced's `LineHeight::default()` — `Relative(1.3)` in `iced_core::text`. Restated
-        // here because iced resolves it internally, and the budget below is in laid-out
-        // pixels rather than font sizes.
+        // iced's `LineHeight::default()`, `Relative(1.3)`, which iced resolves internally
         const TEXT_LINE_HEIGHT: f32 = 1.3;
         // The card's own `.spacing(10)` and `.padding(32)`, both in `ui_scale_trainer`.
         const COLUMN_SPACING: f32 = 10.0;
         const CARD_PADDING: f32 = 32.0;
-        // `Harmonic Minor` and the two pentatonics are all wider than the card at
-        // `SUMMARY_NAME_SIZE`, so a name has to be budgeted at two lines, not one.
+        // several names are wider than the card at `SUMMARY_NAME_SIZE`, so budget two lines
         const NAME_LINES: f32 = 2.0;
 
         let line = |size: f32| size * TEXT_LINE_HEIGHT;
-        // The header row is as tall as the root label, which dominates the two ghost
-        // buttons sharing the line with it.
+        // the header row is as tall as the root label
         let needed = line(SUMMARY_ROOT_SIZE)
             + COLUMN_SPACING
             + NAME_LINES * line(SUMMARY_NAME_SIZE)
@@ -2613,8 +2290,7 @@ mod help_overlay_tests {
 
     #[test]
     fn a_timer_tick_does_not_dismiss_the_help_overlay() {
-        // The Tuner's poll fires every 10 ms. Before this, `?` there opened the overlay
-        // and the next tick closed it — one frame, and unreadable.
+        // the Tuner's poll fires every 10 ms, which would close the overlay a frame later
         let (mut app, _) = App::new();
         let _ = app.update(Message::Navigate(Screen::Tuner));
         let _ = app.update(Message::ToggleHelp);
@@ -2625,9 +2301,7 @@ mod help_overlay_tests {
             assert!(app.help_open, "a poll tick closed the help overlay");
         }
 
-        // The trainers' flash timers, which this file already handled the same way. They
-        // are here so the three stay together: a fourth timer added above the overlay
-        // guard and not below it would pass this test only by accident.
+        // the trainers' flash timers, kept here so all three are tested together
         for tick in [Message::AdvancePrompt, Message::AdvanceIntervalPrompt] {
             let _ = app.update(tick);
             assert!(app.help_open, "a flash tick closed the help overlay");

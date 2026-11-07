@@ -1,13 +1,4 @@
-//! Chords built by stacking degrees over a root.
-//!
-//! The layer `scales` already demonstrates, one interval set smaller: a quality names
-//! degrees, a degree number forces a letter, and the accidental is whatever the
-//! arithmetic then demands. No table of chord spellings, and no per-root special case.
-//!
-//! Naming a chord correctly is what needs the degree number rather than the distance.
-//! `AugmentedFourth` and `DiminishedFifth` are one fret apart from nothing and yet spell
-//! different chords, and the same is true one degree up, which is why `Interval` carries
-//! `AugmentedFifth` and `DiminishedSeventh` at all.
+//! Chords built by stacking degrees over a root, spelled by the same arithmetic as `scales`.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -17,11 +8,8 @@ use super::notes::{Accidental, Letter, Note, PitchClass, Spelling, nearest_offse
 
 /// What is stacked over the root.
 ///
-/// Fifteen qualities across five degree-number sets — `1 3 5`, `1 2 5`, `1 4 5`,
-/// `1 3 5 6`, `1 3 5 7`. The sets matter beyond bookkeeping: a shape on the neck carries
-/// one degree per string, so a quality can only borrow a shape whose degree *numbers*
-/// match its own. Altering `3` to `♭3` moves a finger; removing `3` entirely leaves a
-/// string with nowhere to go.
+/// A shape on the neck carries one degree per string, so a quality can only borrow a
+/// shape whose degree numbers match its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChordQuality {
     Major,
@@ -42,10 +30,7 @@ pub enum ChordQuality {
 }
 
 impl ChordQuality {
-    /// The order the library lists them in: triads, then the suspensions, then sixths,
-    /// then sevenths. Deliberately not alphabetical, which would file `6`, `7`, `aug` and
-    /// `dim` by the accident of their spelling rather than by how far they are from a
-    /// plain triad. The same rule `ScaleKind::ALL` follows in leading with the modes.
+    /// Triads, then suspensions, sixths and sevenths: ordered by distance from a plain triad.
     pub const ALL: &'static [ChordQuality] = &[
         ChordQuality::Major,
         ChordQuality::Minor,
@@ -153,18 +138,12 @@ impl ChordQuality {
         }
     }
 
-    /// The degree *numbers* this quality covers, which is what decides whether a shape on
-    /// the neck can carry it. `impl Iterator` rather than a `Vec`: every caller folds or
-    /// compares, and none needs to own the sequence.
+    /// The degree numbers this quality covers, which decide whether a shape can carry it.
     pub fn degrees(self) -> impl Iterator<Item = u8> {
         self.intervals().iter().map(|interval| interval.number())
     }
 
-    /// What `Display` writes after the root.
-    ///
-    /// Empty for a plain major triad, which is written as its root alone — `C`, not
-    /// `Cmaj`. That is the one quality whose written form is nothing at all, and it is
-    /// why `forms` is a separate list: the parser needs something to match on.
+    /// What `Display` writes after the root. Empty for a plain major triad.
     pub fn suffix(self) -> &'static str {
         match self {
             ChordQuality::Major => "",
@@ -181,14 +160,12 @@ impl ChordQuality {
             ChordQuality::MinorMajor7 => "mMaj7",
             ChordQuality::HalfDiminished7 => "m7b5",
             ChordQuality::Diminished7 => "dim7",
-            // `7#5` rather than `aug7`, so the ASCII a learner could copy matches the
-            // `7♯5` the screen shows them. Both are accepted forms either way.
+            // matches the `7♯5` the screen shows
             ChordQuality::Augmented7 => "7#5",
         }
     }
 
-    /// The quality said aloud: the prose counterpart of `suffix`, for a learner who can
-    /// read `Cm7♭5` off a chart and still not know what to call it.
+    /// The quality said aloud, the prose counterpart of `suffix`.
     pub fn spoken(self) -> &'static str {
         match self {
             ChordQuality::Major => "major",
@@ -205,19 +182,13 @@ impl ChordQuality {
             ChordQuality::MinorMajor7 => "minor-major seventh",
             ChordQuality::HalfDiminished7 => "half-diminished seventh",
             ChordQuality::Diminished7 => "diminished seventh",
-            // Said the way `7♯5` is written, for the reason it is written that way:
-            // "augmented seventh" is heard by some as a seventh that is augmented, which
-            // is a different chord.
+            // "augmented seventh" is heard by some as a different chord
             ChordQuality::Augmented7 => "seventh sharp five",
         }
     }
 
     /// Every written form that names this quality, longest first within the entry.
-    ///
-    /// Data on the quality rather than a matcher's guesswork: `m7` reaching a minor
-    /// seventh is then an exact hit, not a scoring accident that also half-matches
-    /// `maj7`. Matched case-sensitively, because `M7` and `m7` are a major and a minor
-    /// seventh and they are the pair a learner is most often telling apart.
+    /// Matched case-sensitively, because `M7` and `m7` are a major and a minor seventh.
     pub fn forms(self) -> &'static [&'static str] {
         match self {
             ChordQuality::Major => &["major", "maj", "M"],
@@ -241,11 +212,7 @@ impl ChordQuality {
     }
 
     /// The qualities that extend this one: written as a longer form of one of its own, and
-    /// containing every degree it contains.
-    ///
-    /// Both halves do work the other cannot. By name alone a major seventh extends a minor
-    /// triad, because `major7` starts with `m`; by degrees alone a dominant seventh extends
-    /// a major triad, because it contains one.
+    /// containing every degree it contains. Both halves are needed.
     pub fn extensions(self) -> impl Iterator<Item = ChordQuality> {
         let written_longer = move |longer: ChordQuality| {
             longer.forms().iter().any(|form| {
@@ -265,22 +232,13 @@ impl ChordQuality {
         })
     }
 
-    /// Whether naming this quality should also offer `other` — itself, or one of its
-    /// `extensions`. What a search does with a query that already reads as a chord.
+    /// Whether naming this quality should also offer `other` — itself, or one of its `extensions`.
     pub fn covers(self, other: ChordQuality) -> bool {
         self == other || self.extensions().any(|kind| kind == other)
     }
 }
 
-/// A root and a quality, and nothing else.
-///
-/// The notes are derived rather than stored, so two chords with the same root and quality
-/// cannot disagree about what they contain — the reason `Scale` keeps its formula in
-/// `ScaleKind` rather than beside it.
-///
-/// `spelling` is not part of the chord's identity: it is chosen in `new` by the arithmetic
-/// below, so it is a function of the other two fields and `PartialEq` on all three is the
-/// same relation as `PartialEq` on the first two.
+/// A root and a quality. `spelling` is derived from them in `new`, so it is not part of identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Chord {
     root: PitchClass,
@@ -297,15 +255,10 @@ impl Chord {
         self.kind
     }
 
-    /// Names a chord the way it would be written, by `Scale::new`'s rule: fewest double
-    /// accidentals, then fewest accidentals, and convention only where those tie.
+    /// Names a chord the way it would be written, by `Scale::new`'s rule.
     ///
-    /// The one thing this must do that `Scale::new` need not is reject a spelling that
-    /// cannot be written at all. A diminished seventh flattens degree 7 twice, and on a
-    /// root already spelled with a flat whose natural seventh is a major seventh — `C♭`
-    /// and `F♭` are the two — that lands three flats below the letter, which no accidental
-    /// covers. Such a candidate is not merely expensive, it is unspellable, so it sorts
-    /// behind every spellable one and `notes` can stay total.
+    /// Also rejects an unspellable candidate: a diminished seventh on `C♭` or `F♭` lands
+    /// three flats below the letter, so it sorts behind every spellable one.
     pub fn new(root: PitchClass, kind: ChordQuality) -> Self {
         let candidate = |spelling| Chord {
             root,
@@ -314,8 +267,7 @@ impl Chord {
         };
         let (sharps, flats) = (candidate(Spelling::Sharps), candidate(Spelling::Flats));
 
-        // `None` is unspellable, and `Option`'s own `Ord` puts it after every `Some` —
-        // which is the ordering wanted here, so no branch has to say so.
+        // `Option`'s `Ord` puts the unspellable `None` after every `Some`
         match (sharps.spelling_cost(), flats.spelling_cost()) {
             (None, None) => unreachable!("every_chord_spells_without_failing proves one works"),
             (a, b) => match a.cmp(&b) {
@@ -330,48 +282,31 @@ impl Chord {
         self.spelling.spell(self.root)
     }
 
-    /// The chord said aloud — `C♯m7` reads "C sharp minor seventh".
-    ///
-    /// Prose, so a plain major triad names the quality its symbol leaves silent: the point
-    /// of saying it is that `C` is called "C major" and nothing on the chart says so.
+    /// The chord said aloud — `C♯m7` reads "C sharp minor seventh", and `C` reads "C major".
     pub fn spoken(self) -> String {
         format!("{} {}", self.root_note().spoken(), self.kind.spoken())
     }
 
     /// Every degree spelled: the degree number forces the letter, the accidental corrects
-    /// the pitch.
-    ///
-    /// Total, because `new` has already discarded any spelling this would fail on. The
-    /// exhaustive test named in the `expect` is what proves at least one survives for all
-    /// twelve roots and all fifteen qualities.
+    /// the pitch. Total, because `new` has already discarded any unspellable candidate.
     pub fn notes(self) -> Vec<Note> {
         self.try_notes()
             .expect("new rejects unspellable spellings; every_chord_spells_without_failing proves one remains")
     }
 
     /// The degrees this chord is built from, in ascending order.
-    ///
-    /// `Interval` rather than a bare number because a degree's alteration is half of what
-    /// it is — `♭5` and `5` are both degree five and are not the same thing to look at.
     pub fn degrees(self) -> &'static [Interval] {
         self.kind.intervals()
     }
 
-    /// This chord's name for a pitch class, or `None` when the pitch class is not in it.
-    /// The `Option` is the membership test — `Scale::spell`'s arrangement, one interval set
-    /// smaller.
+    /// This chord's name for a pitch class, or `None` when it is not in the chord.
     pub fn spell(self, pitch_class: PitchClass) -> Option<Note> {
         self.notes()
             .into_iter()
             .find(|note| note.pitch_class() == pitch_class)
     }
 
-    /// This chord's *degree* for a pitch class: what job the note does here.
-    ///
-    /// The counterpart of `spell`, `None` on the same pitch classes, and independent of
-    /// spelling for the reason `Scale::degree` is — a degree is a position in the formula,
-    /// and no choice of sharps or flats moves it. Asked of the formula directly rather than
-    /// recovered by spelling the pitch and reading the letters back off it.
+    /// This chord's degree for a pitch class, or `None` when it is not in the chord.
     pub fn degree(self, pitch_class: PitchClass) -> Option<Interval> {
         self.kind
             .intervals()
@@ -380,8 +315,7 @@ impl Chord {
             .find(|interval| self.root.transpose(interval.semitones()) == pitch_class)
     }
 
-    /// The spelling attempt behind both `new` and `notes`. `None` where some degree lands
-    /// beyond a double accidental.
+    /// `None` where some degree lands beyond a double accidental.
     fn try_notes(self) -> Option<Vec<Note>> {
         let root = self.root_note();
 
@@ -398,9 +332,7 @@ impl Chord {
             .collect()
     }
 
-    /// How much ink this spelling costs: `(double accidentals, total accidental distance)`,
-    /// or `None` when it cannot be written. Doubles first, for the reason
-    /// `Scale::spelling_cost` spells out.
+    /// `(double accidentals, total accidental distance)`, or `None` when it cannot be written.
     fn spelling_cost(self) -> Option<(usize, u32)> {
         let notes = self.try_notes()?;
 
@@ -415,22 +347,14 @@ impl Chord {
     }
 }
 
-/// ASCII, for the same reason `Note`'s `Display` is: this module cannot reach the SMuFL
-/// glyph constants, which live beside the widgets that draw with them. The screen renders
-/// `Cm7♭5` from the same two parts; this renders `Cm7b5`, and it is what the parser reads.
+/// ASCII, because this module cannot reach the SMuFL glyphs; it is also what the parser reads.
 impl fmt::Display for Chord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}{}", self.root_note(), self.kind.suffix())
     }
 }
 
-/// What a typed query names.
-///
-/// Three variants rather than two `Option` fields, because `(None, None)` is a state with
-/// no meaning: a query names a root, a quality, or both, and never neither. Written as a
-/// pair of `Option`s, every caller would need an arm deciding what an empty query means,
-/// which is a runtime check standing in for something the type can say. The screen matches
-/// three arms and each does one thing — re-root, filter, or both.
+/// What a typed query names: a root, a quality, or both, never neither.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Query {
     Root(PitchClass),
@@ -443,15 +367,10 @@ pub enum Query {
 
 impl Query {
     /// Reads a chord symbol, or `None` for input this grammar cannot account for —
-    /// which is the signal to fall back to approximate matching.
+    /// the signal to fall back to approximate matching.
     ///
-    /// Whole-input forms are tried before a root, because `dim` and `aug` and `sus` all
-    /// begin with a letter that is also a note name. No form is a bare root spelling, so
-    /// that order costs nothing: `b` and `f#` still reach `Root`.
-    ///
-    /// The remainder after a root must match a form exactly rather than prefix it, since
-    /// nothing may be left over. That also makes the lookup unambiguous without sorting
-    /// by length — `no_two_qualities_share_a_written_form` is what guarantees it.
+    /// Whole-input forms are tried before a root, because `dim`, `aug` and `sus` begin
+    /// with a note name.
     pub fn parse(input: &str) -> Option<Query> {
         let input = input.trim();
 
@@ -474,19 +393,14 @@ impl Query {
 }
 
 /// A root and whatever follows it: a letter in either case, then accidentals taken
-/// greedily.
-///
-/// Greedy is a real decision — it makes `Cb` a C flat rather than a C with something
-/// starting `b` after it. The alternative would need lookahead into the form table to
-/// decide, and would make `Cb` mean different things depending on what came next.
+/// greedily, so `Cb` is always C flat.
 fn parse_root(input: &str) -> Option<(PitchClass, &str)> {
     let mut chars = input.chars();
     let letter = letter_from_char(chars.next()?)?;
     let mut rest = chars.as_str();
     let mut offset: i8 = 0;
 
-    // `probe` is a second walk that only becomes `rest` once its character is claimed,
-    // which is how the loop stops without consuming the character that ended it.
+    // `probe` only becomes `rest` once its character is claimed, so the terminator is not consumed
     loop {
         let mut probe = rest.chars();
 
@@ -526,8 +440,7 @@ fn accidental_step(c: char) -> Option<i8> {
     }
 }
 
-/// Case-sensitive, which is the whole point: `M7` and `m7` are a major and a minor
-/// seventh, and folding case would make them one form naming two opposite chords.
+/// Case-sensitive: `M7` and `m7` are a major and a minor seventh.
 fn quality_from_form(form: &str) -> Option<ChordQuality> {
     ChordQuality::ALL
         .iter()
@@ -545,8 +458,7 @@ mod tests {
 
     #[test]
     fn all_lists_every_quality() {
-        // The tripwire `Interval::ALL` and `ScaleKind::ALL` both carry: the tests below
-        // iterate ALL, so a quality added to the enum and not to the list is skipped.
+        // a quality added to the enum but not to ALL would be skipped by the tests below
         assert_eq!(ChordQuality::ALL.len(), 15);
     }
 
@@ -575,10 +487,7 @@ mod tests {
 
     #[test]
     fn the_qualities_fall_into_five_degree_sets() {
-        // The partition the shape table rests on: a shape carries one degree per string,
-        // so a quality can only borrow a shape covering exactly its degree numbers. A
-        // sixteenth quality landing outside these five has no shape family, and this is
-        // where that shows up rather than as an empty voicing strip.
+        // the five degree sets the shape table rests on
         let mut sets: Vec<Vec<u8>> = ChordQuality::ALL
             .iter()
             .map(|kind| kind.degrees().collect())
@@ -600,7 +509,6 @@ mod tests {
 
     #[test]
     fn no_two_qualities_share_a_written_form() {
-        // What makes the parser's lookup well-defined: one form, one quality.
         for (i, &kind) in ChordQuality::ALL.iter().enumerate() {
             for &other in &ChordQuality::ALL[i + 1..] {
                 for form in kind.forms() {
@@ -615,8 +523,6 @@ mod tests {
 
     #[test]
     fn no_two_qualities_are_said_the_same_way() {
-        // The same rule the written forms hold, for the same reason: a name that fits two
-        // chords teaches the learner to call them one thing.
         for (i, &kind) in ChordQuality::ALL.iter().enumerate() {
             for &other in &ChordQuality::ALL[i + 1..] {
                 assert_ne!(
@@ -631,8 +537,6 @@ mod tests {
 
     #[test]
     fn a_spoken_name_is_prose_and_not_notation() {
-        // What separates `spoken` from `suffix`: it is meant to be read out, so a stray
-        // `7` or `b` copied over from the symbol is the failure to catch.
         for &kind in ChordQuality::ALL {
             assert!(
                 kind.spoken()
@@ -646,8 +550,6 @@ mod tests {
 
     #[test]
     fn case_separates_the_major_and_minor_sevenths() {
-        // The pair the case-sensitive rule exists for. Folding case would make these one
-        // form naming two opposite chords.
         assert!(ChordQuality::Major7.forms().contains(&"M7"));
         assert!(ChordQuality::Minor7.forms().contains(&"m7"));
     }
@@ -680,8 +582,7 @@ mod tests {
 
     #[test]
     fn the_augmented_triad_sharpens_the_fifth_rather_than_flattening_the_sixth() {
-        // The chord `AugmentedFifth` was added for. Without it this spells C E A♭, which
-        // puts degree six's letter on degree five and leaves the triad on C, E and A.
+        // without `AugmentedFifth` this would spell C E A♭
         assert_eq!(
             Chord::new(PitchClass::new(0), ChordQuality::Augmented).notes(),
             vec![
@@ -694,7 +595,6 @@ mod tests {
 
     #[test]
     fn the_diminished_seventh_flattens_the_seventh_twice() {
-        // The chord `DiminishedSeventh` was added for.
         assert_eq!(
             Chord::new(PitchClass::new(0), ChordQuality::Diminished7).notes(),
             vec![
@@ -708,8 +608,6 @@ mod tests {
 
     #[test]
     fn a_root_is_named_the_way_it_is_written() {
-        // The same arithmetic `Scale::new` runs: pitch class 10 under a major triad is
-        // B♭, not the A♯ that would spell the chord A♯ C𝄪 E♯.
         let chord = Chord::new(PitchClass::new(10), ChordQuality::Major);
 
         assert_eq!(chord.root_note(), note(Letter::B, Accidental::Flat));
@@ -717,12 +615,8 @@ mod tests {
 
     #[test]
     fn every_chord_spells_without_failing() {
-        // What `notes`'s `expect` rests on, and what proves `new`'s `unreachable!` is: for
-        // all twelve roots and all fifteen qualities, at least one of the two spellings
-        // stays within a double accidental. Pitch classes 4 and 11 under a diminished
-        // seventh are the pair that makes this more than a formality — F♭ and C♭ both
-        // land three flats below degree seven's letter, so only the sharp spelling
-        // survives there.
+        // licenses `notes`'s `expect`; pitch classes 4 and 11 under a diminished seventh
+        // survive only with sharps
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
                 let chord = Chord::new(root, kind);
@@ -741,12 +635,9 @@ mod tests {
 
     #[test]
     fn no_chord_spells_two_notes_on_one_letter() {
-        // The property that makes a chord readable: four notes, four letters. A repeated
-        // letter would mean a degree took the wrong one.
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
-                // Sorted as `u8`: `Letter` derives no `Ord`, and giving it one to satisfy
-                // a test would be claiming letters have an order the domain never uses.
+                // as `u8` because `Letter` derives no `Ord`
                 let mut letters: Vec<u8> = Chord::new(root, kind)
                     .notes()
                     .iter()
@@ -767,8 +658,6 @@ mod tests {
 
     #[test]
     fn the_notes_sound_the_degrees_they_are_built_from() {
-        // Spelling must not move a pitch: whatever letter a degree takes, the note has to
-        // come out at the distance the interval names.
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
                 let chord = Chord::new(root, kind);
@@ -796,7 +685,6 @@ mod tests {
             Chord::new(pc(11), ChordQuality::HalfDiminished7).to_string(),
             "Bm7b5"
         );
-        // The root spells itself the way the chord names it, so a flat root reads flat.
         assert_eq!(Chord::new(pc(10), ChordQuality::Minor7).to_string(), "Bbm7");
     }
 
@@ -807,8 +695,6 @@ mod tests {
             Chord::new(pc(1), ChordQuality::Minor7).spoken(),
             "C sharp minor seventh"
         );
-        // The root is said the way the chord spells it, so this one is a D flat and not
-        // the C sharp the minor seventh above it was.
         assert_eq!(
             Chord::new(pc(1), ChordQuality::Major).spoken(),
             "D flat major"
@@ -834,7 +720,6 @@ mod tests {
                 kind: ChordQuality::HalfDiminished7,
             })
         );
-        // The typographic accidental reaches the same root as the ASCII one.
         assert_eq!(Query::parse("C♯m7"), Query::parse("c#m7"));
         assert_eq!(
             Query::parse("gsus"),
@@ -849,7 +734,7 @@ mod tests {
     fn a_root_alone_parses_to_a_root() {
         assert_eq!(Query::parse("f#"), Some(Query::Root(pc(6))));
         assert_eq!(Query::parse("C"), Some(Query::Root(pc(0))));
-        // Greedy accidentals: the second `b` is a flat, not the start of a quality.
+        // greedy accidentals: the second `b` is a flat, not the start of a quality
         assert_eq!(Query::parse("bb"), Some(Query::Root(pc(10))));
         assert_eq!(Query::parse("b"), Some(Query::Root(pc(11))));
     }
@@ -864,8 +749,6 @@ mod tests {
             Query::parse("m7"),
             Some(Query::Quality(ChordQuality::Minor7))
         );
-        // The three that begin with a note name. Whole-input forms are tried first, so
-        // `dim` is the quality rather than a D with `im` left over.
         assert_eq!(
             Query::parse("dim"),
             Some(Query::Quality(ChordQuality::Diminished))
@@ -885,18 +768,14 @@ mod tests {
         assert_eq!(Query::parse(""), None);
         assert_eq!(Query::parse("   "), None);
         assert_eq!(Query::parse("xyz"), None);
-        // Forms are case-sensitive, so this falls through to approximate matching.
         assert_eq!(Query::parse("CMAJ7"), None);
-        // Nothing may be left over: a prefix that reads is not a parse.
         assert_eq!(Query::parse("cmaj7z"), None);
         assert_eq!(Query::parse("c###"), None);
     }
 
     #[test]
     fn the_triangle_names_a_major_seventh() {
-        // Charts write both: U+0394 GREEK CAPITAL DELTA, and U+25B3 WHITE UP-POINTING
-        // TRIANGLE, which is the one a character picker hands you. The screen draws its own
-        // SMuFL glyph, so neither is what a learner sees — only what they can type.
+        // U+0394 GREEK CAPITAL DELTA and U+25B3 WHITE UP-POINTING TRIANGLE
         let cmaj7 = Query::parse("Cmaj7");
 
         assert_eq!(Query::parse("CΔ"), cmaj7);
@@ -925,8 +804,6 @@ mod tests {
             extensions(ChordQuality::Diminished),
             [ChordQuality::Diminished7]
         );
-        // A form that extends one of its own — `Δ7` over `Δ` — is not an extension of
-        // itself, or every seventh would list twice.
         assert!(extensions(ChordQuality::Major7).is_empty());
     }
 
@@ -945,10 +822,7 @@ mod tests {
 
     #[test]
     fn cm7_is_a_minor_seventh_and_not_a_major_one() {
-        // The hazard the exact-parse rule exists for. `c`, `m`, `7` is a subsequence of
-        // `Cmaj7`, so a matcher scoring by character adjacency ranks the major seventh
-        // against the minor seventh the learner typed exactly. Parsing cannot: `m7` names
-        // one quality.
+        // a subsequence matcher would rank `Cmaj7` against the `Cm7` typed here
         assert_eq!(
             Query::parse("cm7"),
             Some(Query::Chord {
@@ -961,8 +835,6 @@ mod tests {
 
     #[test]
     fn every_declared_form_reaches_its_chord() {
-        // The alias table and the parser cannot drift: every form of every quality, on
-        // every root, written both ways round the accidental.
         for &kind in ChordQuality::ALL {
             for form in kind.forms() {
                 for &root in &PitchClass::ALL {
@@ -982,8 +854,7 @@ mod tests {
 
     #[test]
     fn a_written_suffix_is_always_typeable() {
-        // Display writes the suffix and the parser reads a form, so a suffix outside the
-        // form list would render a chord that cannot be typed back.
+        // a suffix outside the form list would render a chord that cannot be typed back
         for &kind in ChordQuality::ALL {
             if kind.suffix().is_empty() {
                 continue;
@@ -1000,9 +871,6 @@ mod tests {
 
     #[test]
     fn the_major_triad_is_written_as_its_root() {
-        // The one quality with no suffix, and so the one whose symbol parses back as a
-        // bare root rather than as a chord. Chord notation writes C major as `C`, and the
-        // search behaviour needs a bare root to mean "this root, every quality".
         for &root in &PitchClass::ALL {
             let chord = Chord::new(root, ChordQuality::Major);
 
@@ -1032,9 +900,6 @@ mod tests {
 
     #[test]
     fn spell_and_degree_agree_on_membership() {
-        // The pair `Scale` already keeps: both search the one formula, so a pitch class the
-        // chord can name is one it can also place, and neither may answer where the other
-        // does not.
         for &root in &PitchClass::ALL {
             for &kind in ChordQuality::ALL {
                 let chord = Chord::new(root, kind);
@@ -1052,8 +917,6 @@ mod tests {
 
     #[test]
     fn a_degree_is_the_same_under_both_spellings() {
-        // What makes `degree` independent of how the chord is written: it reads the
-        // formula, not the letters.
         let chord = Chord::new(PitchClass::new(0), ChordQuality::Diminished7);
 
         assert_eq!(
@@ -1074,8 +937,6 @@ mod tests {
 
                 assert_eq!(chord, Chord::new(root, kind));
                 assert_eq!(chord.notes(), Chord::new(root, kind).notes());
-                // The two the chord is identified by come back out unchanged; `spelling`
-                // is derived from them and is deliberately not one of them.
                 assert_eq!(chord.root(), root);
                 assert_eq!(chord.kind(), kind);
             }

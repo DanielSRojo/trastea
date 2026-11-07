@@ -6,14 +6,7 @@ use super::neck::Position;
 
 /// Where everything on the neck sits, computed once from the canvas bounds.
 ///
-/// Both drawing and hit-testing read this. Two independent copies of the same
-/// arithmetic would drift the moment either one changed, and the symptom would be the
-/// worst kind: a click resolving one fret away from the dot it visibly landed on. So
-/// the inverse (`position_at`) lives next to the forward direction (`marker_center`),
-/// and a round-trip test holds the two together.
-///
-/// The four edges are methods rather than fields for the same reason — stored, they
-/// could disagree with the spacings they are derived from.
+/// Both drawing and hit-testing read this, held together by a round-trip test.
 struct Layout {
     string_count: usize,
     fret_count: usize,
@@ -30,19 +23,13 @@ impl Layout {
     const PAD_X: f32 = 20.0;
     const PAD_BOTTOM: f32 = 20.0;
     const OPEN_MARKER_GAP: f32 = 4.0;
-    /// How far the keyboard cursor's ring sits outside the marker it surrounds, and how thick
-    /// it is drawn. Here rather than at the `stroke` call because `pad_top` has to reserve
-    /// room for them: the cursor starts life at `CURSOR_HOME`, which is the open low E, and an
-    /// open marker is drawn *above* the nut. Two copies of these numbers would have been two
-    /// numbers free to disagree, which is how the ring came to be clipped by exactly the four
-    /// pixels this reserves.
+    /// The cursor ring's gap and stroke width, which `pad_top` reserves room for above the open low E.
     const CURSOR_RING_GAP: f32 = 3.0;
     const CURSOR_RING_STROKE: f32 = 2.0;
     const TARGET_FRET_CELL_RATIO: f32 = 1.35;
     const STRING_COUNT: usize = 6;
 
-    /// How far a cursor ring reaches past the marker it surrounds: the gap, plus the half of
-    /// its stroke that is painted outside the path.
+    /// The gap plus the half of the ring's stroke painted outside the path.
     const fn cursor_ring_overhang() -> f32 {
         Self::CURSOR_RING_GAP + Self::CURSOR_RING_STROKE / 2.0
     }
@@ -51,10 +38,7 @@ impl Layout {
         let available_w = size.width - 2.0 * Self::PAD_X;
         let available_string_spacing = available_w / (Self::STRING_COUNT - 1) as f32;
 
-        // Deliberately the *largest* radius the neck could end up using, and not the one
-        // markers are actually drawn with: `pad_top` has to reserve room for an
-        // open-string marker before `fret_spacing` — and so the final radius — is known.
-        // Collapsing this into `note_radius` below would move the whole neck down.
+        // the largest radius possible, since `pad_top` is needed before the final radius is known
         let max_note_radius = (available_string_spacing * 0.35).clamp(8.0, 14.0);
         let pad_top = max_note_radius * 2.0 + Self::OPEN_MARKER_GAP + Self::cursor_ring_overhang();
 
@@ -71,9 +55,6 @@ impl Layout {
             string_spacing,
             pad_top,
             fret_spacing,
-            // One expression where `draw` used to take this `min` in two steps, shadowing
-            // the first binding with the second. Exactly equivalent: the first fed
-            // nothing else.
             note_radius: (string_spacing * 0.35)
                 .clamp(8.0, 14.0)
                 .min((fret_spacing * 0.35).clamp(8.0, 14.0)),
@@ -106,8 +87,7 @@ impl Layout {
         self.string_x(self.string_count - 1)
     }
 
-    /// Where a marker at `(string, fret)` is centred. Fret 0 is the open string, which
-    /// sits in the band above the nut rather than between two fret lines.
+    /// Where a marker at `(string, fret)` is centred. Fret 0 sits in the band above the nut.
     fn marker_center(&self, string: usize, fret: usize) -> Point {
         let y = if fret == 0 {
             self.pad_top - self.note_radius - self.open_marker_gap
@@ -118,35 +98,26 @@ impl Layout {
         Point::new(self.string_x(string), y)
     }
 
-    /// The inverse of `marker_center`: which position, if any, a point lands on.
-    ///
-    /// A point off the neck yields `None` rather than being clamped onto the nearest
-    /// edge. Clamping would turn a misdirected click into an answer the user never gave,
-    /// which on a trainer means a wrong answer they did not earn.
+    /// The inverse of `marker_center`. A point off the neck yields `None` rather than being
+    /// clamped into an answer the user never gave.
     fn position_at(&self, point: Point) -> Option<(usize, usize)> {
-        // The hit area is the marker's footprint, not the bare string line: a marker on
-        // an outer string extends `note_radius` past it, and a click on a dot the user
-        // can see has to register. Past that footprint the padding is a genuine miss.
+        // the hit area is the marker's footprint, so a dot on an outer string registers
         let slack = self.note_radius;
         if point.x < self.left_x() - slack || point.x > self.right_x() + slack {
             return None;
         }
 
-        // `round` can still land outside the neck when the point is in the slack beyond
-        // an outer string, so the index is clamped rather than trusted.
+        // clamped because the slack beyond an outer string can round off the neck
         let nearest = ((point.x - self.left_edge) / self.string_spacing).round() as isize;
         let string = nearest.clamp(0, self.string_count as isize - 1) as usize;
 
         let fret = if point.y < self.top_y() {
-            // Above the nut: the open-string band, and nothing above it.
             let open_top = self.marker_center(string, 0).y - self.note_radius;
             (point.y >= open_top).then_some(0)?
         } else if point.y > self.bottom_y() {
             return None;
         } else {
-            // Fret n owns the band between line n-1 and line n, so the band index is one
-            // past the line above it — which also makes `y == pad_top` fret 1's top edge
-            // rather than fret 0's bottom.
+            // fret n owns the band between line n-1 and line n, so `y == pad_top` is fret 1
             let band = ((point.y - self.top_y()) / self.fret_spacing).floor() as usize + 1;
             band.min(self.fret_count)
         };
@@ -156,29 +127,15 @@ impl Layout {
 }
 
 /// How a marker's circle is drawn — filled in, or an outline.
-///
-/// About drawing, not about meaning: it sits on the same line `color` and `label`
-/// already do. A caller decides that a question should look lighter than an answer;
-/// this only says which of the two shapes to put on the neck.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarkerStyle {
     Filled,
     Outlined,
 }
 
-/// One dot on the neck: where it sits, what it says, what colour it is, and whether
-/// it is filled.
+/// One dot on the neck. `label` is text already decided, so this module knows nothing of music.
 ///
-/// `label` is text already decided rather than a `Note`, so this module draws
-/// circles and glyphs and knows nothing about music. What the text means — a note
-/// name, a scale degree — is the caller's business, and adding a third way to
-/// label a marker needs no change here.
-///
-/// There is deliberately no `Default`: `style` is required at every construction
-/// site, so a new marker has to say which shape it is rather than inheriting one.
-/// A marker that silently defaulted to filled is the exact bug the field exists to
-/// prevent — the Note Trainer's prompt spent a while being a filled dot that read
-/// as an answer already placed.
+/// No `Default`, so every marker has to say which `style` it is.
 pub struct NoteMarker {
     pub string: usize, // 0 = low E, 5 = high e
     pub fret: usize,
@@ -188,30 +145,16 @@ pub struct NoteMarker {
 }
 
 /// The neck, and optionally a way to press it.
-///
-/// Generic over `Message` only because `on_press` maps a position onto one. The module
-/// still knows nothing of what a press *means*: it reports which dot was hit and the
-/// caller decides.
 pub struct Fretboard<Message> {
     pub num_frets: usize,
     pub highlighted: Vec<NoteMarker>,
-    /// Where the keyboard cursor sits, drawn as a ring.
-    ///
-    /// Owned by the caller rather than kept in `Program::State`, because the application
-    /// runs its own focus system and the canvas has no way to know whether it is the
-    /// focused widget. See design decision 6.
+    /// Where the keyboard cursor sits, drawn as a ring. Owned by the caller, which runs the focus system.
     pub cursor: Option<Position>,
     /// What a press on `(string, fret)` means, or `None` for a display-only neck.
-    ///
-    /// A plain `fn` pointer, not a `Box<dyn Fn>`: every caller passes a bare enum
-    /// constructor, which captures nothing. A trait object would buy capture nobody uses
-    /// and cost an allocation, an indirection, and `Copy`.
     pub on_press: Option<fn(usize, usize) -> Message>,
 }
 
-// Hand-written rather than derived: `#[derive(Default)]` would demand `Message: Default`,
-// which is both unnecessary — the field is an `Option` — and wrong, since a message enum
-// has no sensible default.
+// hand-written because a derive would demand `Message: Default`
 impl<Message> Default for Fretboard<Message> {
     fn default() -> Self {
         Self {
@@ -314,18 +257,8 @@ impl<Message> canvas::Program<Message> for Fretboard<Message> {
 
             match marker.style {
                 MarkerStyle::Filled => frame.fill(&circle, Fill::from(marker.color)),
-                // Stroked *on* the circle of `note_radius` rather than inside it. A
-                // stroke straddles its path, so the ring's outer edge lands half a
-                // width past that radius — a pixel and a bit, which no one can see, and
-                // which costs nothing because `position_at` slacks by `note_radius`
-                // either way. Insetting instead would mean the ring and the dot it
-                // replaces were different sizes.
-                //
-                // Wider than the cursor ring's 2.0: a prompt is the loudest thing on
-                // this screen and must not read as thinner than a focus ring. The two
-                // never share a neck — the *Name it* board passes no cursor, and
-                // nothing rings a marker in *Find it* — but a prompt that looked like a
-                // cursor would be a bad habit to start.
+                // stroked on the radius, not inset, so the ring matches the dot it replaces;
+                // wider than the cursor ring so a prompt never reads as a focus ring
                 MarkerStyle::Outlined => frame.stroke(
                     &circle,
                     Stroke::default().with_color(marker.color).with_width(2.5),
@@ -333,9 +266,6 @@ impl<Message> canvas::Program<Message> for Fretboard<Message> {
             }
 
             frame.fill_text(Text {
-                // Cloned because `Text` owns its content and `draw` only borrows the
-                // marker — the same allocation per marker per frame that
-                // `note.to_string()` made here before.
                 content: marker.label.clone(),
                 position: center,
                 color: Color::WHITE,
@@ -346,10 +276,7 @@ impl<Message> canvas::Program<Message> for Fretboard<Message> {
             });
         }
 
-        // The keyboard cursor, drawn last so it is never buried under a marker.
-        //
-        // A stroked ring, deliberately not a filled dot: on a screen whose whole point is
-        // "which dot is lit", a second filled circle would read as a second lit note.
+        // drawn last so it is never buried; a ring, since a filled dot would read as a lit note
         if let Some(Position { string, fret }) = self.cursor {
             let center = layout.marker_center(string, fret);
 
@@ -366,10 +293,7 @@ impl<Message> canvas::Program<Message> for Fretboard<Message> {
 
     /// Turns a press on the neck into the caller's message.
     ///
-    /// Note the `&self`: iced hands the program a shared reference here, so nothing can be
-    /// cached between events and the layout is rebuilt from `bounds` each time. That is
-    /// cheap — a dozen float operations — and it is what guarantees hit-testing uses the
-    /// same geometry the last `draw` did.
+    /// Only `&self`, so the layout is rebuilt from `bounds` and matches the last `draw`.
     fn update(
         &self,
         _state: &mut (),
@@ -377,8 +301,6 @@ impl<Message> canvas::Program<Message> for Fretboard<Message> {
         bounds: Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
-        // A neck with no handler is a picture: it neither consumes the event nor asks for
-        // a redraw, so the scale trainer behaves exactly as it did before.
         let on_press = self.on_press?;
 
         let iced::Event::Mouse(iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) =
@@ -390,8 +312,7 @@ impl<Message> canvas::Program<Message> for Fretboard<Message> {
         let point = cursor.position_in(bounds)?;
         let (string, fret) = Layout::new(bounds.size(), self.num_frets).position_at(point)?;
 
-        // Captured so the press does not also fall through to whatever is behind the
-        // canvas. A miss above returns `None` instead, leaving the event alone.
+        // captured so the press does not fall through to whatever is behind the canvas
         Some(canvas::Action::publish(on_press(string, fret)).and_capture())
     }
 
@@ -426,8 +347,7 @@ pub fn fretboard<Message: 'static>(fb: Fretboard<Message>) -> Element<'static, M
 mod tests {
     use super::*;
 
-    /// Sizes the neck is plausibly drawn at. The widget is a fixed 280 wide and fills
-    /// vertically, so the height is what actually varies with the window.
+    /// The widget is a fixed 280 wide and fills vertically, so the height is what varies.
     const SIZES: [Size; 4] = [
         Size::new(280.0, 500.0),
         Size::new(280.0, 700.0),
@@ -437,11 +357,7 @@ mod tests {
 
     const FRETS: usize = 12;
 
-    /// The property that makes hit-testing trustworthy: the centre of every marker
-    /// resolves back to the position that marker belongs to.
-    ///
-    /// This is the guard for the whole reason `Layout` exists. If drawing and
-    /// hit-testing are ever edited apart, this fails.
+    /// The centre of every marker resolves back to the position that marker belongs to.
     #[test]
     fn every_marker_center_round_trips() {
         for size in SIZES {
@@ -466,11 +382,9 @@ mod tests {
         let layout = Layout::new(SIZES[1], FRETS);
         let center = layout.marker_center(2, 5);
 
-        // A nudge short of halfway towards string 3 still belongs to string 2.
         let nudged = Point::new(center.x + layout.string_spacing * 0.4, center.y);
         assert_eq!(layout.position_at(nudged), Some((2, 5)));
 
-        // Past halfway it belongs to string 3.
         let past = Point::new(center.x + layout.string_spacing * 0.6, center.y);
         assert_eq!(layout.position_at(past), Some((3, 5)));
     }
@@ -479,13 +393,12 @@ mod tests {
     fn a_fret_band_is_owned_by_the_line_below_it() {
         let layout = Layout::new(SIZES[1], FRETS);
 
-        // The nut itself is the top of fret 1's band, not the bottom of fret 0's.
+        // the nut is the top of fret 1's band, not the bottom of fret 0's
         assert_eq!(
             layout.position_at(Point::new(layout.string_x(0), layout.top_y())),
             Some((0, 1))
         );
 
-        // Just above fret line 5 is still fret 5; just below it is fret 6.
         let x = layout.string_x(1);
         let line_5 = layout.fret_y(5);
         assert_eq!(
@@ -515,17 +428,14 @@ mod tests {
         let center = layout.marker_center(4, 0);
 
         assert_eq!(layout.position_at(center), Some((4, 0)));
-        // Anywhere in the band down to the nut is still the open string.
         assert_eq!(
             layout.position_at(Point::new(center.x, layout.top_y() - 1.0)),
             Some((4, 0))
         );
     }
 
-    /// Note this probes above the *canvas*, not above `pad_top`. When the marker radius
-    /// hits its 14px clamp the open band fills the reserved padding exactly, leaving no
-    /// gap between the top of the band and y = 0 — so `y = 0.0` is a legitimate fret 0 at
-    /// some sizes and asserting otherwise tests the clamp rather than the boundary.
+    /// Probes above the canvas, not above `pad_top`: at the 14px radius clamp the open band
+    /// fills the padding exactly, so `y = 0.0` can be a legitimate fret 0.
     #[test]
     fn a_point_above_the_neck_resolves_to_nothing() {
         for size in SIZES {
@@ -592,8 +502,6 @@ mod tests {
         }
     }
 
-    /// A click on a visible dot has to register, so the outer strings' markers are
-    /// hittable across their whole width rather than only on the string line.
     #[test]
     fn an_outer_marker_is_hittable_across_its_footprint() {
         let layout = Layout::new(SIZES[1], FRETS);
@@ -611,10 +519,7 @@ mod tests {
         );
     }
 
-    /// The cursor starts on the open low E and an open marker is drawn above the nut, so the
-    /// ring around it is the one mark that can reach past the top of the canvas. This is the
-    /// assertion that `pad_top` reserves enough for it, at the width where the marker radius
-    /// is at its cap and the margin is therefore at its tightest.
+    /// `pad_top` reserves enough for the cursor ring on the open low E at the tightest margin.
     #[test]
     fn the_cursor_ring_on_an_open_string_fits_inside_the_canvas() {
         for width in [200.0_f32, 280.0, 420.0, 640.0] {
@@ -631,25 +536,17 @@ mod tests {
         }
     }
 
-    /// `pad_top` is built from `max_note_radius`, which is deliberately *not* the radius
-    /// markers end up drawn with — it is the upper bound reserved before `fret_spacing`
-    /// is known. Collapsing the two would move the whole neck down as the window shrank.
-    ///
-    /// Shown by holding the width fixed and varying the height: `pad_top` depends only on
-    /// the width, while `note_radius` shrinks with the height. If the two were one value,
-    /// the first assertion would fail.
+    /// `pad_top` depends only on the width, while `note_radius` also shrinks with the height.
     #[test]
     fn the_reserved_top_padding_does_not_follow_the_marker_radius() {
         let tall = Layout::new(Size::new(280.0, 700.0), FRETS);
         let short = Layout::new(Size::new(280.0, 500.0), FRETS);
 
         // available_string_spacing = (280 - 40) / 5 = 48 → clamp(16.8, 8, 14) = 14
-        // pad_top = 14 * 2 + 4 + 4 = 36, at both heights — the last 4 being the cursor
-        // ring's overhang, which is what stops it being clipped on an open string.
+        // pad_top = 14 * 2 + 4 + 4 = 36, the last 4 being the cursor ring's overhang
         assert_eq!(tall.top_y(), 36.0);
         assert_eq!(short.top_y(), 36.0);
 
-        // The radius, meanwhile, is squeezed by the shorter neck's fret spacing.
         assert!(
             short.note_radius < tall.note_radius,
             "short {} should be tighter than tall {}",

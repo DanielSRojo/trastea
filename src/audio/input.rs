@@ -1,16 +1,7 @@
 //! Opening a capture device and getting its samples to the detector.
 //!
-//! This is the only file in the change that cannot be tested, which is the whole reason
-//! the seam sits where it does: everything with a decision in it lives in `detect`, and
-//! what is left here is opening a device, normalising what it gives us, and handing the
-//! samples across a thread boundary. What can be tested here — de-interleaving, format
-//! conversion, the buffer's behaviour under contention — is, below.
-//!
-//! The hard constraint is the callback. It runs on a thread the audio system owns, to a
-//! deadline rather than an average, and whatever it does is done inside the time budget of
-//! one buffer. It may not allocate, may not wait on a lock another thread holds, and may
-//! not panic — an unwind through a C callback is undefined. So it copies and returns, and
-//! every decision happens elsewhere.
+//! The audio callback may not allocate, block, or panic, so it only copies; every decision
+//! lives in `detect`.
 
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,17 +13,11 @@ use cpal::{ErrorKind, SampleFormat};
 use super::detect::{HOP, WINDOW};
 
 /// Why there is nothing to listen to.
-///
-/// Three cases rather than one, because a learner hearing nothing needs to tell a machine
-/// with no interface from an interface another program is holding — the first is a
-/// shopping problem and the second is a "quit your DAW" problem. A tuner that renders all
-/// of them as an empty dial is indistinguishable from a tuner that is broken.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputError {
     /// The host reported no capture device at all.
     NoDevice,
-    /// A device exists but is held by something else. Its own case because the fix is
-    /// "close the other program", which no other failure here shares.
+    /// A device exists but another program holds it.
     Busy,
     /// The OS refused access — a privacy setting, or missing group membership on Linux.
     NotPermitted,
@@ -55,8 +40,7 @@ impl std::fmt::Display for InputError {
 }
 
 impl From<cpal::Error> for InputError {
-    /// cpal already classifies its failures; throwing that away and keeping only the
-    /// message would make the screen parse prose to say anything useful.
+    /// Keeps cpal's classification so the screen never has to parse the message.
     fn from(error: cpal::Error) -> InputError {
         match error.kind() {
             ErrorKind::DeviceNotAvailable | ErrorKind::HostUnavailable => InputError::NoDevice,
@@ -71,12 +55,9 @@ impl From<cpal::Error> for InputError {
     }
 }
 
-/// One input device the learner may choose, as the screen needs to show it.
+/// One input device the learner may choose.
 ///
-/// The id rather than an index, because an index is a position in an enumeration that
-/// changes when anything is plugged in, and this is the value that gets remembered across
-/// restarts. cpal builds it from the host's own identifier — the ALSA PCM id here — and
-/// documents `Display`/`FromStr` on it for exactly this purpose.
+/// Keyed by cpal's host id rather than an index, which shifts whenever anything is plugged in.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceChoice {
     id: String,
@@ -94,9 +75,6 @@ impl DeviceChoice {
 }
 
 /// Every input device worth offering, in the order the host lists them.
-///
-/// Three rules, in order, and the second and third are why this is not just a `map` over
-/// `input_devices`. On the development machine they turn 32 entries into 4.
 pub fn devices() -> Vec<DeviceChoice> {
     let host = cpal::default_host();
     let Ok(found) = host.input_devices() else {
@@ -115,16 +93,13 @@ pub fn devices() -> Vec<DeviceChoice> {
             continue;
         }
 
-        // Offering a device whose configuration cannot even be read is offering a failure.
-        // This is also what drops ALSA's `usbstream:` entries, which enumerate but never open.
+        // also drops ALSA's `usbstream:` entries, which enumerate but never open
         if device.default_input_config().is_err() {
             continue;
         }
 
-        // One entry per device. A host may expose the same hardware several times — the
-        // interface here appears four times, as `sysdefault:`, `front:`, `hw:` and
-        // `plughw:` — and first wins because ALSA lists `sysdefault` first, which is the
-        // one that converts format and rate rather than demanding the card's raw layout.
+        // ALSA lists the same card as `sysdefault:`, `front:`, `hw:`, `plughw:`; first wins
+        // because `sysdefault` comes first and converts format and rate
         let name = description.name().to_owned();
         if offered.iter().any(|offer| offer.name == name) {
             continue;
@@ -136,75 +111,43 @@ pub fn devices() -> Vec<DeviceChoice> {
     offered
 }
 
-/// Whether an id names real hardware rather than one of the host's software plugins.
+/// Whether an id names real hardware rather than one of ALSA's software plugins.
 ///
-/// ALSA enumerates its whole plugin chain as devices — `null`, `pulse`, `pipewire`,
-/// `speexrate`, `upmix` and a dozen more — and a learner looking for their interface is not
-/// looking for a rate converter. The test is the id rather than the display name, because
-/// the name is prose ("Rate Converter Plugin Using Speex Resampler") and translatable,
-/// while `CARD=` is an ALSA convention. Hardware PCMs name a card and plugins do not.
-///
-/// Hosts without a plugin chain lose nothing: no other backend's ids contain `CARD=`, so
-/// the ALSA-shaped test only applies where ALSA-shaped ids appear.
+/// Tests the id, not the translatable display name: ALSA hardware PCMs name a `CARD=`.
 fn is_hardware(id: &str) -> bool {
     !id.starts_with("alsa:") || id.contains("CARD=")
 }
 
 /// The most recent window of audio, written by the audio thread and read by whoever asks.
 ///
-/// A `Mutex` in an audio path deserves its raised eyebrow, so: the callback only ever
-/// `try_lock`s, and drops its chunk when the lock is held. It never waits, which is the
-/// property that matters — priority inversion needs a blocking acquire. What that costs is
-/// one chunk of samples, a few milliseconds, in the rare moment the reader holds the lock.
-///
-/// A lock-free ring would avoid even that, and in a DAW it would be the right call. Here
-/// the consumer is a redraw a few times a second and the cost of a dropped window is a
-/// dial that updates a beat later, so the simpler thing is chosen deliberately rather
-/// than by not thinking about it.
+/// The callback only ever `try_lock`s and drops its chunk if the reader holds the lock.
 #[derive(Debug)]
 struct Shared {
-    /// Whole interleaved frames, every channel the device has. Which one is heard is decided
-    /// by the reader, per window, so the callback stays a copy.
+    /// Whole interleaved frames; the reader picks the channel.
     samples: Mutex<Vec<f32>>,
-    /// Fixed for the stream's life, and kept beside the buffer it describes. Non-zero by
-    /// type, because a stride of zero is a panic and the callback may not panic.
+    /// Non-zero by type, because a zero stride panics and the callback may not panic.
     channels: NonZeroUsize,
-    /// Set by the error callback. `Ordering::Relaxed` throughout: this is one flag with no
-    /// other memory ordered against it, and a reader seeing it a few microseconds late is
-    /// indistinguishable from the device having failed a few microseconds later.
+    /// Set by the error callback. `Relaxed` because no other memory is ordered against it.
     lost: AtomicBool,
-    /// What the host said when it failed, for the screen to show.
     reason: Mutex<Option<String>>,
 }
 
-/// An open capture device.
+/// An open capture device; dropping it closes the stream.
 ///
-/// **Holding this is what keeps the audio running** — dropping it closes the stream. It is
-/// deliberately not `Clone` and deliberately owned by the app rather than by anything the
-/// UI framework may rebuild: iced hashes a subscription recipe rather than the values its
-/// closure captured, so a stream owned inside a subscription would be dropped and rebuilt
-/// whenever that hash changed. `ui/mod.rs` documents the same hazard for key translation,
-/// where the cost was a stale boolean; here it is an audible gap and a device that may
-/// refuse to reopen while it is still closing.
+/// Owned by the app, not a subscription, which iced may drop and rebuild when its hash changes.
 pub struct Input {
-    /// Never read. Present because dropping it stops the audio.
+    /// Never read; dropping it stops the audio.
     _stream: cpal::Stream,
     shared: Arc<Shared>,
     device_name: String,
     sample_rate: f32,
-    /// Set when a device was asked for by id and could not be found, so the default was
-    /// opened instead. The screen has to say so: a fallback that looks like a choice is how
-    /// a learner ends up tuning against a headset without knowing it.
+    /// The device asked for was missing and the default was opened instead.
     fell_back: bool,
 }
 
 impl Input {
     /// Opens the device with this id, or the system default when `wanted` is `None` or names
     /// a device that is not present.
-    ///
-    /// Falling back rather than failing is deliberate — a remembered interface that is
-    /// merely unplugged should leave a working tuner rather than an error — but the fallback
-    /// is recorded so the screen can say it happened.
     pub fn open_id(wanted: Option<&str>) -> Result<Input, InputError> {
         let host = cpal::default_host();
 
@@ -247,7 +190,6 @@ impl Input {
         })
     }
 
-    /// Whether the device asked for was absent and the default was opened instead.
     pub fn fell_back(&self) -> bool {
         self.fell_back
     }
@@ -282,9 +224,6 @@ impl Input {
 }
 
 /// Builds the stream for whichever sample format the device offers.
-///
-/// The match is the whole of the format handling: `cpal` hands each format as its own
-/// native type, and [`Sample::to_f32`] puts all of them on the same scale.
 fn build_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
@@ -292,7 +231,7 @@ fn build_stream(
 ) -> Result<cpal::Stream, InputError> {
     let errors = Arc::clone(&shared);
     let on_error = move |err: cpal::Error| {
-        // Runs on the audio thread's error path: record and return, nothing more.
+        // runs on the audio thread: record and return
         if let Ok(mut reason) = errors.reason.try_lock() {
             *reason = Some(err.to_string());
         }
@@ -328,9 +267,7 @@ fn build_stream(
     .map_err(InputError::from)
 }
 
-/// The most frames the buffer ever holds, and what `open` reserves: two windows is enough to
-/// always have a full one ready if the reader falls behind, and the oldest is the one worth
-/// losing.
+/// The most frames the buffer ever holds, reserved up front so the callback never allocates.
 const CAPACITY: usize = WINDOW * 2;
 
 impl Shared {
@@ -346,28 +283,20 @@ impl Shared {
 
 /// The body of the audio callback.
 ///
-/// Allocates nothing — the buffer was reserved at `CAPACITY` frames and room is made before a
-/// chunk lands rather than after, so it never outgrows that — never waits, and cannot panic:
-/// every fallible step is a `try_lock` or a saturating subtraction, and the stride is
-/// non-zero by type.
+/// Room is made before a chunk lands so the buffer never outgrows `CAPACITY`.
 fn collect<S: Sample>(data: &[S], shared: &Shared) {
     let Ok(mut held) = shared.samples.try_lock() else {
-        // The reader has it. Dropping this chunk costs one chunk of freshness and is the
-        // whole reason this is a `try_lock` rather than a `lock`.
+        // the reader has it; drop the chunk rather than wait
         return;
     };
 
-    // Whole frames only, so the buffer can never fall out of step with its channels. A
-    // chunk longer than the whole buffer keeps only its own newest `CAPACITY`.
+    // whole frames only, so the buffer never falls out of step with its channels
     let channels = shared.channels.get();
     let frames = data.chunks_exact(channels);
     let incoming = frames.len();
     let keep = CAPACITY.saturating_sub(incoming);
 
-    // The length is read into a local first. `held` is a `MutexGuard`, so `held.drain(..)`
-    // goes through `DerefMut` — and the two-phase borrow that makes `v.push(v.len())` legal
-    // on a plain `Vec` does not reach through an overloaded deref, so the mutable borrow is
-    // already live when the argument wants to read the length.
+    // a local because two-phase borrows do not reach through the guard's `DerefMut`
     let excess = held.len().saturating_sub(keep * channels);
     held.drain(..excess);
 
@@ -380,20 +309,14 @@ fn collect<S: Sample>(data: &[S], shared: &Shared) {
 }
 
 /// The loudest channel of the newest `WINDOW` frames, keeping only the overlap the next
-/// window will share.
-///
-/// Keeping `WINDOW - HOP` rather than nothing is what makes the next window arrive one
-/// [`HOP`] later instead of one `WINDOW` later — the spacing the tracker is tuned for. A
-/// redraw faster than that still gets `None`, so the same window is never analysed twice.
+/// window will share, so the next one arrives one [`HOP`] later.
 fn take(held: &mut Vec<f32>, channels: NonZeroUsize) -> Option<Vec<f32>> {
     let width = channels.get();
     if held.len() < WINDOW * width {
         return None;
     }
 
-    // The newest of what is there. Handing over everything that had accumulated would
-    // make the analysed length — and so the latency — depend on how long it had been
-    // since the last redraw.
+    // newest only, so latency does not depend on how long since the last redraw
     let frames = &held[held.len() - WINDOW * width..];
     let window = channel(frames, channels, loudest(frames, channels)).collect();
 
@@ -404,20 +327,14 @@ fn take(held: &mut Vec<f32>, channels: NonZeroUsize) -> Option<Vec<f32>> {
 
 /// One channel of an interleaved buffer.
 ///
-/// Not optional. A 2-in interface hands `[in1, in2, in1, in2, ...]`, and passing that
-/// through as if it were mono halves the apparent sample rate and reports every pitch an
-/// octave low — with perfect confidence, because the interleaved signal is still periodic.
+/// Passing interleaved stereo through as mono reads every pitch an octave low.
 fn channel(frames: &[f32], channels: NonZeroUsize, which: usize) -> impl Iterator<Item = f32> + '_ {
     frames.iter().skip(which).step_by(channels.get()).copied()
 }
 
 /// The channel carrying the most energy across `frames`.
 ///
-/// A guitar is one mono source, so on an interface with several inputs the one it is plugged
-/// into is the loud one and the rest are hiss. Chosen per window rather than once, so moving
-/// the cable needs nothing said. The range is walked backwards because `max_by` keeps the
-/// last of equals, and a tie — silence, or a stereo pair carrying one source — should go to
-/// the first input.
+/// Walked backwards because `max_by` keeps the last of equals and a tie should go to input 1.
 fn loudest(frames: &[f32], channels: NonZeroUsize) -> usize {
     (0..channels.get())
         .rev()
@@ -430,10 +347,6 @@ fn loudest(frames: &[f32], channels: NonZeroUsize) -> usize {
 }
 
 /// Scaling whatever the device gives us onto the same range.
-///
-/// A local trait rather than cpal's own, because cpal's conversion traits are generic over
-/// far more than this needs and naming the four cases here is shorter than the bounds
-/// would be — and because the scaling is the thing worth being able to read.
 trait Sample: Copy {
     fn to_f32(self) -> f32;
 }
@@ -463,13 +376,7 @@ impl Sample for u16 {
     }
 }
 
-/// Where the chosen device id is kept between runs.
-///
-/// One line of text in the user's config directory, not a settings system: there is exactly
-/// one thing to remember, and a format with structure would be a format to migrate later.
-/// `$XDG_CONFIG_HOME` or `~/.config`, which is where a Linux desktop expects it; anything
-/// else returns `None` and the tuner opens the default every time, which is a worse tuner
-/// rather than a broken one.
+/// Where the chosen device id is kept between runs, under `$XDG_CONFIG_HOME` or `~/.config`.
 fn choice_path() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
@@ -481,29 +388,17 @@ fn choice_path() -> Option<std::path::PathBuf> {
 }
 
 /// The device id chosen last time, if there was one and it can still be read.
-///
-/// Every failure is `None`: no file, an unreadable one, a home directory that is not where
-/// it should be. A remembered device is a convenience, and none of those is worth refusing
-/// to start a tuner over.
 pub fn remembered_device() -> Option<String> {
     read_choice(&choice_path()?)
 }
 
-/// Remembers this device id for next time. Best effort, for the reason above.
+/// Remembers this device id for next time. Best effort.
 pub fn remember_device(id: &str) {
     let Some(path) = choice_path() else { return };
     write_choice(&path, id);
 }
 
-/// The two above, with the location passed in rather than read from the environment.
-///
-/// Split out so the tests can drive them against a temporary file. The alternative — a
-/// test that points `XDG_CONFIG_HOME` somewhere safe — is what this replaced: `set_var`
-/// mutates process-global state, the test harness runs tests on parallel threads, and
-/// every test that opens the Tuner reads that same variable through `choice_path`. Edition
-/// 2024 made `set_var` `unsafe` for exactly that reason, and it is undefined behaviour
-/// rather than merely flaky. Passing the path in removes the shared state instead of
-/// timing around it.
+/// The two above with the path passed in, so tests need not `set_var` across threads.
 fn read_choice(path: &std::path::Path) -> Option<String> {
     let id = std::fs::read_to_string(path).ok()?;
     let id = id.trim();
@@ -523,10 +418,6 @@ fn write_choice(path: &std::path::Path, id: &str) {
 mod tests {
     use super::*;
 
-    // Opening a device needs hardware, so what is tested here is everything on the near
-    // side of that: the conversions, the classification of failures, and the buffer's
-    // behaviour when two threads reach it at once.
-
     const MONO: NonZeroUsize = NonZeroUsize::MIN;
     const STEREO: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
@@ -540,8 +431,6 @@ mod tests {
 
         assert_eq!(first, vec![1.0, 2.0, 3.0]);
         assert_eq!(second, vec![-1.0, -2.0, -3.0]);
-        // Emphatically not the interleaved buffer: passing that through reads every pitch
-        // an octave low, confidently, because the interleaving is itself periodic.
         assert_ne!(first, frames);
     }
 
@@ -592,8 +481,7 @@ mod tests {
 
     #[test]
     fn a_guitar_in_the_second_input_is_named() {
-        // The case that used to read as permanent silence: a 2-in interface with the guitar
-        // in input 2 and nothing in input 1. End to end, from the callback to a pitch.
+        // end to end, from the callback to a pitch
         let shared = Shared::new(STEREO);
         collect(&plugged_into(1, 2, 110.0, WINDOW), &shared);
 
@@ -612,15 +500,12 @@ mod tests {
 
     #[test]
     fn every_format_scales_onto_the_same_range() {
-        // Full scale is 1.0 whatever the device's native type is, so one level gate and
-        // one clarity threshold work for all of them.
         assert!((f32::to_f32(1.0) - 1.0).abs() < 1e-6);
         assert!((i16::MAX.to_f32() - 1.0).abs() < 1e-3);
         assert!((i32::MAX.to_f32() - 1.0).abs() < 1e-3);
         assert!((u16::MAX.to_f32() - 1.0).abs() < 1e-3);
 
-        // And silence is zero in all of them, including the unsigned one, where silence
-        // sits at half scale rather than at the bottom.
+        // unsigned silence sits at half scale
         assert!(f32::to_f32(0.0).abs() < 1e-6);
         assert!(0i16.to_f32().abs() < 1e-3);
         assert!(0i32.to_f32().abs() < 1e-3);
@@ -629,7 +514,6 @@ mod tests {
 
     #[test]
     fn integer_and_float_devices_agree_on_a_signal() {
-        // The same half-scale ramp in three formats lands in the same place.
         let floats = [0.5f32, -0.5, 0.0];
         let shorts = [i16::MAX / 2, i16::MIN / 2, 0];
 
@@ -646,7 +530,6 @@ mod tests {
     fn the_buffer_keeps_the_newest_samples_and_drops_the_oldest() {
         let shared = Shared::new(MONO);
 
-        // Far more than the cap, in identifiable order.
         for chunk in 0..8 {
             let block: Vec<f32> = (0..WINDOW).map(|i| (chunk * WINDOW + i) as f32).collect();
             collect(&block, &shared);
@@ -659,7 +542,6 @@ mod tests {
             held.len()
         );
 
-        // What survived is the tail, in order — the oldest is what a starved buffer loses.
         let newest = held[held.len() - 1];
         assert_eq!(newest, (8 * WINDOW - 1) as f32);
         assert!(
@@ -675,8 +557,7 @@ mod tests {
             let width = channels.get();
             let reserved = shared.samples.lock().expect("uncontended").capacity();
 
-            // Sizes a real host hands over, one that divides nothing, and one longer than
-            // the whole buffer. The first input counts frames; the rest are its negation.
+            // includes a chunk longer than the whole buffer; input 1 counts frames
             let mut next = 0.0f32;
             for frames in [480, 1024, 3000, 1, 7000, 2048] {
                 let block: Vec<f32> = (0..frames)
@@ -713,8 +594,7 @@ mod tests {
         let shared = Shared::new(MONO);
         let held = shared.samples.lock().expect("the test takes it first");
 
-        // With the lock held, a callback must return rather than block. If it blocked,
-        // this test would deadlock rather than fail — which is itself the assertion.
+        // a blocking callback would deadlock here rather than fail
         collect(&[0.5f32; 64], &shared);
 
         assert!(
@@ -780,7 +660,6 @@ mod tests {
             InputError::NotPermitted
         );
 
-        // Anything else keeps whatever the host said rather than being flattened.
         let other = Error::with_message(ErrorKind::UnsupportedConfig, "48 kHz only");
         assert_eq!(
             InputError::from(other),
@@ -828,7 +707,6 @@ mod device_tests {
 
     #[test]
     fn plugin_ids_are_not_offered_and_hardware_ids_are() {
-        // The ids ALSA actually produced on the development machine.
         for plugin in [
             "alsa:null",
             "alsa:pulse",
@@ -858,8 +736,6 @@ mod device_tests {
 
     #[test]
     fn a_host_without_a_plugin_chain_loses_nothing() {
-        // No other backend's ids look like ALSA's, so the ALSA-shaped rule must not reach
-        // them — a CoreAudio UID or a WASAPI id has no `CARD=` and must still be offered.
         for elsewhere in [
             "coreaudio:AppleUSBAudioEngine:Focusrite:Scarlett 2i2:1",
             "wasapi:{0.0.1.00000000}.{9c7b1b2a}",
@@ -871,17 +747,13 @@ mod device_tests {
 
     #[test]
     fn the_filter_rests_on_the_id_rather_than_the_name() {
-        // The display names are prose and translatable; the rule must not consult them.
-        // "Rate Converter Plugin Using Speex Resampler" is `alsa:speexrate`, and a machine
-        // in another locale reports the same id with a different name.
         assert!(!is_hardware("alsa:speexrate"));
         assert!(is_hardware("alsa:sysdefault:CARD=Generic_1"));
     }
 
     #[test]
     fn devices_are_offered_once_each() {
-        // Runs against whatever this machine has, so it asserts the invariant rather than a
-        // particular list: no duplicate names, and nothing that failed the rules above.
+        // runs against this machine's devices, so it asserts the invariant only
         let offered = devices();
 
         let mut names: Vec<&str> = offered.iter().map(DeviceChoice::name).collect();
@@ -898,9 +770,6 @@ mod device_tests {
 
     #[test]
     fn a_remembered_choice_is_recovered() {
-        // A file of this test's own. Nothing here touches the process environment, so it
-        // cannot race the tests running beside it — several of which open the Tuner and
-        // read the real `choice_path`.
         let path = std::env::temp_dir().join(format!(
             "trastea-input-choice-{}-{:?}.txt",
             std::process::id(),
@@ -916,8 +785,6 @@ mod device_tests {
             Some("alsa:sysdefault:CARD=USB".to_owned())
         );
 
-        // A blank or whitespace-only file is nothing remembered rather than an empty id,
-        // which would otherwise be asked for and never found.
         write_choice(&path, "   \n");
         assert_eq!(read_choice(&path), None);
 
@@ -926,8 +793,6 @@ mod device_tests {
 
     #[test]
     fn the_remembered_choice_lives_where_a_linux_desktop_expects_it() {
-        // The real path is still exercised, just not mutated: it has to end up under a
-        // config directory rather than beside the binary or in the working directory.
         if let Some(path) = choice_path() {
             assert!(
                 path.ends_with("trastea/input-device"),
@@ -943,9 +808,7 @@ mod fallback_tests {
 
     #[test]
     fn a_remembered_device_that_is_gone_falls_back_and_says_so() {
-        // Needs a default device to fall back *to*. Where there is none, the interesting
-        // assertion is the other one: that asking for a missing device is still an error
-        // about there being no device rather than a panic.
+        // without a default device, the missing one must still read as `NoDevice`
         let asking_for_nothing = Input::open_id(Some("no-such-device-anywhere"));
 
         match asking_for_nothing {
@@ -966,8 +829,6 @@ mod fallback_tests {
 
     #[test]
     fn the_default_is_not_a_fallback() {
-        // Asking for nothing in particular and getting the default is a choice, not a
-        // failure — the screen must not claim a remembered device went missing.
         if let Ok(input) = Input::open_id(None) {
             assert!(
                 !input.fell_back(),

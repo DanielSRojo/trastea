@@ -1,19 +1,7 @@
 //! Play the Interval: the drill's state machine and the screen that draws it.
 //!
-//! Both halves live here for the reason the other drills give — the state keeps its fields
-//! to itself, and the views below are the only things that read them.
-//!
-//! What sets this drill apart is where the answer comes from. The neck takes no press and
-//! there is no answer grid: a prompt lights a root, names an interval, and waits to *hear*
-//! the note. Judging compares pitch classes, so the interval is correct in any octave and
-//! at any position carrying it — the rule the Interval Trainer already applies to a
-//! position offered for a named interval.
-//!
-//! And nothing here is named. Not the root, not the target, not what was played. A screen
-//! that printed the name of the note it just heard would let a learner answer by hunting
-//! until the expected name appeared, which is note-name recall rather than interval recall.
-//! The cents offset is the one number on screen, and it names nothing: it says *your
-//! intonation is off by this much* without saying what it is off from.
+//! The answer is heard rather than pressed, and nothing on screen names a note, so the drill
+//! cannot be answered by hunting for a name.
 
 use iced::{Color, Element, Length, Padding};
 
@@ -33,10 +21,6 @@ use crate::music::notes::PitchClass;
 use crate::rng::Rng;
 
 /// What the drill is asking: a position to measure from, and how far.
-///
-/// One struct rather than an enum, because there is one direction. *Name it* has no
-/// counterpart here — a learner cannot name an interval by playing one, since the thing
-/// played is the answer rather than a description of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Prompt {
     root: Position,
@@ -45,33 +29,17 @@ struct Prompt {
 
 /// What the drill will do with the next confirmed reading.
 ///
-/// The whole of "a fresh prompt hears nothing until what is sounding stops". A correct
-/// answer is still ringing when the flash retires the prompt a second later, and a prompt
-/// that accepted what was already sounding would be answered by the previous answer.
-///
-/// Detecting the break costs nothing, which is why this is two states and not a timer.
-/// `Tracker` clears its run on silence, on an unclear window, *and* on a reading more than
-/// its tolerance from the one before it — so a note stopping, a re-pluck through its
-/// inharmonic attack, and a slide from one note to another all release something other
-/// than `Heard::Pitch` first. The detector's definition of "a different note" is this
-/// drill's definition of "a different answer", which is one definition rather than two.
-///
-/// A debounce timer was the alternative, and its `n` is a number nobody can pick: shorter
-/// than the ring of an open low E and the previous answer answers the next prompt, longer
-/// and a learner on a run is made to wait. There is no number here.
+/// A fresh prompt ignores whatever is already sounding until `Tracker` breaks its run, so a
+/// ringing answer cannot answer the next prompt. No debounce timer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Gate {
-    /// Something is sounding that has already been answered with, or was already ringing
-    /// when this prompt was drawn.
+    /// Something already answered with, or already ringing when the prompt was drawn.
     Deaf,
     /// Nothing is sounding. The next confirmed reading is an answer.
     Listening,
 }
 
-/// The drill's whole state.
-///
-/// No iced types, so the gate, the judging and the streak rules can be tested without a
-/// widget tree — and, because `Listener::apply` is the seam, without a capture device.
+/// No iced types, so the gate and judging are testable without a widget tree or a device.
 pub(super) struct PlayTheInterval {
     prompt: Prompt,
     score: Score<PitchClass>,
@@ -82,8 +50,7 @@ pub(super) struct PlayTheInterval {
 impl PlayTheInterval {
     pub(super) fn new(rng: &mut Rng) -> PlayTheInterval {
         let mut drill = PlayTheInterval {
-            // Replaced by `draw_prompt` before anything reads it; a struct literal cannot
-            // call a method on the value it is still building.
+            // replaced by `draw_prompt`; a struct literal cannot call a method on itself
             prompt: Prompt {
                 root: Position { string: 0, fret: 0 },
                 interval: Interval::Unison,
@@ -105,11 +72,8 @@ impl PlayTheInterval {
         &mut self.listener
     }
 
-    /// Draws a fresh prompt, never the one already showing.
-    ///
-    /// Generated forward — a root and an interval — rather than by lighting two positions
-    /// and asking what lies between them, for the reason the Interval Trainer gives: it is
-    /// what guarantees the distance is one the vocabulary can name.
+    /// Draws a fresh prompt, never the one already showing. Generated forward so the
+    /// distance is always one the vocabulary can name.
     fn draw_prompt(&mut self, rng: &mut Rng) {
         let neck = neck();
 
@@ -125,22 +89,14 @@ impl PlayTheInterval {
         });
 
         self.score.next_prompt();
-        // Deaf to whatever is sounding *now*, whatever the reason the prompt was drawn —
-        // advanced after a flash, skipped, or the screen entered. Read off the device
-        // rather than set flat, so the state says what is true: entering the screen in
-        // silence arms immediately, while a prompt drawn over a ringing answer waits for
-        // it to stop. A flat `Deaf` would have been the same thing in the running app,
-        // where the next poll is 10 ms away — and a lie for those 10 ms.
+        // read off the device rather than set flat, so entering in silence arms immediately
         self.gate = match self.listener.reading() {
             Some(_) => Gate::Deaf,
             None => Gate::Listening,
         };
     }
 
-    /// The pitch class the prompt is asking for.
-    ///
-    /// `None` only if the root is off the neck, which `draw_prompt` cannot produce — the
-    /// positions it chooses from are the ones that yielded a pitch class in the first place.
+    /// The pitch class the prompt is asking for. `None` only if the root is off the neck.
     fn target(&self) -> Option<PitchClass> {
         Some(
             self.prompt
@@ -150,19 +106,15 @@ impl PlayTheInterval {
         )
     }
 
-    /// Folds a released reading into the drill.
-    ///
-    /// The gate's three rows, and the only place the streak moves. Note the asymmetry: a
-    /// reading that is *not* a pitch re-arms and is otherwise ignored, so silence and a
-    /// strum cost nothing — which is what makes a fumble on the way to the answer free.
+    /// Folds a released reading into the drill. A non-pitch reading only re-arms the gate,
+    /// so silence and a fumble cost nothing.
     pub(super) fn apply(&mut self, heard: Heard) {
         let Heard::Pitch(detection) = heard else {
             self.gate = Gate::Listening;
             return;
         };
 
-        // A correct answer is on screen, so the drill is not asking anything. What is
-        // sounding now is the tail of the note that scored.
+        // what is sounding during the flash is the tail of the note that scored
         if self.score.is_flashing() || self.gate == Gate::Deaf {
             return;
         }
@@ -171,20 +123,13 @@ impl PlayTheInterval {
             return;
         };
 
-        // Judged once, whatever happens next: a held string confirms the same reading on
-        // every 10 ms tick, and this is what makes one unbroken note one answer.
+        // a held string confirms the same reading every tick; this makes one note one answer
         self.gate = Gate::Deaf;
         self.judge(pitch.pitch_class());
     }
 
-    /// Scores a played pitch class against the prompt.
-    ///
-    /// The octave is thrown away deliberately. A root at the third fret of the low E asked
-    /// for a minor seventh has no answer above it inside one octave that a hand can reach
-    /// from where it is sitting, and an octave-exact rule would be drilling *where the
-    /// octave is* — the Note Trainer's neck knowledge — on top of the interval it means to
-    /// teach. The cost is that an octave error is never caught, which is the same trade
-    /// the Interval Trainer's *Find it* already makes.
+    /// Scores a played pitch class against the prompt. The octave is ignored on purpose, so
+    /// an octave error is never caught.
     fn judge(&mut self, played: PitchClass) {
         self.score.mark(played, self.target() == Some(played));
     }
@@ -194,11 +139,8 @@ impl PlayTheInterval {
         self.score.is_flashing()
     }
 
-    /// Ends the flash and draws the next prompt.
-    ///
-    /// A no-op when nothing is being marked, so a tick that outlived its flash — one that
-    /// crossed a skip, or landed after the screen was left — cannot retire a prompt the
-    /// learner is still reading.
+    /// Ends the flash and draws the next prompt. A no-op outside the flash, so a stale tick
+    /// cannot retire a prompt the learner is still reading.
     pub(super) fn advance(&mut self, rng: &mut Rng) {
         if self.score.is_flashing() {
             self.draw_prompt(rng);
@@ -217,29 +159,12 @@ impl PlayTheInterval {
     }
 }
 
-/// The marks on the neck.
-///
-/// The root is an unfilled ring, for the reason `note_trainer::prompt_marker` gives and
-/// which `NoteMarker`'s missing `Default` exists to enforce — a fill is what this app uses
-/// to say "you put this here", and the prompt is the opposite.
-///
-/// A heard pitch class is marked at *every* position carrying it, which is the honest
-/// drawing of a rule that judges pitch classes: those are all the places the learner could
-/// have played it, and the drill would have accepted any of them.
-///
-/// **The root's own position wins any collision.** A learner who plays the root's pitch
-/// class back, or answers a unison prompt, would otherwise have the one position the prompt
-/// depends on repainted as an answer. The other positions carrying that pitch class still
-/// take the answer's colour, so the answer is visible without the prompt losing its anchor.
-///
-/// Every mark is unlabelled, and that is load-bearing rather than cosmetic: a label would
-/// name a note, and the whole point of this drill is that it can be answered without one.
+/// The marks on the neck. The root is an unfilled ring and wins any collision; a heard
+/// pitch class is marked at every position carrying it. No mark is labelled.
 fn markers(drill: &PlayTheInterval) -> Vec<NoteMarker> {
     let root = drill.prompt.root;
 
-    // The live reading, unless it has already been judged — judging is immediate, so what
-    // survives this filter is a note heard while the gate was deaf: the previous answer
-    // ringing into a fresh prompt, drawn as heard rather than as scored.
+    // only a note heard while the gate was deaf survives: drawn as heard, not as scored
     let sounding = drill
         .listener
         .reading()
@@ -305,8 +230,6 @@ pub(super) fn ui_play_the_interval(
     let neck = Fretboard {
         num_frets: DRILL_NECK.frets(),
         highlighted: markers(drill),
-        // No press handler: the answer arrives from the instrument, so there is no press
-        // to ignore. The same arrangement the CAGED window's neck uses.
         ..Fretboard::default()
     };
 
@@ -353,13 +276,8 @@ pub(super) fn ui_play_the_interval(
         .into()
 }
 
-/// What the app is hearing, said as one of the four states — and, while a note is being
-/// read, how far it sits from the pitch it was named as.
-///
-/// The offset is the one number on this screen, and it names nothing. The drill judges the
-/// pitch the instrument actually sounds, so an instrument far enough out of tune is judged
-/// on the note it has become; without this a learner whose guitar is half a semitone flat
-/// is told only that they are wrong, over and over, with nothing to say why.
+/// What the app is hearing, and while a note is read, its cents offset — so an out-of-tune
+/// instrument explains why correct playing reads as wrong.
 fn ui_heard_line(drill: &PlayTheInterval) -> Element<'static, Message> {
     use iced::widget::{row, text};
 
@@ -373,11 +291,7 @@ fn ui_heard_line(drill: &PlayTheInterval) -> Element<'static, Message> {
     .into()
 }
 
-/// The two strings the line above draws, apart from the widgets that draw them.
-///
-/// Split out so the tests can assert on the words — that the four states read differently,
-/// and that neither string ever names a note, which is the one claim this whole screen
-/// rests on and the one a widget tree cannot be asked about.
+/// The two strings the line above draws, split out so the tests can assert no note is named.
 fn heard_line(drill: &PlayTheInterval) -> (&'static str, String) {
     let status = match drill.listener.state() {
         State::NotStarted => "not listening",
@@ -387,8 +301,7 @@ fn heard_line(drill: &PlayTheInterval) -> (&'static str, String) {
         State::Reading => "heard",
     };
 
-    // `+ 0.0` because rounding keeps the sign it rounded away: a hair flat would otherwise
-    // print "-0 cents", which reads as a fault in the reading.
+    // `+ 0.0` so a hair flat does not print "-0 cents"
     let offset = match drill.listener.reading() {
         Some((_, cents)) => format!("{:+.0} cents", cents.value().round() + 0.0),
         None => String::new(),
@@ -397,8 +310,7 @@ fn heard_line(drill: &PlayTheInterval) -> (&'static str, String) {
     (status, offset)
 }
 
-/// The header row. One control: skip. There is no direction to swap — a learner cannot name
-/// an interval by playing one — and no pool to widen.
+/// The header row. One control: skip.
 fn play_controls(focused: FocusTarget) -> Element<'static, Message> {
     use iced::widget::row;
 
@@ -420,11 +332,8 @@ mod tests {
     use crate::music::pitch::Pitch;
     use iced::keyboard;
 
-    /// An app sitting on the played drill with a reproducible prompt stream.
-    ///
-    /// `navigate_to` rather than `open`, so no capture device is claimed: every assertion
-    /// below is about what the drill does with a reading, and `Message::Heard` delivers one
-    /// without a device. The tests that are about the device say so by using `open`.
+    /// An app on the played drill with a reproducible prompt stream. `navigate_to` rather
+    /// than `open`, so no capture device is claimed.
     fn play_app(seed: u64) -> App {
         let mut app = app_with_seed(seed);
         app.navigate_to(Screen::PlayTheInterval);
@@ -433,11 +342,6 @@ mod tests {
     }
 
     /// A pitch, sent through as the confirmed reading the detector would have released.
-    ///
-    /// A pitch rather than a frequency, because what a test here means is "the learner
-    /// played E2" and the hertz is an implementation detail of saying so. The clarity is
-    /// above the gate because this is the *released* seam — whether a strum ever gets this
-    /// far is `audio::detect`'s question, tested there against real waveforms.
     fn plays(app: &mut App, pitch: Pitch) {
         let _ = app.update(Message::Heard(Heard::Pitch(Detection::synthesized(
             pitch.frequency(),
@@ -450,9 +354,7 @@ mod tests {
         let _ = app.update(Message::Heard(Heard::Silence));
     }
 
-    /// Some pitch sounding the prompt's answer. The lowest one on the neck, which is an
-    /// arbitrary choice the drill is indifferent to — that indifference is itself asserted
-    /// by `the_interval_is_correct_in_every_octave`.
+    /// Some pitch sounding the prompt's answer: the lowest one on the neck.
     fn correct_pitch(app: &App) -> Pitch {
         let target = app
             .play_the_interval
@@ -465,8 +367,7 @@ mod tests {
             .expect("the neck sounds every pitch class")
     }
 
-    /// A pitch a semitone above the answer — near enough to be a plausible slip, and never
-    /// the answer itself.
+    /// A pitch a semitone above the answer, never the answer itself.
     fn wrong_pitch(app: &App) -> Pitch {
         correct_pitch(app)
             .transpose(1)
@@ -480,8 +381,7 @@ mod tests {
         let mut app = play_app(0x9a1);
         let wrong = wrong_pitch(&app);
 
-        // A held string confirms the same reading on every 10 ms tick. Fifty of them is
-        // half a second of ringing, and it is one wrong answer.
+        // fifty ticks is half a second of ringing
         for _ in 0..50 {
             plays(&mut app, wrong);
         }
@@ -502,7 +402,7 @@ mod tests {
         assert_eq!(app.play_the_interval.score.streak(), 1);
     }
 
-    /// The whole reason `Gate` exists, and the one behaviour that would break silently.
+    /// The behaviour `Gate` exists for, and the one that would break silently.
     #[test]
     fn a_ringing_answer_does_not_answer_the_next_prompt() {
         let mut app = play_app(0x9a3);
@@ -551,15 +451,12 @@ mod tests {
         stops(&mut app);
         plays(&mut app, wrong);
 
-        // Deduplicated in `wrong`, so what proves it was judged twice is that the second
-        // sounding was judged at all — the gate re-armed on the silence between them.
+        // `wrong` is deduplicated, so the proof is that the second sounding was judged at all
         assert_eq!(app.play_the_interval.score.wrong().len(), 1);
         assert_eq!(app.play_the_interval.gate, Gate::Deaf);
     }
 
-    /// The re-arming path a slide gives for free: `Tracker` releases `Unpitched` the moment
-    /// the pitch moves past its tolerance, so sliding from a wrong note to the right one
-    /// needs no silence between them.
+    /// `Tracker` releases `Unpitched` when the pitch slides past its tolerance, which re-arms.
     #[test]
     fn a_slide_from_a_wrong_note_to_the_right_one_is_judged() {
         let mut app = play_app(0x9a6);
@@ -620,8 +517,7 @@ mod tests {
 
             assert!(carriers.len() >= 3, "the neck spans at least three octaves");
 
-            // A fresh app per octave, so each one is judged against the same prompt rather
-            // than against whatever the previous answer advanced to.
+            // a fresh app per octave, so each is judged against the same prompt
             for pitch in carriers {
                 let mut app = play_app(seed);
                 plays(&mut app, pitch);
@@ -814,8 +710,6 @@ mod tests {
         }
     }
 
-    /// The collision rule: the root's own position keeps the root's mark whatever else
-    /// claims it, so a prompt can never lose the anchor the interval is measured from.
     #[test]
     fn the_root_position_keeps_its_mark_when_its_pitch_class_is_played() {
         let mut app = play_app(0xe3);
@@ -838,8 +732,6 @@ mod tests {
         assert_eq!(at_root.color, ROOT_MARKER);
         assert_eq!(at_root.style, MarkerStyle::Outlined);
 
-        // The other positions carrying it still take the answer's colour, so the answer is
-        // visible without the prompt losing its anchor.
         assert!(
             marks.iter().any(|m| {
                 (m.string, m.fret) != (root.string, root.fret) && m.color != ROOT_MARKER
@@ -848,8 +740,7 @@ mod tests {
         );
     }
 
-    /// The screen's headline claim, asserted where a widget tree cannot be asked: no mark
-    /// carries a label, in any state the drill can reach.
+    /// No mark carries a label, in any state the drill can reach.
     #[test]
     fn nothing_the_drill_draws_names_a_note() {
         let mut app = play_app(0xe4);
@@ -895,8 +786,7 @@ mod tests {
         let mut app = app_with_seed(0xf1);
         app.open(Screen::PlayTheInterval);
 
-        // `NotStarted` needs a screen that has not been entered, so it is read before the
-        // device is opened rather than from here.
+        // `NotStarted` is read before the device is opened, not from here
         let opened = app.play_the_interval.listener().error().is_none();
 
         let _ = app.update(Message::Heard(Heard::Silence));
@@ -914,8 +804,7 @@ mod tests {
             assert_ne!(unnameable, reading);
             assert_ne!(silent, reading);
         } else {
-            // No device on this machine: all three collapse to the one state that matters,
-            // and the drill says so rather than appearing to listen.
+            // no device on this machine: all three collapse to one state
             assert_eq!(silent, "no input — this drill needs one");
         }
     }
@@ -935,9 +824,6 @@ mod tests {
         );
     }
 
-    /// A learner whose guitar is far out of tune is judged on the note it has become, so
-    /// the offset is the one thing on screen that can explain why correct playing keeps
-    /// reading as wrong.
     #[test]
     fn a_badly_tuned_instrument_shows_a_large_offset() {
         let mut app = play_app(0xf3);
@@ -979,8 +865,6 @@ mod tests {
         let mut app = play_app(0x102);
         let before = app.play_the_interval.prompt;
 
-        // `a` widens the Note Trainer's pool and `i` switches a notation; neither is
-        // claimed here.
         for key in ["a", "i", "n", "f"] {
             press_into(&mut app, key, keyboard::Modifiers::empty());
         }

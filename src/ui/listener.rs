@@ -1,17 +1,5 @@
-//! The capture device, what it has heard, and the list to change it with.
-//!
-//! This is not a screen. It moved out of `tuner.rs` when a second screen wanted to listen:
-//! a screen reaching into another screen is the arrangement that keeping each screen's
-//! state and views in one module exists to prevent, so the machinery left rather than the
-//! new screen reaching across — the move `shapes.rs` made for the same reason.
-//!
-//! It sits in `ui/` rather than in `audio/` because it holds a highlighted row and draws a
-//! list. `audio/` reports hertz and knows nothing about screens, which is the line that
-//! makes its detector testable; a picker index is on this side of it.
-//!
-//! What it deliberately does not hold is any opinion about what a reading *means*. In tune
-//! is the Tuner's question and correct is the drill's, and both are asked of the same
-//! `Heard`.
+//! The capture device, what it has heard, and the picker to change it.
+//! Holds no opinion on what a reading means; that is each screen's question.
 
 use iced::widget::{Space, button, column, container, row, text};
 use iced::{Element, Length, Padding};
@@ -30,29 +18,22 @@ use super::style::{
     BODY, MUTE, card_button, focus_ring, ghost_button, row_button, selected_row_button,
 };
 
-/// What the screen is doing, which is not the same question as what it is hearing.
-///
-/// No `Debug`: it holds a `cpal::Stream`, which has none, and deriving one here would mean
-/// hand-writing it for the sake of a trait nothing asks for.
+/// What the screen is doing, as opposed to what it is hearing.
+/// No `Debug`: `cpal::Stream` has none.
 enum Listening {
-    /// No device has been opened yet — no listening screen has been entered.
+    /// No listening screen has been entered yet.
     Idle,
-    /// A device is open.
     Open(Box<Input>),
-    /// Opening failed, and this is why.
     Failed(InputError),
 }
 
 pub(super) struct Listener {
     listening: Listening,
-    /// Confirms readings across windows. Owned here because it is per-session state: a
-    /// run of agreeing windows means nothing after the screen has been left and re-entered.
+    /// Per-session: a run of agreeing windows means nothing after the screen is re-entered.
     tracker: Tracker,
-    /// The last thing released. `Heard::Silence` at rest, which is what makes silence a
-    /// state the screen draws rather than the absence of one.
+    /// `Heard::Silence` at rest.
     heard: Heard,
-    /// The devices offered, read when the picker opens rather than held live — a list
-    /// cached at startup is a list that disagrees with the machine by the time it is shown.
+    /// Read when the picker opens rather than cached, so it matches the machine.
     devices: Vec<DeviceChoice>,
     /// `Some` while the picker is open, carrying the highlighted row.
     picking: Option<usize>,
@@ -72,11 +53,8 @@ impl Listener {
         }
     }
 
-    /// Opens the remembered device, or the default. Called when a listening screen is
-    /// entered.
-    ///
-    /// Idempotent: re-entering with a device already open leaves it alone, rather than
-    /// closing and reopening one that is working.
+    /// Opens the remembered device, or the default. Idempotent: a working device is left
+    /// open.
     pub(super) fn listen(&mut self) {
         if matches!(self.listening, Listening::Open(_)) {
             return;
@@ -86,8 +64,7 @@ impl Listener {
         self.settle(Input::open_id(wanted.as_deref()));
     }
 
-    /// Takes on whatever opening a device produced. The one place `fell_back` is set, so a
-    /// device opened from memory and one opened from the list cannot disagree about it.
+    /// The one place `fell_back` is set.
     fn settle(&mut self, opened: Result<Input, InputError>) {
         self.listening = match opened {
             Ok(input) => {
@@ -100,16 +77,7 @@ impl Listener {
         self.heard = Heard::Silence;
     }
 
-    /// Closes the device, if one is open.
-    ///
-    /// Called on leaving the screen. The alternative — holding it for a quick re-entry —
-    /// buys nothing: the poll timer is already gated on a listening screen being on show,
-    /// so a held stream is a device claimed for no reading. And an audio interface is a
-    /// device other programs want; a trainer that keeps one while its user is looking at
-    /// chord diagrams is the reason that program cannot open it.
-    ///
-    /// Dropping the `Input` is what actually stops the audio — the stream stops when it
-    /// is dropped, which is the same fact that decides where it is owned.
+    /// Closes the device, if one is open. Dropping the `Input` is what stops the stream.
     pub(super) fn stop(&mut self) {
         self.listening = Listening::Idle;
         self.tracker = Tracker::new();
@@ -118,18 +86,13 @@ impl Listener {
         self.fell_back = false;
     }
 
-    /// Whether there is a stream to poll — what the subscription asks before ticking.
+    /// Whether there is a stream to poll.
     pub(super) fn is_listening(&self) -> bool {
         matches!(self.listening, Listening::Open(_))
     }
 
-    /// Takes whatever audio has arrived and folds it into the reading, returning what was
-    /// released so a caller with its own use for it does not have to ask again.
-    ///
-    /// Analysis runs here, on the UI thread, rather than in the audio callback: the
-    /// callback's budget is a deadline, and a detector that occasionally runs long there
-    /// is a glitch in the system's audio rather than a late reading. Here the worst case
-    /// is a late frame.
+    /// Folds whatever audio has arrived into the reading and returns what was released.
+    /// Analysis runs on the UI thread so a slow detector cannot glitch the audio callback.
     pub(super) fn poll(&mut self) -> Option<Heard> {
         let Listening::Open(input) = &self.listening else {
             return None;
@@ -149,8 +112,7 @@ impl Listener {
         Some(heard)
     }
 
-    /// Records a released reading. The seam the tests drive, so a screen assertion needs
-    /// no device — the same arrangement the trainers use for a press on the neck.
+    /// Records a released reading. The seam the tests drive, so they need no device.
     pub(super) fn apply(&mut self, heard: Heard) {
         self.heard = heard;
     }
@@ -175,8 +137,7 @@ impl Listener {
         self.picking.is_some()
     }
 
-    /// Moves the highlight within the picker, clamping rather than wrapping — the same
-    /// behaviour the focus ring has on a row that runs out.
+    /// Moves the highlight within the picker, clamping rather than wrapping.
     pub(super) fn move_pick(&mut self, delta: isize) {
         let Some(index) = self.picking else { return };
         if self.devices.is_empty() {
@@ -188,11 +149,7 @@ impl Listener {
         self.picking = Some(moved);
     }
 
-    /// Opens the highlighted device and remembers it.
-    ///
-    /// The choice is remembered for the app rather than for the screen that made it: a
-    /// learner who has said which interface they play through has said it about the
-    /// instrument, and two records of it would be two records free to disagree.
+    /// Opens the highlighted device and remembers it for the app, not the screen.
     pub(super) fn choose(&mut self, index: usize) {
         let Some(device) = self.devices.get(index) else {
             return;
@@ -201,8 +158,7 @@ impl Listener {
         let id = device.id().to_owned();
         let opened = Input::open_id(Some(&id));
 
-        // A device unplugged between the list being read and the row being chosen opens
-        // the default instead. Remembering it would record a choice that never took effect.
+        // A device unplugged since the list was read opens the default; don't remember that.
         if opened.as_ref().is_ok_and(|input| !input.fell_back()) {
             remember_device(&id);
         }
@@ -219,7 +175,6 @@ impl Listener {
         &self.devices
     }
 
-    /// The name of the device being listened to, or `None` when none is.
     pub(super) fn device_name(&self) -> Option<&str> {
         match &self.listening {
             Listening::Open(input) => Some(input.device_name()),
@@ -238,9 +193,7 @@ impl Listener {
         self.fell_back
     }
 
-    /// What is sounding, in hertz. Separate from [`Listener::reading`] because it is the
-    /// measurement and the pitch is the interpretation: a string being brought up to tune
-    /// moves this continuously while the name it is given stays put.
+    /// The raw frequency; moves continuously while [`Listener::reading`]'s name stays put.
     pub(super) fn hz(&self) -> Option<f32> {
         match self.heard {
             Heard::Pitch(detection) => Some(detection.hz()),
@@ -256,9 +209,6 @@ impl Listener {
         }
     }
 
-    /// What the screen says it is doing, as one of four states rather than a dial that
-    /// may or may not mean anything. A learner has to be able to tell a broken setup from
-    /// an idle one without leaving the screen.
     pub(super) fn state(&self) -> State {
         match (&self.listening, self.heard) {
             (Listening::Idle, _) => State::NotStarted,
@@ -270,7 +220,6 @@ impl Listener {
     }
 }
 
-/// The four things a listening screen can be saying.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum State {
     NotStarted,
@@ -280,7 +229,6 @@ pub(super) enum State {
     Reading,
 }
 
-/// The line naming the device, and the way to change it.
 pub(super) fn ui_device_line(
     listener: &Listener,
     focused: FocusTarget,
@@ -319,8 +267,7 @@ pub(super) fn ui_device_line(
     line.into()
 }
 
-/// The device list. Modal while it is up: what the screen was showing is not drawn behind
-/// it, because a dial nobody is looking at is a dial drawn for nothing.
+/// The device list. Modal: the screen behind it is not drawn.
 pub(super) fn ui_device_picker(listener: &Listener) -> Element<'static, Message> {
     let highlighted = listener.picking().unwrap_or(0);
 
@@ -412,12 +359,7 @@ mod device_tests {
         );
     }
 
-    /// The invariant `App::listener` rests on: moving between the two listening screens
-    /// closes one stream before the other opens, so there is never a moment with both.
-    ///
-    /// `leaving_for` is what enforces it, and it is asked of the screen being left before
-    /// `self.screen` moves — which is the whole reason it is a separate method rather than
-    /// a line inside `navigate_to`.
+    /// Moving between the two listening screens closes one stream before the other opens.
     #[test]
     fn only_one_screen_holds_a_stream_at_a_time() {
         let (mut app, _) = App::new();
@@ -447,8 +389,6 @@ mod device_tests {
         assert_eq!(app.tuner.listener().is_listening(), opened);
     }
 
-    /// Both ways out of the played drill release the device, as both ways out of the Tuner
-    /// do — `Esc` and a Home navigation go through the one method that says so.
     #[test]
     fn leaving_the_played_drill_puts_the_device_down() {
         for leave in [Message::GoBack, Message::Navigate(Screen::Caged)] {
@@ -465,9 +405,7 @@ mod device_tests {
         }
     }
 
-    /// The poll ticks on the listening screens and on none of the others, read from the
-    /// same routing the messages take — so the subscription and the routing cannot
-    /// disagree about which screen is listening.
+    /// The poll ticks on the listening screens and on none of the others.
     #[test]
     fn the_poll_is_live_on_the_listening_screens_and_no_others() {
         for screen in every_screen() {
@@ -484,8 +422,7 @@ mod device_tests {
                 "{screen:?} disagrees about whether it listens"
             );
 
-            // With no device on the machine the stream never opens, and the poll correctly
-            // does not tick — the screen says "no input" instead of appearing to listen.
+            // With no device on the machine the stream never opens and the poll does not tick.
             if !listens {
                 assert!(!app.is_listening(), "{screen:?} is polling for audio");
             }
@@ -494,8 +431,7 @@ mod device_tests {
 
     #[test]
     fn navigating_elsewhere_puts_it_down_too() {
-        // The other way out: a Home digit rather than Esc. Both paths go through
-        // `leaving_for`, and this is what holds them together.
+        // The other way out: a Home digit rather than Esc.
         let (mut app, _) = App::new();
 
         let _ = app.update(Message::Navigate(Screen::Tuner));

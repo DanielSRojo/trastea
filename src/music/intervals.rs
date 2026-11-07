@@ -13,11 +13,9 @@ pub enum Interval {
     AugmentedFourth,
     DiminishedFifth,
     PerfectFifth,
-    /// Here for the augmented triad; `ScaleKind::WholeTone` spells around its absence.
     AugmentedFifth,
     MinorSixth,
     MajorSixth,
-    /// Here for the diminished seventh chord.
     DiminishedSeventh,
     MinorSeventh,
     MajorSeventh,
@@ -42,7 +40,7 @@ impl Interval {
         Interval::MajorSeventh,
     ];
 
-    /// Which degree, 1..=7. This is what decides the letter.
+    /// Which degree, 1..=7; decides the letter.
     pub fn number(self) -> u8 {
         match self {
             Interval::Unison => 1,
@@ -55,7 +53,7 @@ impl Interval {
         }
     }
 
-    /// How this degree differs from the major scale's. This decides the glyph.
+    /// How this degree differs from the major scale's; decides the glyph.
     pub fn alteration(self) -> Accidental {
         match self {
             Interval::Unison
@@ -75,9 +73,7 @@ impl Interval {
         }
     }
 
-    /// Derived from the degree's letter rather than a second hand-written table:
-    /// degree 4 is the letter F, F natural is 5 semitones up, so a perfect
-    /// fourth is 5 and an augmented fourth is 6.
+    /// Derived from the degree's letter, so a perfect fourth is 5 and an augmented fourth 6.
     pub fn semitones(self) -> u8 {
         let natural = i16::from(Letter::C.step(self.number() - 1).natural_semitone());
         let altered = natural + i16::from(self.alteration().offset());
@@ -85,32 +81,10 @@ impl Interval {
         u8::try_from(altered).expect("no degree's alteration reaches below the root")
     }
 
-    /// The interval from one written note up to another.
+    /// The interval from one written note up to another, or `None` for a distance
+    /// outside the fifteen, such as `F♭` to `B♯`.
     ///
-    /// `Option` because two spelled notes can sit a doubly augmented distance
-    /// apart that is not among the thirteen — `F♭` to `B♯` — and saying
-    /// "genuinely partial" beats picking a wrong answer. The letters are what
-    /// resolve `F`→`B` as an augmented fourth and `F`→`B♭` as a perfect fourth.
-    ///
-    /// Nothing in the app calls this. The interval trainer used to be the expected
-    /// caller, and now that the screen exists it turns out not to be: it lights its
-    /// tonal center rather than naming a key, so nothing on it is spelled and it
-    /// judges by semitone distance instead. A drill that *establishes* a key is what
-    /// would call this — there, `F`→`B` and `F`→`B♭` are different questions and the
-    /// degree number is the answer.
-    ///
-    /// Kept because it is the one function whose meaning gets sharper under spelling,
-    /// and `expect` rather than `allow` so that the day a caller appears, the stale
-    /// attribute is a warning rather than a silent leftover — this project has no
-    /// `[lints]` table and nothing promotes `unfulfilled_lint_expectations` above
-    /// warn, but the zero-warning build is enforced all the same, so a real caller
-    /// landing here still gets caught.
-    ///
-    /// `cfg_attr(not(test), ...)`, not a bare `#[expect]`, because this module's
-    /// own tests call `between` directly: under a test build the function is no
-    /// longer dead, and a bare `#[expect(dead_code)]` would itself warn as
-    /// unfulfilled. Gating on `not(test)` keeps the tripwire pointed at the one
-    /// build — the real binary — where "no caller yet" is actually true.
+    /// `not(test)` because this module's own tests call it, which would leave a bare `expect` unfulfilled.
     #[cfg_attr(
         not(test),
         expect(
@@ -130,15 +104,8 @@ impl Interval {
     }
 }
 
-/// The degree-formula spelling: the degree number with its alteration in front —
-/// `1`, `b3`, `#4`, `b5`. The same convention the scale trainer's formula row
-/// prints with SMuFL glyphs, in the ASCII a canvas marker is limited to.
-///
-/// A degree, deliberately, and not a quality: `b3` rather than `m3`, `5` rather
-/// than `P5`. The two tritones are why the distinction earns a comment — they are
-/// one distance written two ways, and only the degree number tells `#4` from `b5`.
-/// Should quality names ever be wanted, they belong in a method named for them
-/// rather than in a second reading of `Display`.
+/// The degree-formula spelling — `1`, `b3`, `#4`, `b5` — in ASCII for canvas markers.
+/// A degree rather than a quality, so the two tritones read `#4` and `b5`.
 impl fmt::Display for Interval {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}{}", self.alteration().ascii(), self.number())
@@ -155,16 +122,12 @@ mod tests {
 
     #[test]
     fn all_lists_every_variant() {
-        // The same tripwire ScaleKind::ALL carries: the tests below iterate ALL,
-        // so a variant added to the enum and not to the list is silently skipped.
+        // a variant added to the enum but not to ALL would be skipped by the tests below
         assert_eq!(Interval::ALL.len(), 15);
     }
 
     #[test]
     fn the_chord_degrees_derive_from_number_and_alteration() {
-        // AugmentedFifth and DiminishedSeventh were added for the chord library with
-        // arms in number() and alteration() and nowhere else. These hold if — and only
-        // if — semitones() and Display are still derived from those two.
         assert_eq!(Interval::AugmentedFifth.semitones(), 8);
         assert_eq!(Interval::DiminishedSeventh.semitones(), 9);
         assert_eq!(Interval::AugmentedFifth.to_string(), "#5");
@@ -173,8 +136,6 @@ mod tests {
 
     #[test]
     fn semitones_matches_the_written_out_distances() {
-        // semitones() derives these from Letter; this table is the independent
-        // statement of what they must come to.
         let expected: &[(Interval, u8)] = &[
             (Interval::Unison, 0),
             (Interval::MinorSecond, 1),
@@ -202,7 +163,6 @@ mod tests {
 
     #[test]
     fn no_two_variants_share_a_number_and_an_alteration() {
-        // What makes between's lookup well-defined.
         for (i, &interval) in Interval::ALL.iter().enumerate() {
             for &other in &Interval::ALL[i + 1..] {
                 assert_ne!(
@@ -216,8 +176,6 @@ mod tests {
 
     #[test]
     fn the_two_tritones_differ_by_degree() {
-        // Replaces scales.rs's one_interval_variant_spells_two_different_degrees,
-        // which documented the conflation. This asserts the split.
         assert_eq!(
             Interval::AugmentedFourth.semitones(),
             Interval::DiminishedFifth.semitones()
@@ -231,8 +189,6 @@ mod tests {
 
     #[test]
     fn display_spells_every_degree() {
-        // The independent statement of what Display comes to, the way
-        // semitones_matches_the_written_out_distances is for semitones().
         let expected: &[(Interval, &str)] = &[
             (Interval::Unison, "1"),
             (Interval::MinorSecond, "b2"),
@@ -260,8 +216,7 @@ mod tests {
 
     #[test]
     fn the_unaltered_degrees_carry_no_prefix() {
-        // Not just "the major scale's degrees read 1..7": that an unaltered degree
-        // renders bare is what keeps a marker from reading `n3`.
+        // an unaltered degree renders bare, so a marker never reads `n3`
         for &interval in Interval::ALL {
             let bare = interval.to_string() == interval.number().to_string();
             assert_eq!(
@@ -274,8 +229,6 @@ mod tests {
 
     #[test]
     fn the_two_tritones_are_displayed_apart() {
-        // The pair that makes Display a degree rather than a distance: equal
-        // semitones, different text.
         assert_eq!(
             Interval::AugmentedFourth.semitones(),
             Interval::DiminishedFifth.semitones()
@@ -298,7 +251,6 @@ mod tests {
 
     #[test]
     fn between_is_none_beyond_the_fifteen() {
-        // A doubly augmented fourth is a real distance and not one of ours.
         let f_flat = note(Letter::F, Accidental::Flat);
         let b_sharp = note(Letter::B, Accidental::Sharp);
 

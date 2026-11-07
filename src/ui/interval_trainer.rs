@@ -1,17 +1,5 @@
 //! The Interval Trainer: the drill's state machine and the screen that draws it.
-//!
-//! Both halves live here for the reason `note_trainer` gives — the state keeps its fields
-//! to itself, and the views below are the only things that read them. `App` drives the
-//! drill through the methods marked `pub(super)` and never touches what is behind them.
-//!
-//! What sets this drill apart from the Note Trainer is what it refuses to say. The tonal
-//! center is a *lit position* rather than a named key, and no note is named anywhere on the
-//! screen, so a prompt is answerable by measuring the distance between two marks and by
-//! nothing else. That is also why nothing here is spelled: with no key established there is
-//! nothing for a spelling to be relative to, and the same fret is honestly both an
-//! augmented fourth and a diminished fifth. Judging therefore compares semitone distance,
-//! and the two tritone spellings are one answer — the same rule the Note Trainer already
-//! applies to the two names of a black key, one level down.
+//! No note is named or spelled on screen, so judging compares semitone distance.
 
 use iced::{Color, Element, Padding};
 
@@ -28,18 +16,8 @@ use super::{Message, ROOT_BUTTON_SIZE, SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT
 use crate::music::intervals::Interval;
 use crate::rng::Rng;
 
-/// What the Interval Trainer is asking right now.
-///
-/// The variant is the drill direction, for the reason the Note Trainer's `Prompt` spells
-/// out: two encodings of one fact could disagree.
-///
-/// `NameIt` deliberately does *not* also carry the interval it was generated from. The two
-/// positions already imply the distance, and a stored `MajorThird` beside a pair of
-/// positions four semitones apart is a state the view would render as a lie. Judging
-/// recomputes the distance from what is actually on the neck, so it cannot disagree with
-/// what the learner is looking at. `FindIt` must store its interval, because with no target
-/// drawn there is nothing else carrying it — and its target pitch class is derived from the
-/// root and that interval for the same one-encoding reason.
+/// What the Interval Trainer is asking right now. `NameIt` stores no interval, so judging
+/// recomputes it from what is on the neck.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Prompt {
     /// Two lit positions; the answer is the interval from the first to the second.
@@ -48,8 +26,7 @@ enum Prompt {
     FindIt { root: Position, interval: Interval },
 }
 
-/// What the user offered in reply to a `Prompt`, shaped like `Prompt` because the two
-/// answer surfaces mirror the two directions.
+/// What the user offered in reply to a `Prompt`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Answer {
     Interval(Interval),
@@ -71,19 +48,13 @@ impl Prompt {
     }
 }
 
-/// The semitone distance upward from `root` to `target`, or `None` if either is off the
-/// neck.
-///
-/// Upward and modulo the octave, so a target below the root on the neck still reads as the
-/// interval it is above the root's pitch class. That is what the drill asks about: a
-/// distance between two pitch classes, not a count of frets.
+/// The semitone distance upward from `root` to `target` modulo the octave, or `None` if
+/// either is off the neck.
 fn distance(root: Position, target: Position) -> Option<u8> {
     Some(root.pitch_class()?.semitones_up_to(target.pitch_class()?))
 }
 
-/// The Interval Trainer's whole state.
-///
-/// No iced types, so the streak rules and the judging can be tested without a widget tree.
+/// No iced types, so the drill is testable without a widget tree.
 pub(super) struct IntervalTrainer {
     prompt: Prompt,
     score: Score<Answer>,
@@ -91,13 +62,9 @@ pub(super) struct IntervalTrainer {
 }
 
 impl IntervalTrainer {
-    /// Takes the generator rather than owning one, for the borrow reason `NoteTrainer::new`
-    /// documents: `&mut self.interval_trainer` and `&mut self.rng` are two mutable borrows
-    /// of one `App`, and a second generator here would mean a second seed.
     pub(super) fn new(rng: &mut Rng) -> Self {
         let mut trainer = Self {
-            // Replaced by `draw_prompt` before anyone sees it; it exists only to give the
-            // rejection loop something to differ from.
+            // Replaced by `draw_prompt` before anyone sees it.
             prompt: Prompt::NameIt {
                 root: CURSOR_HOME,
                 target: CURSOR_HOME,
@@ -110,19 +77,13 @@ impl IntervalTrainer {
         trainer
     }
 
-    /// Draws a fresh prompt of `drill`, never the one already showing.
-    ///
-    /// Generated forward — a root and an interval first, then the target derived from them
-    /// — rather than by lighting two positions and asking afterwards what lies between
-    /// them. Forward is what guarantees the distance drawn is one the answer grid can
-    /// express; backward could land on a pair the vocabulary has no button for.
+    /// Draws a fresh prompt of `drill`, never the one already showing. Generated root and
+    /// interval first, so the distance is always one the answer grid can express.
     fn draw_prompt(&mut self, drill: Drill, rng: &mut Rng) {
         let neck = neck();
 
         // The rejection loop below ends only if there are at least two prompts to choose
-        // between. There are 78 positions and 12 intervals, so this is generous — but a
-        // future setting that pinned the root to one position would turn the loop into a
-        // hang, and a hang inside a rejection loop is a miserable bug to find.
+        // between.
         debug_assert!(
             neck.len() * ANSWERS.len() >= 2,
             "the drill must have at least two prompts to choose between or this loop cannot end"
@@ -134,11 +95,8 @@ impl IntervalTrainer {
 
             match drill {
                 Drill::NameIt => {
-                    // The root's own position is excluded, so a unison prompt lights an
-                    // octave elsewhere on the neck rather than stacking both marks on one
-                    // dot — which would show the learner a single ring and no distance to
-                    // measure. Every pitch class occurs at least six times within twelve
-                    // frets, so dropping one still leaves something to choose.
+                    // The root's own position is excluded, so a unison lights an octave
+                    // elsewhere rather than stacking both rings on one dot.
                     let carriers: Vec<Position> = neck
                         .iter()
                         .filter(|(position, pitch)| {
@@ -163,35 +121,27 @@ impl IntervalTrainer {
             }
         });
 
-        // Both kinds of feedback belong to the prompt they were given against, so a new
-        // prompt arrives with a clean surface.
+        // Both kinds of feedback belong to the prompt they were given against.
         self.score.next_prompt();
     }
 
-    /// Judges by semitone distance, which is what makes the two tritone spellings one
-    /// answer: with no key on screen, nothing distinguishes them and the drill must not
-    /// pretend otherwise.
+    /// Judges by semitone distance, so the two tritone spellings are one answer.
     fn judge(&self, answer: Answer) -> bool {
         match (self.prompt, answer) {
             (Prompt::NameIt { root, target }, Answer::Interval(named)) => {
                 distance(root, target) == Some(named.semitones())
             }
-            // Any position carrying the target pitch class counts, the same rule *Find it*
-            // already follows in the Note Trainer: the note really is in several places,
-            // and none of them is more correct than another.
+            // Any position carrying the target pitch class counts.
             (Prompt::FindIt { root, interval }, Answer::Position(position)) => {
                 match (root.pitch_class(), position.pitch_class()) {
                     (Some(root_pitch), Some(answered)) => {
                         root_pitch.transpose(interval.semitones()) == answered
                     }
-                    // Off the neck. `false` rather than a `None == None` that would read as
-                    // a match.
+                    // Off the neck; not a `None == None` match.
                     _ => false,
                 }
             }
-            // A mismatched pair is a wiring bug, not something a user can produce — the
-            // view only draws the surface the current prompt accepts. `false` rather than a
-            // panic, so the symptom is "every answer is wrong" instead of a crash.
+            // A mismatched pair is a wiring bug; `false` rather than a panic.
             _ => false,
         }
     }
@@ -202,15 +152,11 @@ impl IntervalTrainer {
     }
 
     /// Answers with an interval — the *Name it* surface.
-    ///
-    /// `Answer` is built here rather than by the caller, which is what keeps it and
-    /// `Prompt` private to this module.
     pub(super) fn answer_interval(&mut self, interval: Interval) {
         self.answer(Answer::Interval(interval));
     }
 
-    /// Answers with a position, and takes the cursor there, so the mouse and the keyboard
-    /// never disagree about where it is.
+    /// Answers with a position, and takes the cursor there.
     pub(super) fn answer_position(&mut self, string: usize, fret: usize) {
         let position = Position { string, fret };
         self.cursor = position;
@@ -227,17 +173,12 @@ impl IntervalTrainer {
         self.score.is_flashing()
     }
 
-    /// Which way the drill is running. The focus grid asks, because the answer surface
-    /// differs between the two directions.
     pub(super) fn drill(&self) -> Drill {
         self.prompt.drill()
     }
 
-    /// Ends the flash a correct answer left on screen and draws the next prompt.
-    ///
-    /// A no-op when nothing is being marked, so a tick that outlived its flash — one that
-    /// crossed a skip, or landed after the screen was left — cannot retire a prompt the
-    /// learner is still reading.
+    /// Ends the flash and draws the next prompt. A no-op when nothing is being marked, so
+    /// a stale tick cannot retire the prompt on screen.
     pub(super) fn advance(&mut self, rng: &mut Rng) {
         if self.score.is_flashing() {
             let drill = self.prompt.drill();
@@ -267,23 +208,14 @@ impl IntervalTrainer {
     }
 
     /// Walks the cursor one position, stopping at the neck's edges rather than wrapping.
-    /// Up is towards the nut, because the neck is drawn with the nut at the top.
     pub(super) fn move_cursor(&mut self, direction: Direction) {
         self.cursor = self.cursor.step(direction);
     }
 }
 
-/// How wide one answer button is.
-///
-/// Wider than the Note Trainer's square `ROOT_BUTTON_SIZE` buttons because the twinned
-/// labels are twice the length of the others — they name both spellings — and a grid whose
-/// columns changed width with their contents would stop reading as a grid.
+/// Wider than `ROOT_BUTTON_SIZE` to fit the twinned tritone labels.
 const ANSWER_BUTTON_WIDTH: f32 = 76.0;
 
-/// The Interval Trainer.
-///
-/// Both directions share this one function, branching on the prompt's variant, because the
-/// header, the streak, and the neck are common to both — only the answer surface differs.
 pub(super) fn ui_interval_trainer(
     trainer: &IntervalTrainer,
     focused: FocusTarget,
@@ -299,8 +231,7 @@ pub(super) fn ui_interval_trainer(
             ..Fretboard::default()
         },
         // Here the neck is the answer surface, so it takes a press handler and shows the
-        // cursor. The root ring stays on it: it is the thing the interval is measured from,
-        // and hiding it would leave the prompt with no anchor.
+        // cursor. The root ring stays as the anchor.
         Prompt::FindIt { .. } => Fretboard {
             num_frets: DRILL_NECK.frets(),
             highlighted: prompt_markers(trainer)
@@ -349,8 +280,7 @@ pub(super) fn ui_interval_trainer(
     .padding(32)
     .style(card_container);
 
-    // Only *Name it* has a second card; in *Find it* the neck already is the answer
-    // surface, so nothing goes here and the prompt card gets the room.
+    // Only *Name it* has a second card; in *Find it* the neck is the answer surface.
     let details = match trainer.prompt {
         Prompt::NameIt { .. } => column![prompt_card, interval_answer_card(trainer, focused)],
         Prompt::FindIt { .. } => column![prompt_card],
@@ -371,15 +301,8 @@ pub(super) fn ui_interval_trainer(
         .into()
 }
 
-/// The prompt's marks on the neck: the root always, and in *Name it* the target too.
-///
-/// Both are unfilled rings, for the reason `note_trainer::prompt_marker` gives — a fill is
-/// what this app uses to say "you put this here", and the prompt is the opposite. The two
-/// are told apart by colour rather than by shape, the way the wrong-red and correct-green
-/// discs already are.
-///
-/// Unlabelled, and that is load-bearing rather than cosmetic: a label would name a note,
-/// and the whole point of this drill is that it can be answered without one.
+/// The prompt's marks: the root always, and in *Name it* the target too. Unfilled rings,
+/// told apart by colour, and unlabelled so no note is named.
 fn prompt_markers(trainer: &IntervalTrainer) -> Vec<NoteMarker> {
     let ring = |position: Position, color: Color| NoteMarker {
         string: position.string,
@@ -397,16 +320,8 @@ fn prompt_markers(trainer: &IntervalTrainer) -> Vec<NoteMarker> {
     }
 }
 
-/// The positions guessed against the current *Find it* prompt: the wrong ones in the danger
-/// colour, the one that scored in the success colour.
-///
-/// Filled, both of them — that is what keeps them readable as answers rather than as the
-/// question. The rings belong to the prompt alone; see `prompt_markers`.
-///
-/// The right answer comes last so it is drawn over the wrong ones. Only `Answer::Position`
-/// guesses can appear on a neck; an `Interval` guess belongs to the other direction and is
-/// filtered out rather than being an error, since both lists are cleared whenever the
-/// prompt advances and the two can never mix in practice.
+/// The positions guessed against the current *Find it* prompt, filled. The right answer
+/// comes last so it is drawn over a wrong one.
 fn position_markers(trainer: &IntervalTrainer) -> Vec<NoteMarker> {
     let marker = |answer: &Answer, color: Color| match *answer {
         Answer::Position(position) => Some(NoteMarker {
@@ -434,11 +349,8 @@ fn position_markers(trainer: &IntervalTrainer) -> Vec<NoteMarker> {
         .collect()
 }
 
-/// The header row: direction and skip.
-///
-/// The direction is labelled with the mode it is *currently* in rather than with what
-/// pressing it would do, so the row doubles as a status line — there is nowhere else on
-/// this screen that says which way the drill is running.
+/// The header row: direction and skip. Labelled with the current mode, so it doubles as a
+/// status line.
 fn interval_trainer_controls(
     trainer: &IntervalTrainer,
     focused: FocusTarget,
@@ -530,8 +442,7 @@ fn interval_answer_row(
             .width(Length::Fixed(ANSWER_BUTTON_WIDTH))
             .height(Length::Fixed(ROOT_BUTTON_SIZE))
             .padding(0)
-            // Right beats wrong: they cannot both be this button under one prompt, but if
-            // that ever changes, the answer that scored is the one worth showing.
+            // Right beats wrong, should both ever apply.
             .style(if was_right {
                 correct_answer_button
             } else if was_wrong {
@@ -582,9 +493,8 @@ mod tests {
         }
     }
 
-    /// The spec's "a prompted interval is always reachable": every root paired with every
-    /// interval has somewhere to land, and somewhere other than the root itself, which is
-    /// what `draw_prompt`'s `debug_assert!` relies on.
+    /// Every root paired with every interval has somewhere other than the root to land,
+    /// which `draw_prompt`'s `debug_assert!` relies on.
     #[test]
     fn every_interval_above_every_root_lands_somewhere_else() {
         let neck = neck();
@@ -621,8 +531,8 @@ mod tests {
             ),
             Some(0)
         );
-        // Four frets up is a major third; the same pitch class reached on another string
-        // reads the same, because the drill asks about pitch classes and not fret counts.
+        // Four frets up is a major third, and the same pitch class on another string reads
+        // the same.
         assert_eq!(distance(root, Position { string: 0, fret: 4 }), Some(4));
         assert_eq!(
             distance(
@@ -774,8 +684,7 @@ mod tests {
         assert_ne!(sequence(7), sequence(8));
     }
 
-    /// Both marks have to be somewhere the learner can see, and they have to be two marks:
-    /// a unison prompt stacked on one dot would show a ring and no distance to measure.
+    /// Both marks must be on the neck and distinct, so there is a distance to measure.
     #[test]
     fn every_prompt_is_on_the_neck_and_shows_two_marks() {
         let (mut trainer, mut rng) = trainer_with_seed(0xd07);
@@ -804,7 +713,7 @@ mod tests {
     fn the_two_tritone_spellings_are_one_answer() {
         let (mut trainer, _) = trainer_with_seed(0x77);
 
-        // A tritone prompt, built rather than waited for: the low E and the B flat above it.
+        // A tritone prompt: the low E and the B♭ above it.
         trainer.prompt = Prompt::NameIt {
             root: Position { string: 0, fret: 0 },
             target: Position { string: 0, fret: 6 },
@@ -817,7 +726,7 @@ mod tests {
             );
         }
 
-        // And a distance that is not six is still wrong, so the merge did not soften judging.
+        // And a distance that is not six is still wrong.
         assert!(!trainer.judge(Answer::Interval(Interval::PerfectFifth)));
     }
 
@@ -840,8 +749,6 @@ mod tests {
             .map(|(position, _)| position)
             .collect();
 
-        // A pitch class really is in several places within twelve frets, and none of them is
-        // more correct than another.
         assert!(carriers.len() >= 6, "only {} carriers", carriers.len());
         for position in carriers {
             assert!(trainer.judge(Answer::Position(position)), "{position:?}");
@@ -1060,7 +967,6 @@ mod tests {
         assert!(markers[0].label.is_empty());
     }
 
-    /// The spec's "the two kinds of mark are never confused", carried onto this screen.
     #[test]
     fn answer_marks_are_filled_and_the_prompt_is_not() {
         let (mut trainer, mut rng) = trainer_with_seed(0x11ed);
@@ -1114,8 +1020,8 @@ mod tests {
         app
     }
 
-    /// Answers correctly through whichever message the view would send for the direction in
-    /// play, then lets the flash's timer message land.
+    /// Answers correctly through whichever message the view would send, then sends the
+    /// flash's timer message.
     fn answer_correctly(app: &mut App) {
         let message = match correct_answer(&app.interval_trainer) {
             Answer::Interval(interval) => Message::AnswerInterval(interval),
@@ -1137,8 +1043,6 @@ mod tests {
         assert!(app.interval_trainer.score.wrong().is_empty());
     }
 
-    /// The screen never reopens on what it last showed, and what persists is the direction
-    /// and the best of the session.
     #[test]
     fn reopening_draws_a_fresh_prompt_and_keeps_the_settings() {
         let mut app = find_it_app(0xfa17);
@@ -1219,8 +1123,7 @@ mod tests {
         assert_eq!(app.interval_trainer.score.streak(), 1);
     }
 
-    /// A click reports through the fretboard's press handler — the same message the canvas
-    /// publishes — and it drags the cursor along.
+    /// A click sends the canvas's press message and drags the cursor along.
     #[test]
     fn a_press_on_the_neck_answers_and_moves_the_cursor() {
         let mut app = find_it_app(0x9e55);
@@ -1250,8 +1153,7 @@ mod tests {
         assert_eq!(app.interval_trainer.drill(), direction.flipped());
     }
 
-    /// `a` widens the Note Trainer's pool and `i` flips the scale trainer's notation.
-    /// Neither means anything here, and the spec says a key another screen claims is inert.
+    /// `a` and `i` are claimed by other screens and are inert here.
     #[test]
     fn the_other_screens_keys_are_inert_here() {
         let mut app = interval_app(0x1e7);
@@ -1277,8 +1179,7 @@ mod tests {
 
     #[test]
     fn the_interval_trainers_keys_are_inert_on_other_screens() {
-        // The mirror of the test above: this screen's accelerators are declared for it
-        // alone, so pressing them elsewhere cannot reach its drill.
+        // The mirror of the test above: this screen's accelerators are inert elsewhere.
         for screen in [Screen::Home, Screen::ScaleTrainer, Screen::NoteTrainer] {
             let mut app = app_with_seed(0x0e);
             app.open(screen.clone());
@@ -1323,8 +1224,7 @@ mod tests {
         assert!(app.interval_trainer.is_flashing());
         assert_eq!(app.interval_trainer.prompt, standing);
 
-        // The Note Trainer's tick, which must not reach this drill — the reason the two
-        // trainers have separate advance messages.
+        // The Note Trainer's tick, which must not reach this drill.
         let _ = app.update(Message::AdvancePrompt);
         assert_eq!(
             app.interval_trainer.prompt, standing,
@@ -1352,9 +1252,7 @@ mod tests {
         assert_ne!(app.interval_trainer.prompt, standing, "the drill stalled");
     }
 
-    /// `every_screen_builds_its_view` sweeps the screens but only ever sees whichever
-    /// direction a fresh trainer opens in. Both answer surfaces are built here, since the
-    /// *Find it* branch draws widgets the *Name it* branch never reaches.
+    /// Builds both answer surfaces, which `every_screen_builds_its_view` does not reach.
     #[test]
     fn both_directions_build_their_view() {
         let mut app = interval_app(0x21e0);
