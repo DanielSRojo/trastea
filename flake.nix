@@ -59,6 +59,7 @@
               (pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
               pkgs.just
               pkgs.pkg-config
+              pkgs.cargo-deny
             ]
             # cpal's Linux backend, found by alsa-sys through pkg-config at build time
             ++ lib.optionals stdenv.hostPlatform.isLinux [ pkgs.alsa-lib ];
