@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{ErrorKind, SampleFormat};
+use cpal::{BufferSize, ErrorKind, FrameCount, SampleFormat, SupportedBufferSize};
 
 use super::detect::{HOP, WINDOW};
 use super::inharmonicity::FIT_WINDOW;
@@ -194,7 +194,14 @@ impl Input {
 
         let shared = Arc::new(Shared::new(channels));
 
-        let stream = build_stream(&device, &config, Arc::clone(&shared))?;
+        // a device that refuses the size it reported is opened as it would have been before
+        let stream = build_stream(
+            &device,
+            &config,
+            hop_sized(config.buffer_size()),
+            Arc::clone(&shared),
+        )
+        .or_else(|_| build_stream(&device, &config, BufferSize::Default, Arc::clone(&shared)))?;
         stream.play()?;
 
         Ok(Input {
@@ -245,10 +252,26 @@ impl Input {
     }
 }
 
+/// One hop of frames, within what the device says it can deliver.
+///
+/// Asked for rather than left to the host: pulse, and PipeWire through it, otherwise hands a
+/// record stream its server-default fragment, and audio arriving in bursts reaches the
+/// detector as one window per burst.
+fn hop_sized(supported: &SupportedBufferSize) -> BufferSize {
+    const HOP_FRAMES: FrameCount = HOP as FrameCount;
+
+    match *supported {
+        // not `clamp`, which panics on a range a driver reported backwards
+        SupportedBufferSize::Range { min, max } => BufferSize::Fixed(HOP_FRAMES.max(min).min(max)),
+        SupportedBufferSize::Unknown => BufferSize::Default,
+    }
+}
+
 /// Builds the stream for whichever sample format the device offers.
 fn build_stream(
     device: &cpal::Device,
     config: &cpal::SupportedStreamConfig,
+    buffer_size: BufferSize,
     shared: Arc<Shared>,
 ) -> Result<cpal::Stream, InputError> {
     let errors = Arc::clone(&shared);
@@ -260,7 +283,10 @@ fn build_stream(
         errors.lost.store(true, Ordering::Relaxed);
     };
 
-    let stream_config = config.config();
+    let stream_config = cpal::StreamConfig {
+        buffer_size,
+        ..config.config()
+    };
 
     macro_rules! build {
         ($sample:ty) => {
@@ -492,6 +518,19 @@ fn write_choice(path: &std::path::Path, id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stream_asks_for_one_hop_at_a_time_within_what_the_device_allows() {
+        let range = |min, max| SupportedBufferSize::Range { min, max };
+
+        assert_eq!(hop_sized(&range(1, 1 << 20)), BufferSize::Fixed(HOP as u32));
+        assert_eq!(hop_sized(&range(1024, 4096)), BufferSize::Fixed(1024));
+        assert_eq!(hop_sized(&range(64, 256)), BufferSize::Fixed(256));
+        assert_eq!(
+            hop_sized(&SupportedBufferSize::Unknown),
+            BufferSize::Default
+        );
+    }
 
     const MONO: NonZeroUsize = NonZeroUsize::MIN;
     const STEREO: NonZeroUsize = NonZeroUsize::new(2).unwrap();

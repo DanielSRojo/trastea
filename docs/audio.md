@@ -265,6 +265,15 @@ Rust, while `pipewire` binds libpipewire through bindgen, which would put libpip
 in every Linux build. One cost: an id remembered from the ALSA host no longer matches anything,
 so the first launch after the switch falls back once and says so.
 
+A stream asks for one `HOP` of frames per callback rather than the host's default buffer.
+Left to the default, cpal's pulse backend sends the server an unlimited fragment size, and
+`pipewire-pulse` answers with its own default fragment, up to two seconds; the audio then
+arrives in bursts and `take_window` sees one window of each burst. Every timing downstream
+counts hops — the tracker's confirming run, a fit every eight hops — so a sustained note decayed
+before the calibration walk could gather three fits of it, and the walk asked for every string
+again and again. The size is clamped to the range the device reports, and a device that then
+refuses it is opened with the default, as it was before.
+
 `input::devices` turned 32 ALSA entries into 4 on the development machine, and three pulse
 sources into one, by three rules in order:
 
