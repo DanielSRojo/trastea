@@ -5,17 +5,20 @@
 
 use iced::{Color, Element, Length, Padding};
 
+use super::calibration;
 use super::drill::{ANSWERS, Score, choice_for, interval_label};
 use super::focus::FocusTarget;
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
 use super::neck::{DRILL_NECK, Position, neck};
+use super::placement::{Placed, Placer};
 use super::style::{
     BODY, DANGER, INK, MUTE, ROOT_MARKER, SUCCESS, card_container, control_button, control_shuffle,
     streak_readout,
 };
 use super::{Message, SUMMARY_CARD_HEIGHT};
 use crate::audio::detect::Heard;
+use crate::audio::inharmonicity::Fit;
 use crate::music::intervals::Interval;
 use crate::music::notes::PitchClass;
 use crate::rng::Rng;
@@ -45,6 +48,9 @@ pub(super) struct PlayTheInterval {
     score: Score<PitchClass>,
     gate: Gate,
     listener: Listener,
+    placer: Placer,
+    /// Where this prompt's answers were played; kept beside `score`, which stores them by value.
+    placed: Placed,
 }
 
 impl PlayTheInterval {
@@ -57,7 +63,9 @@ impl PlayTheInterval {
             },
             score: Score::default(),
             gate: Gate::Deaf,
-            listener: Listener::new(),
+            listener: Listener::new().fitting(),
+            placer: Placer::default(),
+            placed: Placed::default(),
         };
 
         drill.draw_prompt(rng);
@@ -89,6 +97,7 @@ impl PlayTheInterval {
         });
 
         self.score.next_prompt();
+        self.placed.clear();
         // read off the device rather than set flat, so entering in silence arms immediately
         self.gate = match self.listener.reading() {
             Some(_) => Gate::Deaf,
@@ -106,9 +115,18 @@ impl PlayTheInterval {
         )
     }
 
-    /// Folds a released reading into the drill. A non-pitch reading only re-arms the gate,
-    /// so silence and a fumble cost nothing.
-    pub(super) fn apply(&mut self, heard: Heard) {
+    /// Folds a released reading and its fit into the drill. Judging does not wait for the
+    /// fit: a placement only narrows where an answer already judged is drawn.
+    pub(super) fn apply(&mut self, heard: Heard, fit: Option<Fit>) {
+        self.gate(heard);
+
+        for placement in self.placer.hear(heard, fit) {
+            self.placed.place(&placement);
+        }
+    }
+
+    /// A non-pitch reading only re-arms the gate, so silence and a fumble cost nothing.
+    fn gate(&mut self, heard: Heard) {
         let Heard::Pitch(detection) = heard else {
             self.gate = Gate::Listening;
             return;
@@ -125,6 +143,7 @@ impl PlayTheInterval {
 
         // a held string confirms the same reading every tick; this makes one note one answer
         self.gate = Gate::Deaf;
+        self.placed.expect(pitch);
         self.judge(pitch.pitch_class());
     }
 
@@ -152,15 +171,23 @@ impl PlayTheInterval {
         self.draw_prompt(rng);
     }
 
-    /// Opening the screen: the best streak persists, the run does not.
+    /// Opening the screen: the best streak persists, the run does not, and the kept
+    /// calibration is read again.
     pub(super) fn enter(&mut self, rng: &mut Rng) {
+        self.placer = Placer::new(calibration::kept());
         self.score.break_streak();
         self.draw_prompt(rng);
     }
+
+    /// Stands in for the kept calibration, which no test may read.
+    #[cfg(test)]
+    pub(super) fn calibrate_with(&mut self, calibration: Option<calibration::Calibration>) {
+        self.placer = Placer::new(calibration);
+    }
 }
 
-/// The marks on the neck. The root is an unfilled ring and wins any collision; a heard
-/// pitch class is marked at every position carrying it. No mark is labelled.
+/// The marks on the neck. The root is an unfilled ring and wins any collision; an answer is
+/// marked where it was placed, or where its pitch sounds if it was not. No mark is labelled.
 fn markers(drill: &PlayTheInterval) -> Vec<NoteMarker> {
     let root = drill.prompt.root;
 
@@ -173,10 +200,12 @@ fn markers(drill: &PlayTheInterval) -> Vec<NoteMarker> {
             drill.score.correct() != Some(*played) && !drill.score.wrong().contains(played)
         });
 
-    let colour_for = |pitch: PitchClass| -> Option<(Color, MarkerStyle)> {
-        if drill.score.correct() == Some(pitch) {
+    let colour_for = |position: Position, pitch: PitchClass| -> Option<(Color, MarkerStyle)> {
+        let answered_here = drill.placed.shows(pitch, position);
+
+        if drill.score.correct() == Some(pitch) && answered_here {
             Some((SUCCESS, MarkerStyle::Filled))
-        } else if drill.score.wrong().contains(&pitch) {
+        } else if drill.score.wrong().contains(&pitch) && answered_here {
             Some((DANGER, MarkerStyle::Outlined))
         } else if sounding == Some(pitch) {
             Some((INK, MarkerStyle::Filled))
@@ -198,7 +227,7 @@ fn markers(drill: &PlayTheInterval) -> Vec<NoteMarker> {
                 });
             }
 
-            let (color, style) = colour_for(pitch)?;
+            let (color, style) = colour_for(position, pitch)?;
 
             Some(NoteMarker {
                 string: position.string,
@@ -330,6 +359,9 @@ mod tests {
     use super::*;
     use crate::audio::detect::Detection;
     use crate::music::pitch::Pitch;
+    use crate::ui::calibration::tests::{grouping_guitar, spike_guitar};
+    use crate::ui::placement::FITS_PER_NOTE;
+    use crate::ui::placement::tests::{at, measured, pluck};
     use iced::keyboard;
 
     /// An app on the played drill with a reproducible prompt stream. `navigate_to` rather
@@ -656,7 +688,7 @@ mod tests {
     // ---- The marks ----
 
     #[test]
-    fn a_heard_pitch_class_is_marked_everywhere_it_falls() {
+    fn a_heard_pitch_is_marked_everywhere_it_sounds() {
         let mut app = play_app(0xe1);
         let wrong = wrong_pitch(&app);
         plays(&mut app, wrong);
@@ -664,7 +696,7 @@ mod tests {
         let root = app.play_the_interval.prompt.root;
         let marks = markers(&app.play_the_interval);
 
-        for (position, pitch) in neck() {
+        for (position, _) in neck() {
             let marked = marks
                 .iter()
                 .find(|m| m.string == position.string && m.fret == position.fret);
@@ -674,11 +706,11 @@ mod tests {
                     marked.expect("the root is always marked").color,
                     ROOT_MARKER
                 );
-            } else if pitch == wrong.pitch_class() {
+            } else if DRILL_NECK.pitch_at(position.string, position.fret) == Some(wrong) {
                 assert_eq!(
                     marked.expect("a heard position is marked").color,
                     DANGER,
-                    "{position:?} carries what was played and is not marked"
+                    "{position:?} sounds what was played and is not marked"
                 );
             } else {
                 assert!(marked.is_none(), "{position:?} is marked and should not be");
@@ -777,6 +809,167 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ---- Where an answer was played ----
+
+    /// Asks for a fifth above `root`, on a drill reading `calibration`.
+    fn asking(calibration: Option<calibration::Calibration>, root: Position) -> App {
+        let mut app = play_app(0x5a1);
+        app.play_the_interval.calibrate_with(calibration);
+        app.play_the_interval.prompt = Prompt {
+            root,
+            interval: Interval::PerfectFifth,
+        };
+        app
+    }
+
+    /// One note, held long enough to be fitted as often as a placement needs.
+    fn plays_with(app: &mut App, pitch: Pitch, log2: f32) {
+        for _ in 0..FITS_PER_NOTE {
+            let _ = app.update(Message::Fitted(
+                Heard::Pitch(Detection::synthesized(pitch.frequency(), 0.99)),
+                measured(log2),
+            ));
+        }
+    }
+
+    fn marked(app: &App, color: Color) -> Vec<Position> {
+        markers(&app.play_the_interval)
+            .into_iter()
+            .filter(|marker| marker.color == color)
+            .map(|marker| at(marker.string, marker.fret))
+            .collect()
+    }
+
+    /// Every position sounding `pitch` but the root, in the order the marks are drawn.
+    fn sounding_at(pitch: Pitch, root: Position) -> Vec<Position> {
+        neck()
+            .into_iter()
+            .map(|(position, _)| position)
+            .filter(|&position| {
+                position != root
+                    && DRILL_NECK.pitch_at(position.string, position.fret) == Some(pitch)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_answer_placed_at_one_position_is_marked_there_alone() {
+        let guitar = spike_guitar();
+        let (e4, open_e) = pluck(&guitar, at(5, 0));
+        // A on the A string, and a fifth above it is E
+        let mut app = asking(Some(guitar), at(1, 0));
+
+        plays_with(&mut app, e4, open_e);
+
+        assert_eq!(app.play_the_interval.score.streak(), 1);
+        assert_eq!(marked(&app, SUCCESS), vec![at(5, 0)]);
+    }
+
+    #[test]
+    fn an_answer_placed_at_a_group_is_marked_at_the_group_alone() {
+        let guitar = grouping_guitar();
+        let (a3, g_at_2) = pluck(&guitar, at(3, 2));
+        // D on the D string, and a fifth above it is A
+        let mut app = asking(Some(guitar), at(2, 0));
+
+        plays_with(&mut app, a3, g_at_2);
+
+        assert_eq!(marked(&app, SUCCESS), vec![at(2, 7), at(3, 2)]);
+    }
+
+    #[test]
+    fn an_answer_it_cannot_place_is_marked_where_its_pitch_sounds() {
+        let guitar = spike_guitar();
+        let (e4, open_e) = pluck(&guitar, at(5, 0));
+
+        // for want of a calibration
+        let mut app = asking(None, at(1, 0));
+        plays_with(&mut app, e4, open_e);
+        assert_eq!(marked(&app, SUCCESS), sounding_at(e4, at(1, 0)));
+
+        // and slid into, with one
+        let mut app = asking(Some(guitar), at(1, 0));
+        let from = e4.transpose(-1).expect("in range").frequency();
+        let bent = Heard::Pitch(Detection::synthesized(e4.frequency(), 0.99).slid_from(from));
+        let _ = app.update(Message::Fitted(bent, measured(open_e)));
+        assert_eq!(marked(&app, SUCCESS), sounding_at(e4, at(1, 0)));
+    }
+
+    #[test]
+    fn a_wrong_answer_is_marked_where_it_was_placed() {
+        let guitar = spike_guitar();
+        let (e4, open_e) = pluck(&guitar, at(5, 0));
+        // asking for B, a fifth above E
+        let mut app = asking(Some(guitar), at(0, 0));
+
+        plays_with(&mut app, e4, open_e);
+
+        assert_eq!(app.play_the_interval.score.wrong(), [e4.pitch_class()]);
+        assert_eq!(marked(&app, DANGER), vec![at(5, 0)]);
+    }
+
+    #[test]
+    fn judging_does_not_wait_and_the_marks_only_narrow() {
+        let guitar = spike_guitar();
+        let (e4, open_e) = pluck(&guitar, at(5, 0));
+        let mut app = asking(Some(guitar), at(1, 0));
+
+        // confirmed, and not yet fitted
+        let _ = app.update(Message::Fitted(
+            Heard::Pitch(Detection::synthesized(e4.frequency(), 0.99)),
+            None,
+        ));
+        assert_eq!(
+            app.play_the_interval.score.streak(),
+            1,
+            "judging waited for a fit"
+        );
+        let before = marked(&app, SUCCESS);
+        assert_eq!(before, sounding_at(e4, at(1, 0)));
+
+        plays_with(&mut app, e4, open_e);
+        let after = marked(&app, SUCCESS);
+
+        assert_eq!(after, vec![at(5, 0)]);
+        assert!(after.iter().all(|position| before.contains(position)));
+    }
+
+    #[test]
+    fn a_placed_note_names_no_note_and_no_string() {
+        let guitar = spike_guitar();
+        let (e4, open_e) = pluck(&guitar, at(5, 0));
+        let mut app = asking(Some(guitar), at(1, 0));
+
+        plays_with(&mut app, e4, open_e);
+
+        assert!(
+            markers(&app.play_the_interval)
+                .iter()
+                .all(|m| m.label.is_empty())
+        );
+        let (status, offset) = heard_line(&app.play_the_interval);
+        for word in [status, offset.as_str()] {
+            assert!(
+                !word.chars().any(|c| matches!(c, 'A'..='G')),
+                "{word:?} names a note or a string"
+            );
+        }
+    }
+
+    #[test]
+    fn a_note_heard_during_the_flash_is_not_placed_as_the_answer() {
+        let guitar = spike_guitar();
+        let (e4, open_e) = pluck(&guitar, at(5, 0));
+        let (other_e, g_at_9) = pluck(&guitar, at(3, 9));
+        let mut app = asking(Some(guitar), at(1, 0));
+
+        plays_with(&mut app, e4, open_e);
+        stops(&mut app);
+        plays_with(&mut app, other_e, g_at_9);
+
+        assert_eq!(marked(&app, SUCCESS), vec![at(5, 0)]);
     }
 
     // ---- What the screen says it is hearing ----

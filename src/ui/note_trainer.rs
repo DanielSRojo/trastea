@@ -2,33 +2,59 @@
 
 use iced::{Color, Element, Padding};
 
+use super::calibration;
 use super::drill::{Drill, Score};
 use super::focus::{ANSWER_ROW_WIDTH, Direction, FocusTarget};
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
-use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS, Position};
+use super::listener::{Listener, State, ui_device_line, ui_device_picker};
+use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS, Position, neck, string_name};
+use super::placement::{Declined, Placed, Placement, Placer};
+use super::position::{Group, groups};
 use super::style::{
     BODY, CANVAS, CONTROL_SIZE, DANGER, INK, LINK, MUTE, SUCCESS, card_container,
     control_accidental, control_button, control_label, control_shuffle, correct_answer_button,
     focus_ring, ghost_button, spelling_glyph, streak_readout, wrong_answer_button,
 };
 use super::{Message, ROOT_BUTTON_SIZE, SELECTOR_CARD_HEIGHT, SUMMARY_CARD_HEIGHT, note_label};
+use crate::audio::detect::Heard;
+use crate::audio::inharmonicity::Fit;
 use crate::music::notes::{PitchClass, Spelling};
+use crate::music::pitch::Pitch;
 use crate::rng::Rng;
 
-/// What the Note Trainer is asking right now. The variant is the drill direction.
+/// What the Note Trainer is asking right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Prompt {
     /// A lit position; the answer names the note on it.
     NameIt { string: usize, fret: usize },
     /// A named note; the answer is any position carrying it.
     FindIt(PitchClass),
+    /// A named note on a named string; the answer is played there.
+    PlayIt {
+        pitch_class: PitchClass,
+        string: usize,
+    },
+    /// Playing, with no note and string the calibration can judge.
+    Unaskable,
 }
 
 /// What the user offered in reply to a `Prompt`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Answer {
     Name(PitchClass),
-    Position { string: usize, fret: usize },
+    Position {
+        string: usize,
+        fret: usize,
+    },
+    /// Where it was played is kept beside the score, which stores answers by value.
+    Played(PitchClass),
+}
+
+/// How the learner answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Answering {
+    Pressing,
+    Playing,
 }
 
 /// Which pitch classes prompts are drawn from.
@@ -51,23 +77,36 @@ impl Pool {
     }
 }
 
-impl Prompt {
-    fn drill(self) -> Drill {
-        match self {
-            Prompt::NameIt { .. } => Drill::NameIt,
-            Prompt::FindIt(_) => Drill::FindIt,
-        }
-    }
+/// What the drill does with the next confirmed reading.
+/// Duplicates `play_the_interval::Gate` and `walk_the_scale::Gate` on purpose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Gate {
+    Deaf,
+    Listening,
 }
 
 /// No iced types here, so the drill is testable without a widget tree.
 pub(super) struct NoteTrainer {
     prompt: Prompt,
+    /// Which way pressing asks, kept while playing so swapping back restores it.
+    direction: Drill,
+    /// A preference that survives leaving the drill, unlike the `Listener`.
+    answering: Answering,
     pool: Pool,
     /// Separate from the scale trainer's spelling.
     spelling: Spelling,
     score: Score<Answer>,
     cursor: Position,
+    /// The capture device, held only while playing.
+    listener: Option<Listener>,
+    placer: Placer,
+    gate: Gate,
+    right_at: Placed,
+    wrong_at: Placed,
+    /// The asked note last played, until its placement says which string it was on.
+    awaiting: Option<Pitch>,
+    /// The asked note last played, when it could not be placed and so was not judged.
+    unplaced: Option<Placement>,
 }
 
 impl NoteTrainer {
@@ -75,13 +114,22 @@ impl NoteTrainer {
         let mut trainer = Self {
             // Replaced by `draw_prompt` before anyone sees it.
             prompt: Prompt::NameIt { string: 0, fret: 0 },
+            direction: Drill::NameIt,
+            answering: Answering::Pressing,
             pool: Pool::Naturals,
             spelling: Spelling::Sharps,
             score: Score::default(),
             cursor: CURSOR_HOME,
+            listener: None,
+            placer: Placer::default(),
+            gate: Gate::Listening,
+            right_at: Placed::default(),
+            wrong_at: Placed::default(),
+            awaiting: None,
+            unplaced: None,
         };
 
-        trainer.draw_prompt(Drill::NameIt, rng);
+        trainer.draw_prompt(rng);
         trainer
     }
 
@@ -103,33 +151,91 @@ impl NoteTrainer {
         positions
     }
 
-    /// Draws a fresh prompt of `drill`, never the one already showing. Terminates only
-    /// because every pool holds at least two distinct prompts.
-    fn draw_prompt(&mut self, drill: Drill, rng: &mut Rng) {
-        self.prompt = rng.draw_other_than(self.prompt, |rng| match drill {
-            Drill::NameIt => {
+    /// Every note and string playing can ask for: the pool's notes on each string the
+    /// calibration trusts, unless one of its positions there is in a group the estimate will
+    /// not split — playing it on the string the group shares would be judged right too.
+    fn playable(&self) -> Vec<(PitchClass, usize)> {
+        let Some(kept) = self.placer.calibration() else {
+            return Vec::new();
+        };
+
+        let grouped: Vec<Position> = groups(kept, &DRILL_NECK)
+            .into_iter()
+            .flat_map(|Group { positions, .. }| positions)
+            .collect();
+
+        (0..NECK_STRINGS)
+            .filter(|&string| !kept.is_flagged(string))
+            .flat_map(|string| {
+                self.pool
+                    .pitch_classes()
+                    .iter()
+                    .map(move |&pitch_class| (pitch_class, string))
+            })
+            .filter(|&(pitch_class, string)| {
+                (0..=DRILL_NECK.frets())
+                    .map(|fret| Position { string, fret })
+                    .filter(|position| position.pitch_class() == Some(pitch_class))
+                    .all(|position| !grouped.contains(&position))
+            })
+            .collect()
+    }
+
+    /// Draws a fresh prompt for the mode and direction in force, never the one already
+    /// showing. Terminates only because every pressing pool holds at least two prompts, and a
+    /// playing pool of fewer than two is not drawn from.
+    fn draw_prompt(&mut self, rng: &mut Rng) {
+        self.prompt = match (self.answering, self.direction) {
+            (Answering::Pressing, Drill::NameIt) => {
                 let positions = self.positions();
                 debug_assert!(
                     positions.len() >= 2,
                     "a pool must hold at least two positions or this loop cannot end"
                 );
 
-                let (string, fret) = positions[rng.below(positions.len())];
-                Prompt::NameIt { string, fret }
+                rng.draw_other_than(self.prompt, |rng| {
+                    let (string, fret) = positions[rng.below(positions.len())];
+                    Prompt::NameIt { string, fret }
+                })
             }
-            Drill::FindIt => {
+            (Answering::Pressing, Drill::FindIt) => {
                 let choices = self.pool.pitch_classes();
                 debug_assert!(
                     choices.len() >= 2,
                     "a pool must hold at least two pitch classes or this loop cannot end"
                 );
 
-                Prompt::FindIt(choices[rng.below(choices.len())])
+                rng.draw_other_than(self.prompt, |rng| {
+                    Prompt::FindIt(choices[rng.below(choices.len())])
+                })
             }
-        });
+            (Answering::Playing, _) => {
+                let ask = |(pitch_class, string)| Prompt::PlayIt {
+                    pitch_class,
+                    string,
+                };
+
+                match self.playable().as_slice() {
+                    [] => Prompt::Unaskable,
+                    [only] => ask(*only),
+                    playable => rng.draw_other_than(self.prompt, |rng| {
+                        ask(playable[rng.below(playable.len())])
+                    }),
+                }
+            }
+        };
 
         // Feedback belongs to the prompt it was given against; a skip or toggle also ends the flash.
         self.score.next_prompt();
+        self.right_at.clear();
+        self.wrong_at.clear();
+        self.awaiting = None;
+        self.unplaced = None;
+        // read off the device rather than set flat, so a prompt drawn over a ringing answer waits
+        self.gate = match self.listener.as_ref().and_then(Listener::reading) {
+            Some(_) => Gate::Deaf,
+            None => Gate::Listening,
+        };
     }
 
     /// Judges by pitch class, so the two names of a black key are one answer.
@@ -147,9 +253,12 @@ impl NoteTrainer {
         }
     }
 
-    /// Takes an answer, unless one is already being marked.
+    /// Takes a pressed answer, unless one is already being marked. Inert while playing,
+    /// where a press would be a second way to answer.
     fn answer(&mut self, answer: Answer) {
-        self.score.mark(answer, self.judge(answer));
+        if self.answering == Answering::Pressing {
+            self.score.mark(answer, self.judge(answer));
+        }
     }
 
     /// Answers with a note name — the *Name it* surface.
@@ -169,35 +278,164 @@ impl NoteTrainer {
         self.answer(Answer::Position { string, fret });
     }
 
+    /// Folds a released reading and its fit, while playing. A note of another pitch class is
+    /// wrong at once; the asked one waits for its placement, since the string is the question.
+    pub(super) fn apply(&mut self, heard: Heard, fit: Option<Fit>) {
+        if self.answering != Answering::Playing {
+            return;
+        }
+
+        self.gate(heard);
+
+        for placement in self.placer.hear(heard, fit) {
+            self.place(placement);
+        }
+    }
+
+    /// A non-pitch reading only re-arms the gate, so silence and a fumble cost nothing.
+    fn gate(&mut self, heard: Heard) {
+        let Heard::Pitch(detection) = heard else {
+            self.gate = Gate::Listening;
+            return;
+        };
+
+        // what is sounding during the flash is the tail of the note that scored
+        if self.score.is_flashing() || self.gate == Gate::Deaf {
+            return;
+        }
+
+        let Prompt::PlayIt {
+            pitch_class: asked, ..
+        } = self.prompt
+        else {
+            return;
+        };
+
+        let Some((pitch, _)) = Pitch::nearest(detection.hz()) else {
+            return;
+        };
+
+        // a held string confirms the same reading every poll; this makes one note one answer
+        self.gate = Gate::Deaf;
+        self.unplaced = None;
+
+        if pitch.pitch_class() == asked {
+            self.awaiting = Some(pitch);
+        } else {
+            self.score.mark(Answer::Played(pitch.pitch_class()), false);
+            self.wrong_at.expect(pitch);
+        }
+    }
+
+    /// Narrows a wrong answer to where it was played, or judges the asked note by its string.
+    fn place(&mut self, placement: Placement) {
+        if self.wrong_at.place(&placement) {
+            return;
+        }
+
+        let Prompt::PlayIt { string, .. } = self.prompt else {
+            return;
+        };
+        if self.awaiting != Some(placement.pitch()) {
+            return;
+        }
+        self.awaiting = None;
+
+        let played = placement.pitch().pitch_class();
+        let positions = placement.positions();
+
+        // the benefit of the doubt: a note the screen cannot place is played again
+        if positions.is_empty() {
+            self.unplaced = Some(placement);
+            return;
+        }
+
+        let right = positions.iter().any(|position| position.string == string);
+        self.score.mark(Answer::Played(played), right);
+
+        let at = if right {
+            &mut self.right_at
+        } else {
+            &mut self.wrong_at
+        };
+        at.record(played, positions);
+    }
+
     /// Whether a correct answer is lit, which is the window the flash timer runs in.
     pub(super) fn is_flashing(&self) -> bool {
         self.score.is_flashing()
     }
 
     pub(super) fn drill(&self) -> Drill {
-        self.prompt.drill()
+        self.direction
+    }
+
+    pub(super) fn answering(&self) -> Answering {
+        self.answering
+    }
+
+    pub(super) fn listener(&self) -> Option<&Listener> {
+        self.listener.as_ref()
+    }
+
+    pub(super) fn listener_mut(&mut self) -> Option<&mut Listener> {
+        self.listener.as_mut()
+    }
+
+    /// Opens the device, fitting what it hears so a played answer can be placed.
+    fn claim(&mut self) {
+        self.listener
+            .get_or_insert_with(|| Listener::new().fitting())
+            .listen();
+    }
+
+    fn release(&mut self) {
+        if let Some(listener) = self.listener.as_mut() {
+            listener.stop();
+        }
+        self.listener = None;
     }
 
     /// Ends the flash and draws the next prompt. A no-op when nothing is being marked, so
     /// a stale tick cannot retire the prompt on screen.
     pub(super) fn advance(&mut self, rng: &mut Rng) {
         if self.score.is_flashing() {
-            let drill = self.prompt.drill();
-            self.draw_prompt(drill, rng);
+            self.draw_prompt(rng);
         }
     }
 
     pub(super) fn skip(&mut self, rng: &mut Rng) {
-        let drill = self.prompt.drill();
         self.score.break_streak();
-        self.draw_prompt(drill, rng);
+        self.draw_prompt(rng);
     }
 
+    /// Inert while playing, where a note and a string have no direction.
     pub(super) fn toggle_direction(&mut self, rng: &mut Rng) {
-        let flipped = self.prompt.drill().flipped();
+        if self.answering == Answering::Playing {
+            return;
+        }
+
+        self.direction = self.direction.flipped();
         self.score.break_streak();
         self.cursor = CURSOR_HOME;
-        self.draw_prompt(flipped, rng);
+        self.draw_prompt(rng);
+    }
+
+    /// Swaps pressing and playing. The streak survives, since both ask where a note is; the
+    /// prompt is redrawn, since they ask it differently.
+    pub(super) fn toggle_answering(&mut self, rng: &mut Rng) {
+        self.answering = match self.answering {
+            Answering::Pressing => Answering::Playing,
+            Answering::Playing => Answering::Pressing,
+        };
+
+        match self.answering {
+            Answering::Playing => self.claim(),
+            Answering::Pressing => self.release(),
+        }
+
+        self.cursor = CURSOR_HOME;
+        self.draw_prompt(rng);
     }
 
     pub(super) fn toggle_pool(&mut self, rng: &mut Rng) {
@@ -206,9 +444,8 @@ impl NoteTrainer {
             Pool::All => Pool::Naturals,
         };
 
-        let drill = self.prompt.drill();
         self.score.break_streak();
-        self.draw_prompt(drill, rng);
+        self.draw_prompt(rng);
     }
 
     /// Cosmetic: judging compares pitch classes, so it cannot change whether an answer is right.
@@ -219,12 +456,28 @@ impl NoteTrainer {
         };
     }
 
-    /// Opening the screen: the settings and the best streak persist, the run does not.
+    /// Opening the screen: the settings and the best streak persist, the run does not, and
+    /// the kept calibration is read again.
     pub(super) fn enter(&mut self, rng: &mut Rng) {
-        let drill = self.prompt.drill();
+        self.placer = Placer::new(calibration::kept());
+        if self.answering == Answering::Playing {
+            self.claim();
+        }
+
         self.score.break_streak();
         self.cursor = CURSOR_HOME;
-        self.draw_prompt(drill, rng);
+        self.draw_prompt(rng);
+    }
+
+    /// Leaving the screen puts the device down.
+    pub(super) fn leave(&mut self) {
+        self.release();
+    }
+
+    /// Stands in for the kept calibration, which no test may read.
+    #[cfg(test)]
+    fn calibrate_with(&mut self, calibration: Option<calibration::Calibration>) {
+        self.placer = Placer::new(calibration);
     }
 
     /// Walks the cursor one position, stopping at the neck's edges rather than wrapping.
@@ -240,6 +493,19 @@ pub(super) fn ui_note_trainer(
     use iced::Length;
     use iced::widget::{Space, column, container, row, text};
 
+    // modal while it is up: nothing is drawn behind it
+    if let Some(listener) = trainer.listener()
+        && listener.is_picking()
+    {
+        return container(ui_device_picker(listener))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .padding(Padding::from([24, 24]))
+            .into();
+    }
+
     let neck = match trainer.prompt {
         // The prompt itself: one ring — see `prompt_marker`.
         Prompt::NameIt { .. } => Fretboard {
@@ -254,6 +520,12 @@ pub(super) fn ui_note_trainer(
             highlighted: position_markers(trainer),
             cursor: Some(trainer.cursor),
             on_press: Some(Message::ChooseNotePosition),
+        },
+        // Nothing lit until it is answered, since the lit place would be the answer.
+        Prompt::PlayIt { .. } | Prompt::Unaskable => Fretboard {
+            num_frets: DRILL_NECK.frets(),
+            highlighted: played_markers(trainer),
+            ..Fretboard::default()
         },
     };
 
@@ -274,28 +546,53 @@ pub(super) fn ui_note_trainer(
         ]
         .spacing(6)
         .into(),
+        Prompt::PlayIt { pitch_class, .. } => column![
+            row![
+                text("Play").size(26).color(BODY),
+                note_label(trainer.spelling.spell(pitch_class), 40, INK),
+                text(string_line(trainer)).size(26).color(BODY),
+            ]
+            .spacing(12)
+            .align_y(iced::Alignment::Center),
+            text("on that string, anywhere along it")
+                .size(16)
+                .color(MUTE),
+        ]
+        .spacing(6)
+        .into(),
+        Prompt::Unaskable => column![text("Nothing to ask").size(26).color(BODY)]
+            .spacing(6)
+            .into(),
     };
 
-    let prompt_card = container(
-        column![
-            row![
-                question,
-                Space::new().width(Length::Fill),
-                streak_readout(trainer.score.streak(), trainer.score.best()),
-            ],
-            note_trainer_controls(trainer, focused),
-        ]
-        .spacing(20),
-    )
-    .width(Length::Fill)
-    .height(Length::Fixed(SUMMARY_CARD_HEIGHT))
-    .padding(32)
-    .style(card_container);
+    let mut prompt_body = column![
+        row![
+            question,
+            Space::new().width(Length::Fill),
+            streak_readout(trainer.score.streak(), trainer.score.best()),
+        ],
+        note_trainer_controls(trainer, focused),
+    ]
+    .spacing(20);
 
-    // Only *Name it* has a second card; in *Find it* the neck is the answer surface.
+    if let Some(listener) = trainer.listener() {
+        prompt_body = prompt_body
+            .push(text(notice_line(trainer)).size(14).color(BODY))
+            .push(Space::new().height(Length::Fill))
+            .push(text(listening_line(listener)).size(13).color(MUTE))
+            .push(ui_device_line(listener, focused));
+    }
+
+    let prompt_card = container(prompt_body)
+        .width(Length::Fill)
+        .height(Length::Fixed(SUMMARY_CARD_HEIGHT))
+        .padding(32)
+        .style(card_container);
+
+    // Only *Name it* has a second card; elsewhere the neck or the guitar is the answer surface.
     let details = match trainer.prompt {
         Prompt::NameIt { .. } => column![prompt_card, note_answer_card(trainer, focused)],
-        Prompt::FindIt(_) => column![prompt_card],
+        Prompt::FindIt(_) | Prompt::PlayIt { .. } | Prompt::Unaskable => column![prompt_card],
     }
     .width(Length::Fill)
     .spacing(16);
@@ -313,6 +610,56 @@ pub(super) fn ui_note_trainer(
         .into()
 }
 
+/// The string a playing prompt names, as a guitarist says it: "on the low E string".
+fn string_line(trainer: &NoteTrainer) -> String {
+    match trainer.prompt {
+        Prompt::PlayIt { string, .. } => {
+            format!("on the {} string", string_name(string).unwrap_or_default())
+        }
+        _ => String::new(),
+    }
+}
+
+/// What playing has to say beyond the prompt: why nothing is asked, or why the last note
+/// played was not judged.
+fn notice_line(trainer: &NoteTrainer) -> String {
+    if trainer.prompt == Prompt::Unaskable {
+        return match trainer.placer.calibration() {
+            None => "playing asks by string, which needs this guitar calibrated — \
+                     calibrate it on the Position Finder first"
+                .into(),
+            Some(_) => "this calibration cannot tell any string apart — \
+                        calibrate again on the Position Finder"
+                .into(),
+        };
+    }
+
+    match &trainer.unplaced {
+        Some(Placement::Declined {
+            why: Declined::Slid,
+            ..
+        }) => "bent or slid into — not judged, play it again".into(),
+        Some(Placement::Declined { .. }) => {
+            "the strings did not read cleanly — not judged, play it again".into()
+        }
+        Some(Placement::Placed { .. }) => {
+            "could not tell which string — not judged, play it again".into()
+        }
+        None => String::new(),
+    }
+}
+
+/// What the screen says it is hearing, as words so the tests can read them.
+fn listening_line(listener: &Listener) -> &'static str {
+    match listener.state() {
+        State::NotStarted => "not listening",
+        State::NoInput => "no input — press m to answer on the neck instead",
+        State::Silent => "listening, play the note...",
+        State::Unnameable => "one string at a time",
+        State::Reading => "heard",
+    }
+}
+
 /// The *Name it* prompt's position as an unfilled, unlabelled ring, since a fill means an
 /// answer placed and a label would print the answer.
 fn prompt_marker(trainer: &NoteTrainer) -> Vec<NoteMarker> {
@@ -324,7 +671,7 @@ fn prompt_marker(trainer: &NoteTrainer) -> Vec<NoteMarker> {
             color: LINK,
             style: MarkerStyle::Outlined,
         }],
-        Prompt::FindIt(_) => Vec::new(),
+        Prompt::FindIt(_) | Prompt::PlayIt { .. } | Prompt::Unaskable => Vec::new(),
     }
 }
 
@@ -339,7 +686,7 @@ fn position_markers(trainer: &NoteTrainer) -> Vec<NoteMarker> {
             color,
             style: MarkerStyle::Filled,
         }),
-        Answer::Name(_) => None,
+        Answer::Name(_) | Answer::Played(_) => None,
     };
 
     trainer
@@ -357,12 +704,43 @@ fn position_markers(trainer: &NoteTrainer) -> Vec<NoteMarker> {
         .collect()
 }
 
-/// The header row: direction, pool, spelling, skip. Labelled with the current mode, so it
-/// doubles as a status line.
+/// Where the played answers to the current prompt were placed — every position of the pitch
+/// class for one that was not — the right one drawn over a wrong one on the same fret.
+fn played_markers(trainer: &NoteTrainer) -> Vec<NoteMarker> {
+    let mark = |position: Position, color: Color| NoteMarker {
+        string: position.string,
+        fret: position.fret,
+        label: String::new(),
+        color,
+        style: MarkerStyle::Filled,
+    };
+
+    let wrong = neck().into_iter().filter(|&(position, pitch_class)| {
+        trainer.score.wrong().contains(&Answer::Played(pitch_class))
+            && trainer.wrong_at.shows(pitch_class, position)
+    });
+    let right = neck().into_iter().filter(|&(position, pitch_class)| {
+        trainer.score.correct() == Some(Answer::Played(pitch_class))
+            && trainer.right_at.shows(pitch_class, position)
+    });
+
+    wrong
+        .map(|(position, _)| mark(position, DANGER))
+        .chain(right.map(|(position, _)| mark(position, SUCCESS)))
+        .collect()
+}
+
+/// The header row: answering, direction, pool, spelling, skip. Labelled with the current mode,
+/// so it doubles as a status line. Direction is absent while playing, where it means nothing.
 fn note_trainer_controls(trainer: &NoteTrainer, focused: FocusTarget) -> Element<'static, Message> {
     use iced::widget::{row, text};
 
-    let direction = match trainer.prompt.drill() {
+    let answering = match trainer.answering {
+        Answering::Pressing => "press",
+        Answering::Playing => "play",
+    };
+
+    let direction = match trainer.direction {
         Drill::NameIt => "name it",
         Drill::FindIt => "find it",
     };
@@ -372,30 +750,38 @@ fn note_trainer_controls(trainer: &NoteTrainer, focused: FocusTarget) -> Element
         Pool::All => "all 12",
     };
 
-    row![
-        control_button(
+    let mut controls = row![control_button(
+        control_label(text(answering), CONTROL_SIZE),
+        Message::ToggleNoteAnswering,
+        focused == FocusTarget::NoteAnswering,
+    )]
+    .spacing(8);
+
+    if trainer.answering == Answering::Pressing {
+        controls = controls.push(control_button(
             control_label(text(direction), CONTROL_SIZE),
             Message::ToggleDrillDirection,
             focused == FocusTarget::DrillDirectionToggle,
-        ),
-        control_button(
+        ));
+    }
+
+    controls
+        .push(control_button(
             control_label(text(pool), CONTROL_SIZE),
             Message::TogglePool,
             focused == FocusTarget::PoolToggle,
-        ),
-        control_button(
+        ))
+        .push(control_button(
             control_accidental(spelling_glyph(trainer.spelling)),
             Message::ToggleNoteSpelling,
             focused == FocusTarget::NoteSpellingToggle,
-        ),
-        control_button(
+        ))
+        .push(control_button(
             control_shuffle(),
             Message::SkipPrompt,
             focused == FocusTarget::SkipPrompt,
-        ),
-    ]
-    .spacing(8)
-    .into()
+        ))
+        .into()
 }
 
 /// All twelve answer buttons under either pool, so a wrong answer stays reachable.
@@ -489,7 +875,14 @@ mod tests {
     use super::super::tests::{app_with_seed, every_screen, press_into, press_named};
     use super::super::{App, Notation, Screen};
     use super::*;
+    use crate::audio::detect::Detection;
+    use crate::audio::inharmonicity::Refusal;
     use crate::ui::WalkTheScale;
+    use crate::ui::calibration::Calibration;
+    use crate::ui::calibration::tests::{grouping_guitar, spike_guitar};
+    use crate::ui::keys::Fires;
+    use crate::ui::placement::FITS_PER_NOTE;
+    use crate::ui::placement::tests::{heard, measured, pluck};
     use iced::keyboard;
     use iced::keyboard::key::Named;
 
@@ -515,6 +908,8 @@ mod tests {
         match trainer.prompt {
             Prompt::NameIt { string, fret } => DRILL_NECK.pitch_class_at(string, fret).unwrap(),
             Prompt::FindIt(target) => target,
+            Prompt::PlayIt { pitch_class, .. } => pitch_class,
+            Prompt::Unaskable => panic!("nothing is asked"),
         }
     }
 
@@ -530,6 +925,7 @@ mod tests {
                     .expect("every pitch class appears within twelve frets");
                 Answer::Position { string, fret }
             }
+            Prompt::PlayIt { .. } | Prompt::Unaskable => panic!("a playing prompt is not pressed"),
         }
     }
 
@@ -550,6 +946,7 @@ mod tests {
                     .unwrap();
                 Answer::Position { string, fret }
             }
+            Prompt::PlayIt { .. } | Prompt::Unaskable => panic!("a playing prompt is not pressed"),
         }
     }
 
@@ -846,17 +1243,13 @@ mod tests {
     #[test]
     fn toggling_the_direction_flips_which_way_the_drill_runs() {
         let (mut trainer, mut rng) = trainer_with_seed(5);
-        assert_eq!(
-            trainer.prompt.drill(),
-            Drill::NameIt,
-            "Name it is not the default"
-        );
+        assert_eq!(trainer.drill(), Drill::NameIt, "Name it is not the default");
 
         trainer.toggle_direction(&mut rng);
-        assert_eq!(trainer.prompt.drill(), Drill::FindIt);
+        assert_eq!(trainer.drill(), Drill::FindIt);
 
         trainer.toggle_direction(&mut rng);
-        assert_eq!(trainer.prompt.drill(), Drill::NameIt);
+        assert_eq!(trainer.drill(), Drill::NameIt);
     }
 
     #[test]
@@ -914,7 +1307,7 @@ mod tests {
         let mut app = note_trainer_app(seed);
         app.note_trainer.toggle_direction(&mut app.rng);
         app.reset_focus();
-        assert_eq!(app.note_trainer.prompt.drill(), Drill::FindIt);
+        assert_eq!(app.note_trainer.drill(), Drill::FindIt);
         app
     }
 
@@ -924,6 +1317,7 @@ mod tests {
         let message = match correct_answer(&app.note_trainer) {
             Answer::Name(pitch_class) => Message::AnswerNote(pitch_class),
             Answer::Position { string, fret } => Message::ChooseNotePosition(string, fret),
+            Answer::Played(_) => unreachable!("pressing answers are never played"),
         };
 
         let _ = app.update(message);
@@ -966,7 +1360,7 @@ mod tests {
         }
 
         let kept = (
-            app.note_trainer.prompt.drill(),
+            app.note_trainer.drill(),
             app.note_trainer.pool,
             app.note_trainer.spelling,
             app.note_trainer.score.best(),
@@ -977,7 +1371,7 @@ mod tests {
 
         assert_eq!(
             (
-                app.note_trainer.prompt.drill(),
+                app.note_trainer.drill(),
                 app.note_trainer.pool,
                 app.note_trainer.spelling,
                 app.note_trainer.score.best(),
@@ -1276,11 +1670,7 @@ mod tests {
         assert_eq!(app.focused, FocusTarget::NoteAnswer(5), "r moved focus");
 
         press_into(&mut app, "d", keyboard::Modifiers::empty());
-        assert_eq!(
-            app.note_trainer.prompt.drill(),
-            Drill::FindIt,
-            "d did not swap"
-        );
+        assert_eq!(app.note_trainer.drill(), Drill::FindIt, "d did not swap");
 
         // Focus stays on a widget gone in the new direction; `step_focus` snaps it back.
         press_named(&mut app, Named::Tab);
@@ -1340,7 +1730,7 @@ mod tests {
         let bound = accelerators_for(&Screen::NoteTrainer, Notation::Notes, &WalkTheScale::new());
         let keys: Vec<char> = bound.iter().map(|&(key, _, _)| key).collect();
 
-        assert_eq!(keys, vec!['r', 'd', 'a']);
+        assert_eq!(keys, vec!['r', 'd', 'a', 'm']);
 
         for (key, _, label) in bound {
             assert!(!label.is_empty(), "{key} has no label for the overlay");
@@ -1396,6 +1786,22 @@ mod tests {
         let _ = app.update(Message::GoBack);
         let _ = app.view();
 
+        // Playing: with nothing to ask, asking by string, answered, and with a picker up.
+        app.open(Screen::NoteTrainer);
+        let _ = app.update(Message::ToggleNoteAnswering);
+        let _ = app.view();
+        let guitar = spike_guitar();
+        app.note_trainer.calibrate_with(Some(guitar.clone()));
+        let _ = app.update(Message::SkipPrompt);
+        let _ = app.view();
+        asking_for_the_high_e(&mut app);
+        plucks(&mut app, &guitar, at(3, 9));
+        let _ = app.view();
+        let _ = app.update(Message::OpenDevices);
+        let _ = app.view();
+        let _ = app.update(Message::GoBack);
+        let _ = app.update(Message::ToggleNoteAnswering);
+
         app.open(Screen::NoteTrainer);
 
         for _ in 0..2 {
@@ -1404,6 +1810,7 @@ mod tests {
             let message = match wrong {
                 Answer::Name(pitch_class) => Message::AnswerNote(pitch_class),
                 Answer::Position { string, fret } => Message::ChooseNotePosition(string, fret),
+                Answer::Played(_) => unreachable!("pressing answers are never played"),
             };
             let _ = app.update(message);
             assert!(!app.note_trainer.score.wrong().is_empty());
@@ -1413,6 +1820,7 @@ mod tests {
             let message = match correct_answer(&app.note_trainer) {
                 Answer::Name(pitch_class) => Message::AnswerNote(pitch_class),
                 Answer::Position { string, fret } => Message::ChooseNotePosition(string, fret),
+                Answer::Played(_) => unreachable!("pressing answers are never played"),
             };
             let _ = app.update(message);
             assert!(app.note_trainer.score.correct().is_some());
@@ -1421,6 +1829,399 @@ mod tests {
             let _ = app.update(Message::ToggleDrillDirection);
             let _ = app.view();
         }
+    }
+
+    // ---- Playing ----
+
+    /// An app on the Note Trainer, swapped into playing against `calibration`.
+    fn playing_app(seed: u64, calibration: Option<Calibration>) -> App {
+        let mut app = note_trainer_app(seed);
+        app.note_trainer.calibrate_with(calibration);
+        let _ = app.update(Message::ToggleNoteAnswering);
+        app
+    }
+
+    /// Asks for E on the high E string, which the spike guitar places at its open string.
+    fn asking_for_the_high_e(app: &mut App) {
+        app.note_trainer.prompt = Prompt::PlayIt {
+            pitch_class: PitchClass::new(4),
+            string: 5,
+        };
+    }
+
+    /// A clean pluck of `position`, held long enough to be placed.
+    fn plucks(app: &mut App, guitar: &Calibration, position: Position) {
+        let (pitch, log2) = pluck(guitar, position);
+        for _ in 0..FITS_PER_NOTE {
+            let _ = app.update(Message::Fitted(heard(pitch), measured(log2)));
+        }
+    }
+
+    fn stops(app: &mut App) {
+        let _ = app.update(Message::Fitted(crate::audio::detect::Heard::Silence, None));
+    }
+
+    fn marked(app: &App, color: Color) -> Vec<Position> {
+        played_markers(&app.note_trainer)
+            .into_iter()
+            .filter(|marker| marker.color == color)
+            .map(|marker| at(marker.string, marker.fret))
+            .collect()
+    }
+
+    /// Every (pitch class, string) a playing prompt names over many draws.
+    fn drawn(app: &mut App, draws: usize) -> Vec<(PitchClass, usize)> {
+        (0..draws)
+            .map(|_| {
+                let _ = app.update(Message::SkipPrompt);
+                match app.note_trainer.prompt {
+                    Prompt::PlayIt {
+                        pitch_class,
+                        string,
+                    } => (pitch_class, string),
+                    other => panic!("{other:?} is not a playing prompt"),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn swapping_into_playing_keeps_the_streak_and_asks_by_string() {
+        let mut app = note_trainer_app(0x91a);
+        app.note_trainer.calibrate_with(Some(spike_guitar()));
+        answer_correctly(&mut app);
+        answer_correctly(&mut app);
+
+        press_into(&mut app, "m", keyboard::Modifiers::empty());
+
+        assert_eq!(app.note_trainer.answering(), Answering::Playing);
+        assert!(matches!(app.note_trainer.prompt, Prompt::PlayIt { .. }));
+        assert_eq!(app.note_trainer.score.streak(), 2);
+    }
+
+    #[test]
+    fn swapping_back_asks_in_the_direction_it_was_set_to() {
+        let mut app = find_it_app(0x91b);
+        app.note_trainer.calibrate_with(Some(spike_guitar()));
+
+        press_into(&mut app, "m", keyboard::Modifiers::empty());
+        press_into(&mut app, "m", keyboard::Modifiers::empty());
+
+        assert_eq!(app.note_trainer.answering(), Answering::Pressing);
+        assert_eq!(app.note_trainer.drill(), Drill::FindIt);
+        assert!(matches!(app.note_trainer.prompt, Prompt::FindIt(_)));
+    }
+
+    #[test]
+    fn a_device_is_held_only_while_playing() {
+        let mut app = note_trainer_app(0x91c);
+        assert!(
+            app.note_trainer.listener().is_none(),
+            "pressing holds a device"
+        );
+
+        let _ = app.update(Message::ToggleNoteAnswering);
+        assert!(
+            app.note_trainer
+                .listener()
+                .is_some_and(Listener::is_fitting)
+        );
+
+        let _ = app.update(Message::ToggleNoteAnswering);
+        assert!(app.note_trainer.listener().is_none());
+    }
+
+    #[test]
+    fn leaving_while_playing_releases_the_device_and_coming_back_claims_it() {
+        let mut app = playing_app(0x91d, None);
+
+        let _ = app.update(Message::GoBack);
+        assert_eq!(app.screen, Screen::Home);
+        assert!(app.note_trainer.listener().is_none());
+
+        let _ = app.update(Message::Navigate(Screen::NoteTrainer));
+        assert_eq!(app.note_trainer.answering(), Answering::Playing);
+        assert!(app.note_trainer.listener().is_some());
+    }
+
+    #[test]
+    fn without_a_calibration_nothing_is_asked_and_the_position_finder_is_named() {
+        let app = playing_app(0x91e, None);
+
+        assert_eq!(app.note_trainer.prompt, Prompt::Unaskable);
+        assert!(played_markers(&app.note_trainer).is_empty());
+        assert!(notice_line(&app.note_trainer).contains("Position Finder"));
+    }
+
+    #[test]
+    fn no_grouped_position_is_ever_asked_for() {
+        let guitar = grouping_guitar();
+        let grouped: Vec<Position> = groups(&guitar, &DRILL_NECK)
+            .into_iter()
+            .flat_map(|group| group.positions)
+            .collect();
+        assert!(!grouped.is_empty(), "the guitar groups nothing to avoid");
+
+        let mut app = playing_app(0x92a, Some(guitar));
+        let _ = app.update(Message::TogglePool);
+
+        for (pitch_class, string) in drawn(&mut app, 500) {
+            for fret in 0..=DRILL_NECK.frets() {
+                if DRILL_NECK.pitch_class_at(string, fret) == Some(pitch_class) {
+                    assert!(
+                        !grouped.contains(&at(string, fret)),
+                        "{pitch_class:?} on string {string} sits in a group"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_flagged_string_is_never_asked_for() {
+        let open = [-12.2f32, -13.0, -13.2, -13.09, -14.57, -16.0].map(f32::exp2);
+        let mut twelfth = open.map(|b| 4.0 * b);
+        twelfth[2] = open[2];
+        let guitar = Calibration::from_readings(open.map(Some), twelfth.map(Some));
+        assert!(guitar.as_ref().is_some_and(|kept| kept.is_flagged(2)));
+
+        let mut app = playing_app(0x92b, guitar);
+
+        assert!(drawn(&mut app, 500).iter().all(|&(_, string)| string != 2));
+    }
+
+    #[test]
+    fn playing_draws_from_the_pool_and_never_repeats_a_prompt() {
+        let mut app = playing_app(0x92c, Some(spike_guitar()));
+
+        let first = match app.note_trainer.prompt {
+            Prompt::PlayIt {
+                pitch_class,
+                string,
+            } => (pitch_class, string),
+            other => panic!("{other:?} is not a playing prompt"),
+        };
+        let mut prompts = vec![first];
+        prompts.extend(drawn(&mut app, 300));
+
+        assert!(
+            prompts
+                .iter()
+                .all(|(pc, _)| PitchClass::NATURALS.contains(pc))
+        );
+        assert!(prompts.windows(2).all(|pair| pair[0] != pair[1]));
+
+        press_into(&mut app, "a", keyboard::Modifiers::empty());
+        assert!(
+            drawn(&mut app, 300)
+                .iter()
+                .any(|(pitch_class, _)| !PitchClass::NATURALS.contains(pitch_class)),
+            "all twelve never reached an accidental"
+        );
+    }
+
+    #[test]
+    fn the_right_note_on_the_asked_string_is_right() {
+        let guitar = spike_guitar();
+        let mut app = playing_app(0x93a, Some(guitar.clone()));
+        asking_for_the_high_e(&mut app);
+
+        plucks(&mut app, &guitar, at(5, 0));
+
+        assert_eq!(app.note_trainer.score.streak(), 1);
+        assert_eq!(marked(&app, SUCCESS), vec![at(5, 0)]);
+        assert!(marked(&app, DANGER).is_empty());
+    }
+
+    #[test]
+    fn the_right_note_on_another_string_is_wrong_and_shown_there() {
+        let guitar = spike_guitar();
+        let mut app = playing_app(0x93b, Some(guitar.clone()));
+        answer_correctly_by_playing(&mut app, &guitar);
+        asking_for_the_high_e(&mut app);
+        let standing = app.note_trainer.prompt;
+
+        // E4 on the G string's 9th fret
+        plucks(&mut app, &guitar, at(3, 9));
+
+        assert_eq!(app.note_trainer.score.streak(), 0);
+        assert_eq!(app.note_trainer.prompt, standing);
+        assert_eq!(marked(&app, DANGER), vec![at(3, 9)]);
+    }
+
+    #[test]
+    fn a_narrowed_placement_on_the_asked_string_is_right() {
+        let guitar = grouping_guitar();
+        let mut app = playing_app(0x93c, Some(guitar.clone()));
+        app.note_trainer.prompt = Prompt::PlayIt {
+            pitch_class: PitchClass::new(9),
+            string: 3,
+        };
+
+        plucks(&mut app, &guitar, at(3, 2));
+
+        assert_eq!(app.note_trainer.score.streak(), 1);
+        assert_eq!(marked(&app, SUCCESS), vec![at(2, 7), at(3, 2)]);
+    }
+
+    #[test]
+    fn the_wrong_note_is_wrong_without_waiting_for_a_placement() {
+        let guitar = spike_guitar();
+        let mut app = playing_app(0x93d, Some(guitar.clone()));
+        answer_correctly_by_playing(&mut app, &guitar);
+        asking_for_the_high_e(&mut app);
+
+        let f4 = DRILL_NECK.pitch_at(5, 1).expect("on the neck");
+        let _ = app.update(Message::Fitted(heard(f4), None));
+
+        assert_eq!(app.note_trainer.score.streak(), 0);
+        assert_eq!(
+            app.note_trainer.score.wrong(),
+            [Answer::Played(f4.pitch_class())]
+        );
+    }
+
+    #[test]
+    fn a_note_slid_into_is_not_judged_and_says_why() {
+        let guitar = spike_guitar();
+        let mut app = playing_app(0x93e, Some(guitar.clone()));
+        answer_correctly_by_playing(&mut app, &guitar);
+        asking_for_the_high_e(&mut app);
+        let standing = app.note_trainer.prompt;
+
+        let (e4, open_e) = pluck(&guitar, at(5, 0));
+        let from = DRILL_NECK.pitch_at(5, 1).expect("on the neck").frequency();
+        let bent = crate::audio::detect::Heard::Pitch(
+            Detection::synthesized(e4.frequency(), 0.999).slid_from(from),
+        );
+        let _ = app.update(Message::Fitted(bent, measured(open_e)));
+
+        assert_eq!(app.note_trainer.score.streak(), 1);
+        assert!(app.note_trainer.score.wrong().is_empty());
+        assert_eq!(app.note_trainer.prompt, standing);
+        assert!(notice_line(&app.note_trainer).contains("slid"));
+    }
+
+    #[test]
+    fn a_note_that_cannot_be_read_is_not_judged_and_the_prompt_stays() {
+        let guitar = spike_guitar();
+        let mut app = playing_app(0x93f, Some(guitar.clone()));
+        answer_correctly_by_playing(&mut app, &guitar);
+        asking_for_the_high_e(&mut app);
+        let standing = app.note_trainer.prompt;
+
+        let (e4, _) = pluck(&guitar, at(5, 0));
+        let _ = app.update(Message::Fitted(
+            heard(e4),
+            Some(Err(Refusal::TooFewPartials)),
+        ));
+        stops(&mut app);
+
+        assert_eq!(app.note_trainer.score.streak(), 1);
+        assert_eq!(app.note_trainer.prompt, standing);
+        assert!(notice_line(&app.note_trainer).contains("did not read cleanly"));
+
+        // and played again cleanly, it is judged
+        plucks(&mut app, &guitar, at(5, 0));
+        assert_eq!(app.note_trainer.score.streak(), 2);
+        assert!(notice_line(&app.note_trainer).is_empty());
+    }
+
+    #[test]
+    fn a_held_wrong_note_is_judged_once() {
+        let guitar = spike_guitar();
+        let mut app = playing_app(0x940, Some(guitar.clone()));
+        asking_for_the_high_e(&mut app);
+
+        for _ in 0..20 {
+            plucks(&mut app, &guitar, at(3, 9));
+        }
+
+        assert_eq!(app.note_trainer.score.wrong().len(), 1);
+        assert_eq!(marked(&app, DANGER), vec![at(3, 9)]);
+    }
+
+    #[test]
+    fn the_previous_answer_still_ringing_answers_nothing() {
+        let guitar = spike_guitar();
+        let mut app = playing_app(0x941, Some(guitar.clone()));
+        asking_for_the_high_e(&mut app);
+        plucks(&mut app, &guitar, at(5, 0));
+        assert_eq!(app.note_trainer.score.streak(), 1);
+
+        let _ = app.update(Message::AdvancePrompt);
+        asking_for_the_high_e(&mut app);
+        plucks(&mut app, &guitar, at(5, 0));
+        assert_eq!(app.note_trainer.score.streak(), 1, "the tail answered");
+        assert!(app.note_trainer.score.wrong().is_empty());
+
+        stops(&mut app);
+        plucks(&mut app, &guitar, at(5, 0));
+        assert_eq!(app.note_trainer.score.streak(), 2);
+    }
+
+    /// Answers whatever is asked on the string it names, then lets the flash end.
+    fn answer_correctly_by_playing(app: &mut App, guitar: &Calibration) {
+        asking_for_the_high_e(app);
+        plucks(app, guitar, at(5, 0));
+        let _ = app.update(Message::AdvancePrompt);
+        stops(app);
+        assert_eq!(app.note_trainer.score.streak(), 1);
+    }
+
+    #[test]
+    fn a_playing_prompt_names_the_note_and_string_and_lights_nothing() {
+        let mut app = playing_app(0x950, Some(spike_guitar()));
+        asking_for_the_high_e(&mut app);
+
+        assert_eq!(string_line(&app.note_trainer), "on the high E string");
+        assert!(played_markers(&app.note_trainer).is_empty());
+        assert!(prompt_marker(&app.note_trainer).is_empty());
+
+        app.note_trainer.prompt = Prompt::PlayIt {
+            pitch_class: PitchClass::new(0),
+            string: 3,
+        };
+        assert_eq!(string_line(&app.note_trainer), "on the G string");
+    }
+
+    #[test]
+    fn while_playing_d_opens_the_input_list_and_the_overlay_says_so() {
+        let mut app = playing_app(0x951, Some(spike_guitar()));
+        let before = app.note_trainer.drill();
+
+        let labels: Vec<String> = app
+            .accelerators()
+            .into_iter()
+            .map(|(key, _, label)| format!("{key} {label}"))
+            .collect();
+        assert!(labels.contains(&"m answer: play".to_owned()), "{labels:?}");
+        assert!(labels.contains(&"d input device".to_owned()), "{labels:?}");
+
+        press_into(&mut app, "d", keyboard::Modifiers::empty());
+        assert!(
+            app.note_trainer
+                .listener()
+                .is_some_and(Listener::is_picking)
+        );
+        assert_eq!(app.note_trainer.drill(), before, "d swapped the direction");
+
+        let _ = app.update(Message::GoBack);
+        assert_eq!(app.screen, Screen::NoteTrainer, "Esc left with the list up");
+    }
+
+    #[test]
+    fn every_key_claimed_while_playing_fires_a_target_on_the_grid() {
+        let app = playing_app(0x952, Some(spike_guitar()));
+        let reachable = app.focusables();
+
+        for (key, fires, _) in app.accelerators() {
+            let Fires::Widget(target) = fires else {
+                panic!("`{key}` fires a message no widget stands behind");
+            };
+            assert!(reachable.contains(&target), "`{key}` targets {target:?}");
+        }
+        assert!(!reachable.contains(&FocusTarget::DrillDirectionToggle));
     }
 
     #[test]

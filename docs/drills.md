@@ -139,6 +139,40 @@ red and green discs are already told apart, not by shape.
 - The cursor stops at the neck's edges rather than wrapping, as the focus ring does at a grid's
   edge. Up is towards the nut, since the nut is drawn at the top.
 
+## Playing the Note Trainer
+
+The Note Trainer's playing mode is a third prompt shape, `Prompt::PlayIt { pitch_class,
+string }`, beside an `Answering` mode as on Walk the Scale, with a `listener: Option<Listener>`
+that exists only while playing — so "holds a device only while playing" is the type rather
+than a check — and a `direction` kept outside the prompt so swapping back asks the way it was
+set. Direction lives in its own field rather than in the prompt's variant, as it did, because
+a playing prompt has none and the pressing one has to survive it.
+
+- Judging is in two stages. On confirmation a pitch class other than the one asked for is
+  wrong at once; no placement is needed to know it. The asked one waits for its placement,
+  about three fits, and then any position on the asked string is right — named, or one of a
+  narrowed group — positions only elsewhere are wrong, and a decline or an unnamed estimate is
+  no judgement at all.
+- That last is the benefit of the doubt. A note the screen cannot place says nothing about
+  where the learner's hand was, and costing the streak for the screen's blindness would teach
+  the learner to distrust the drill rather than their hand. The screen says why — slid,
+  unreadable, or no string told apart — and keeps the prompt to be played again.
+- Prompts the calibration cannot judge are never drawn. A position in one of `position::groups`
+  is excluded, along with the rest of its pitch class on that string: the group's other string
+  would place there too and be judged right, so the prompt would not ask what it says it asks.
+  A flagged string is excluded outright. The pool is derived from the calibration on each draw
+  rather than stored, so it cannot disagree with it, and follows the naturals-or-all-twelve
+  setting as pressing does.
+- With no calibration the pool is empty and the prompt is `Prompt::Unaskable`, which points at
+  the Position Finder; there is no calibration walk here, by design.
+- A pool of one is not drawn from, since `draw_other_than` could never return.
+- The gate is a third copy of the played drills' `Gate`. The Changes Trainer is still the
+  screen expected to settle whether it is one abstraction, and the copy names its twins.
+- The header grows a fifth control, the answering toggle, and loses direction while playing.
+  Answers played are kept as `Answer::Played(PitchClass)` in `Score` and their places in two
+  `Placed`s — right and wrong apart, since the asked note can be wrong on one string and then
+  right on another for the same prompt.
+
 ## Play the Interval
 
 `play_the_interval::Prompt` is a struct, not an enum: there is one direction. A learner cannot
@@ -167,8 +201,23 @@ and an octave-exact rule would drill where the octave is — the Note Trainer's 
 of the interval. The cost is that an octave error is never caught, the trade *Find it* already
 makes.
 
-- A heard pitch class is marked at every position carrying it: those are all the places the
-  drill would have accepted.
+- An answer is marked where it was played: at the one position its placement names, or at the
+  positions it narrows to, and at every position sounding its pitch when it cannot be placed —
+  for want of a calibration, or because it was slid or unreadable. The drill hears the octave
+  even when it cannot hear the string, so an unplaced E4 is two or three marks rather than the
+  eight Es on the neck; the pitch class alone was the first rule, and on an uncalibrated guitar
+  it lit the neck with places the note could not have come from. Judging still happens on
+  confirmation, and the answer is drawn where its pitch sounds from then; the placement arrives
+  about three fits later and only narrows those marks, never moving one to a position that was
+  not marked. The placement is kept in
+  `Placed` beside `Score` rather than in it: `Score<A>` stores answers by value and is shared
+  with two screens that never place anything.
+- A placement is attached to the answer judged for the note that produced it: `Placed::expect`
+  takes the judged pitch and `Placed::place` takes the first placement of that same pitch. The
+  gate and the placer break on the same non-pitch release, so the note just judged is the note
+  being placed without further bookkeeping; a placement for a note the gate ignored — during
+  the flash, or ringing into a fresh prompt — is dropped. An answer whose note ended before any
+  fit is never placed and stays where its pitch sounds.
 - The root's position wins any collision, so playing the root back, or answering a unison,
   cannot repaint the anchor as an answer. The other positions of that pitch class still take
   the answer's colour.
@@ -293,6 +342,14 @@ that a slip on the glyph does not walk the scale, narrow enough that all twelve 
   pushed to the edge when there is one, so an untimed run stays centred.
 - Marks take priority flash, then wrong, then answered, because the completing note is also the
   last one answered. Answered marks are labelled with the degree, never the note.
+- In playing mode a found degree and a wrong answer are marked where they were played, by the
+  rule Play the Interval follows: the placed position or group, and every position sounding its
+  pitch when the note could not be placed. A walked scale therefore builds up as the shape
+  the hand actually made rather than every place that shape could have been. Found degrees and
+  the current element's wrong answers are kept in separate `Placed`s on the `Run` — a wrong
+  answer can be a later degree's pitch class, played somewhere else — and both clear with what
+  they belong to: the wrong ones when the element advances, all of it when the sequence does.
+  Pressing never places anything, so it keeps marking every position of the pitch class.
 - The focus ring walks Back, the sixteen kinds in row order, then the controls. A two-band split
   left from the old root-card layout walked the first three columns of every kind row before
   coming back for the rest, which nothing but that test would notice.

@@ -44,7 +44,7 @@ pub(super) struct Listener {
     picking: Option<usize>,
     /// Set when the device asked for was absent and the default was opened instead.
     fell_back: bool,
-    /// Whether confirmed notes are also fitted for inharmonicity; only the Position Finder asks.
+    /// Whether confirmed notes are also fitted for inharmonicity; only screens that place notes ask.
     fits: bool,
     /// Hops since the sounding note was confirmed, which is what [`fit_due`] schedules by.
     confirmed_hops: usize,
@@ -542,10 +542,13 @@ mod device_tests {
                 "{screen:?} disagrees about whether it listens"
             );
 
-            // only the Position Finder pays for the slow path
+            // only the screens that place notes pay for the slow path
             assert_eq!(
                 app.listener_ref().is_some_and(Listener::is_fitting),
-                screen == Screen::PositionFinder,
+                matches!(
+                    screen,
+                    Screen::PlayTheInterval | Screen::WalkTheScale | Screen::PositionFinder
+                ),
                 "{screen:?} disagrees about whether it fits"
             );
 

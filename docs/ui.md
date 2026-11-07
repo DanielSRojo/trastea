@@ -189,8 +189,10 @@ the same reason: the card's own row is full of its controls.
   six-row shape has 73px spare on its widest row and stays a palindrome, as the old 4-3-2-3-4 did.
 - The root rows are derived from `PitchClass::ALL`; the kind rows are ragged, so their widths
   are spelled out. Both views and the focus grid read these.
-- The Note Trainer's answer grid is four columns: four divides the twelve pitch classes and
-  matches the four header controls above.
+- The Note Trainer's answer grid is four columns: four divides the twelve pitch classes. The
+  header row above it is five while pressing and four while playing, where direction is not
+  drawn; a vertical move clamps to the nearer row's last widget as on any ragged grid. While
+  playing a third row holds the input device, as on Walk the Scale.
 - The CAGED shape row is as wide as the cycle, which may be fewer than five.
 - Walk the Scale's last row holds only the controls the run currently shows, so Tab never stops
   on nothing. Its root is set on the glyph, so there is no root row.
@@ -316,7 +318,7 @@ list; a picker index is on the screen side of the line that keeps the detector t
   interpretation: a string being tuned up moves the hertz continuously while the name stays put.
 - The device list is modal and the screen behind it is not drawn.
 - `fitting` is opt-in, off by default: the inharmonicity fit is the slow path, and only the
-  Position Finder reads it. `poll_fitted` returns the fit beside the reading it belongs to so a
+  screens that place notes read it. `poll_fitted` returns the fit beside the reading it belongs to so a
   screen never holds one without the other; `poll` drops it, so the other screens did not change.
 - When a fit is due is `fit_due`, a pure function of the release and the hops since the note was
   confirmed: on confirmation, then every `FIT_EVERY` (8) hops, about 85 ms, half a fit window, so
@@ -324,16 +326,34 @@ list; a picker index is on the screen side of the line that keeps the detector t
   through the tracker's unpitched hops, which resets the count, so it is fitted on its own
   confirmation.
 
+## Placing a note
+
+- `placement::Placer` follows one sounding note and places it once; the Position Finder, Play the
+  Interval, Walk the Scale and the Note Trainer each hold one, so they place by one rule. It was
+  the Position Finder's own until the drills placed notes too, and was moved rather than copied.
+  It sits in `ui/` beside `position.rs`, the pure half it calls, because it needs `Pitch`,
+  `Calibration` and `Neck`, none of which `audio/` may import.
+- One placement per note. A note gathers fits until `FITS_PER_NOTE` (3) are accepted and is then
+  placed once from their median; later fits of the same note change nothing. The first window
+  can still hold the attack, and a screen that lights one place and then moves it is the thing the
+  spec rules out — showing a pitch and then revising where it came from. A note that ends with
+  fewer fits is placed from what it has, one whose every fit was refused is declined as
+  unreadable, and one that ended before any fit was attempted is not placed at all.
+- A slide and a missing calibration decide the placement without a fit, so those notes are
+  placed on their first reading.
+- The result is `Placement::Placed` or `Placement::Declined` with its reason, an enum rather than
+  an estimate beside an optional reason, which could say a note was both named and slid into.
+  `Placed` carries the median coefficient so the Position Finder can judge drift on it; drift
+  stays out of the placer so the drills carry no state they never read.
+- `Placer::hear` returns what it placed during that reading as an iterator rather than holding
+  a "last placement" to be read: one reading can end a note and start one that is placed on
+  arrival, and reading only the last would lose the first. It is `+ use<>` so the iterator holds
+  no borrow of the placer, and the caller can ask it whether the sounding note is placed mid-loop.
+
 ## The Position Finder
 
-- One answer per note. A note gathers fits until `FITS_PER_NOTE` (3) are accepted and is then
-  answered once from their median; later fits of the same note are not drawn. The first window
-  can still hold the attack, and a screen that lights one place and then moves it is the thing the
-  spec rules out — showing a pitch and then revising where it came from. A reading with no fit yet
-  leaves the previous answer up rather than showing a bare pitch. A note that ends with fewer
-  fits is answered from what it has, and one whose every fit was refused is named and not placed.
-- A slide and a missing calibration decide the answer without a fit, so those notes are answered
-  on their first reading.
+- A reading with no placement yet leaves the previous answer up rather than showing a bare
+  pitch; the answer reads as live while the note it places is still sounding.
 - The calibration walk takes the same median of three for each of its twelve readings, and asks
   again — rather than skipping — when a note ends without them. A harmonic reading counts as
   refused there, since a calibration needs a logarithm. The ringing tail of the reading just

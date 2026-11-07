@@ -189,6 +189,12 @@ pub(super) mod tests {
             .expect("twelve positive readings")
     }
 
+    /// The spike guitar with its D string opening low enough that D@7 and G@2 share a group.
+    pub(in crate::ui) fn grouping_guitar() -> Calibration {
+        let open = [-12.2f32, -13.0, -13.6, -13.09, -14.57, -16.0].map(f32::exp2);
+        Calibration::from_readings(open.map(Some), open.map(|b| Some(4.0 * b))).expect("complete")
+    }
+
     fn uniform(open: f32, twelfth: f32) -> Option<Calibration> {
         Calibration::from_readings([Some(open); 6], [Some(twelfth); 6])
     }

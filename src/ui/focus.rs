@@ -7,8 +7,8 @@ use crate::music::notes::PitchClass;
 
 use super::drill::{ANSWER_COUNT, Drill};
 use super::home::{self, Category};
-use super::walk_the_scale;
 use super::{App, Screen};
+use super::{note_trainer, walk_the_scale};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusTarget {
@@ -26,6 +26,8 @@ pub enum FocusTarget {
     /// One of the twelve *Name it* answer buttons, indexed into `PitchClass::ALL`.
     NoteAnswer(usize),
     DrillDirectionToggle,
+    /// Swaps the Note Trainer between pressing and playing.
+    NoteAnswering,
     PoolToggle,
     NoteSpellingToggle,
     TunerSpellingToggle,
@@ -85,7 +87,7 @@ const ROOT_ROW_WIDTH: usize = 3;
 /// Six rows because no five-row shape fits the 440px card at the default window width.
 pub(super) const KIND_ROW_WIDTHS: [usize; 6] = [3, 3, 2, 2, 3, 3];
 
-/// Columns in the Note Trainer's answer grid, matching the four header controls above it.
+/// Columns in the trainers' answer grids: four divides the twelve answers.
 pub(super) const ANSWER_ROW_WIDTH: usize = 4;
 
 /// Yields the `(start, len)` of each row of the root selector.
@@ -244,17 +246,29 @@ impl App {
                 let mut back_row: FocusRow = vec![None; ANSWER_ROW_WIDTH];
                 back_row[0] = Some(FocusTarget::Back);
 
-                let mut controls: FocusRow = vec![None; ANSWER_ROW_WIDTH];
-                for (cell, target) in controls.iter_mut().zip([
-                    FocusTarget::DrillDirectionToggle,
-                    FocusTarget::PoolToggle,
-                    FocusTarget::NoteSpellingToggle,
-                    FocusTarget::SkipPrompt,
-                ]) {
-                    *cell = Some(target);
-                }
+                let playing = self.note_trainer.answering() == note_trainer::Answering::Playing;
+
+                // as many as the header shows: direction is not drawn while playing
+                let controls: FocusRow = [
+                    Some(FocusTarget::NoteAnswering),
+                    (!playing).then_some(FocusTarget::DrillDirectionToggle),
+                    Some(FocusTarget::PoolToggle),
+                    Some(FocusTarget::NoteSpellingToggle),
+                    Some(FocusTarget::SkipPrompt),
+                ]
+                .into_iter()
+                .flatten()
+                .map(Some)
+                .collect();
 
                 let mut grid = vec![back_row, controls];
+
+                if playing {
+                    let mut row: FocusRow = vec![None; ANSWER_ROW_WIDTH];
+                    row[0] = Some(FocusTarget::InputDevice);
+                    grid.push(row);
+                    return grid;
+                }
 
                 match self.note_trainer.drill() {
                     Drill::NameIt => {

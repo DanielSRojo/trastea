@@ -11,7 +11,9 @@ use super::style::{
     BODY, CANVAS, CANVAS_SOFT_2, INK, KEYCAP_ARROWS, KEYCAP_BACKTAB, KEYCAP_FONT, KEYCAP_TAB, MUTE,
     card_container,
 };
-use super::{App, Message, Notation, Screen, WalkTheScale, chord_library, home, walk_the_scale};
+use super::{
+    App, Message, Notation, Screen, WalkTheScale, chord_library, home, note_trainer, walk_the_scale,
+};
 
 /// The modifiers that suppress a character binding.
 ///
@@ -88,6 +90,11 @@ impl App {
         // Home's digits depend on which column the ring is in, which no other table needs
         if self.screen == Screen::Home {
             return home::accelerators(self.focused);
+        }
+
+        // `d` means the direction while pressing and the input while playing
+        if self.screen == Screen::NoteTrainer {
+            return note_trainer_accelerators(self.note_trainer.answering());
         }
 
         accelerators_for(
@@ -182,23 +189,8 @@ pub(super) fn accelerators_for(
 
             keys
         }
-        Screen::NoteTrainer => vec![
-            (
-                'r',
-                Fires::Widget(FocusTarget::SkipPrompt),
-                "skip this note".into(),
-            ),
-            (
-                'd',
-                Fires::Widget(FocusTarget::DrillDirectionToggle),
-                "swap direction".into(),
-            ),
-            (
-                'a',
-                Fires::Widget(FocusTarget::PoolToggle),
-                "include accidentals".into(),
-            ),
-        ],
+        // the table at rest, which opens pressing
+        Screen::NoteTrainer => note_trainer_accelerators(note_trainer::Answering::Pressing),
         Screen::IntervalTrainer => vec![
             (
                 'r',
@@ -302,6 +294,43 @@ pub(super) fn accelerators_for(
             ),
         ],
     }
+}
+
+fn note_trainer_accelerators(answering: note_trainer::Answering) -> Vec<Accelerator> {
+    let d = match answering {
+        note_trainer::Answering::Pressing => (
+            'd',
+            Fires::Widget(FocusTarget::DrillDirectionToggle),
+            "swap direction".into(),
+        ),
+        note_trainer::Answering::Playing => (
+            'd',
+            Fires::Widget(FocusTarget::InputDevice),
+            "input device".into(),
+        ),
+    };
+
+    vec![
+        (
+            'r',
+            Fires::Widget(FocusTarget::SkipPrompt),
+            "skip this note".into(),
+        ),
+        d,
+        (
+            'a',
+            Fires::Widget(FocusTarget::PoolToggle),
+            "include accidentals".into(),
+        ),
+        (
+            'm',
+            Fires::Widget(FocusTarget::NoteAnswering),
+            match answering {
+                note_trainer::Answering::Pressing => "answer: press".into(),
+                note_trainer::Answering::Playing => "answer: play".into(),
+            },
+        ),
+    ]
 }
 
 /// A duration as the overlay says it: `off`, or minutes and seconds.

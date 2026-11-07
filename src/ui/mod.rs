@@ -11,6 +11,7 @@ mod keys;
 mod listener;
 mod neck;
 mod note_trainer;
+mod placement;
 mod play_the_interval;
 mod position;
 mod position_finder;
@@ -141,6 +142,8 @@ pub enum Message {
     /// Retires the flashed prompt and draws the next. Sent only by the timer.
     AdvancePrompt,
     ToggleDrillDirection,
+    /// Swaps how the Note Trainer is answered — pressed on screen, or played on the guitar.
+    ToggleNoteAnswering,
     TogglePool,
     /// The Note Trainer's spelling, not the scale's.
     ToggleNoteSpelling,
@@ -400,6 +403,7 @@ impl App {
             // Handled above, before the help overlay gets a say.
             Message::AdvancePrompt => {}
             Message::ToggleDrillDirection => self.note_trainer.toggle_direction(&mut self.rng),
+            Message::ToggleNoteAnswering => self.note_trainer.toggle_answering(&mut self.rng),
             Message::TogglePool => self.note_trainer.toggle_pool(&mut self.rng),
             Message::ToggleNoteSpelling => self.note_trainer.toggle_spelling(),
             Message::ToggleTunerSpelling => self.tuner.toggle_spelling(),
@@ -563,6 +567,10 @@ impl App {
             self.walk_the_scale.leave();
         }
 
+        if self.screen == Screen::NoteTrainer {
+            self.note_trainer.leave();
+        }
+
         // asked before `self.screen` moves, so one stream closes before the other opens
         if let Some(listener) = self.listener() {
             listener.stop();
@@ -577,6 +585,7 @@ impl App {
             Screen::Tuner => Some(self.tuner.listener_mut()),
             Screen::PlayTheInterval => Some(self.play_the_interval.listener_mut()),
             Screen::WalkTheScale => self.walk_the_scale.listener_mut(),
+            Screen::NoteTrainer => self.note_trainer.listener_mut(),
             Screen::PositionFinder => Some(self.position_finder.listener_mut()),
             _ => None,
         }
@@ -587,6 +596,7 @@ impl App {
             Screen::Tuner => Some(self.tuner.listener()),
             Screen::PlayTheInterval => Some(self.play_the_interval.listener()),
             Screen::WalkTheScale => self.walk_the_scale.listener(),
+            Screen::NoteTrainer => self.note_trainer.listener(),
             Screen::PositionFinder => Some(self.position_finder.listener()),
             _ => None,
         }
@@ -614,14 +624,26 @@ impl App {
             }
             // fold and judge in one call, so there is only one reader of the reading
             Screen::PlayTheInterval => {
-                if let Some(heard) = self.play_the_interval.listener_mut().poll() {
-                    self.play_the_interval.apply(heard);
+                if let Some((heard, fit)) = self.play_the_interval.listener_mut().poll_fitted() {
+                    self.play_the_interval.apply(heard, fit);
                 }
             }
             Screen::WalkTheScale => {
-                let heard = self.walk_the_scale.listener_mut().and_then(Listener::poll);
-                if let Some(heard) = heard {
-                    self.walk_the_scale.apply(heard);
+                let heard = self
+                    .walk_the_scale
+                    .listener_mut()
+                    .and_then(Listener::poll_fitted);
+                if let Some((heard, fit)) = heard {
+                    self.walk_the_scale.apply(heard, fit);
+                }
+            }
+            Screen::NoteTrainer => {
+                let heard = self
+                    .note_trainer
+                    .listener_mut()
+                    .and_then(Listener::poll_fitted);
+                if let Some((heard, fit)) = heard {
+                    self.note_trainer.apply(heard, fit);
                 }
             }
             Screen::PositionFinder => {
@@ -638,27 +660,40 @@ impl App {
     fn hear(&mut self, heard: Heard) {
         match self.screen {
             Screen::Tuner => self.tuner.listener_mut().apply(heard),
-            Screen::WalkTheScale => {
-                if let Some(listener) = self.walk_the_scale.listener_mut() {
-                    listener.apply(heard);
-                }
-                self.walk_the_scale.apply(heard);
-            }
-            Screen::PlayTheInterval => {
-                self.play_the_interval.listener_mut().apply(heard);
-                self.play_the_interval.apply(heard);
-            }
-            Screen::PositionFinder => self.hear_fitted(heard, None),
+            Screen::WalkTheScale
+            | Screen::NoteTrainer
+            | Screen::PlayTheInterval
+            | Screen::PositionFinder => self.hear_fitted(heard, None),
             _ => {}
         }
     }
 
-    /// A released reading with its fit, handed to the Position Finder as its poll would.
+    /// A released reading with its fit, handed to the screen that places notes as its poll
+    /// would.
     #[cfg(test)]
     fn hear_fitted(&mut self, heard: Heard, fit: Option<Fit>) {
-        if self.screen == Screen::PositionFinder {
-            self.position_finder.listener_mut().apply(heard);
-            self.position_finder.apply(heard, fit);
+        match self.screen {
+            Screen::WalkTheScale => {
+                if let Some(listener) = self.walk_the_scale.listener_mut() {
+                    listener.apply(heard);
+                }
+                self.walk_the_scale.apply(heard, fit);
+            }
+            Screen::NoteTrainer => {
+                if let Some(listener) = self.note_trainer.listener_mut() {
+                    listener.apply(heard);
+                }
+                self.note_trainer.apply(heard, fit);
+            }
+            Screen::PlayTheInterval => {
+                self.play_the_interval.listener_mut().apply(heard);
+                self.play_the_interval.apply(heard, fit);
+            }
+            Screen::PositionFinder => {
+                self.position_finder.listener_mut().apply(heard);
+                self.position_finder.apply(heard, fit);
+            }
+            _ => {}
         }
     }
 
@@ -862,6 +897,7 @@ impl App {
                 }
             }
             FocusTarget::DrillDirectionToggle => self.note_trainer.toggle_direction(&mut self.rng),
+            FocusTarget::NoteAnswering => self.note_trainer.toggle_answering(&mut self.rng),
             FocusTarget::PoolToggle => self.note_trainer.toggle_pool(&mut self.rng),
             FocusTarget::NoteSpellingToggle => self.note_trainer.toggle_spelling(),
             FocusTarget::TunerSpellingToggle => self.tuner.toggle_spelling(),

@@ -15,45 +15,14 @@ use super::focus::FocusTarget;
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
 use super::neck::{DRILL_NECK, NECK_STRINGS, Position, string_name};
-use super::position::{Estimate, Group, estimate, groups, miss};
+use super::placement::{Declined, FITS_PER_NOTE, Placement, Placer, median};
+use super::position::{Estimate, Group, groups, miss};
 use super::style::{BODY, INK, MUTE, ROOT_MARKER, card_container, control_button, control_label};
 use super::{Message, note_label};
-
-/// How many accepted fits a note's coefficient is the median of. One window can still hold
-/// the attack, and lighting a place and then moving it is what the screen promises not to do.
-const FITS_PER_NOTE: usize = 3;
 
 /// Every string open and then at the twelfth fret, low E first.
 const CALIBRATION_STEPS: usize = 2 * NECK_STRINGS;
 const CALIBRATION_FRET: usize = 12;
-
-/// Why a note's place was not given, for the line under its name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Declined {
-    Uncalibrated,
-    /// Bent or slid into: the pitch of one fret with the inharmonicity of another.
-    Slid,
-    /// Every fit of it was refused.
-    Unreadable,
-}
-
-/// What the screen answered for one note, settled once.
-#[derive(Debug, Clone, PartialEq)]
-struct Outcome {
-    pitch: Pitch,
-    estimate: Estimate,
-    declined: Option<Declined>,
-}
-
-/// The note sounding now, gathering fits until it can be answered.
-#[derive(Debug, Clone)]
-struct Sounding {
-    pitch: Pitch,
-    slid: bool,
-    fits: Vec<f32>,
-    refused: bool,
-    settled: bool,
-}
 
 /// What the walk has to say about the last thing played.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,11 +132,11 @@ enum Mode {
 
 pub(super) struct PositionFinder {
     listener: Listener,
-    calibration: Option<Calibration>,
-    outcome: Option<Outcome>,
+    placer: Placer,
+    /// The last note placed, which stays up after it stops.
+    outcome: Option<Placement>,
     /// Whether `outcome` is the note sounding now rather than the last one heard.
     live: bool,
-    sounding: Option<Sounding>,
     drift: Drift,
     showing_groups: bool,
     mode: Mode,
@@ -177,10 +146,9 @@ impl PositionFinder {
     pub(super) fn new() -> PositionFinder {
         PositionFinder {
             listener: Listener::new().fitting(),
-            calibration: None,
+            placer: Placer::default(),
             outcome: None,
             live: false,
-            sounding: None,
             drift: Drift::default(),
             showing_groups: false,
             mode: Mode::Finding,
@@ -195,14 +163,22 @@ impl PositionFinder {
         &mut self.listener
     }
 
+    fn calibration(&self) -> Option<&Calibration> {
+        self.placer.calibration()
+    }
+
+    /// Takes a calibration in place of the one in use, forgetting what was heard against it.
+    fn calibrate_with(&mut self, calibration: Option<Calibration>) {
+        self.placer = Placer::new(calibration);
+        self.outcome = None;
+        self.live = false;
+        self.drift.clear();
+    }
+
     /// Opening the screen: the kept calibration is read again, and nothing heard before
     /// carries over.
     pub(super) fn enter(&mut self) {
-        self.calibration = calibration::kept();
-        self.outcome = None;
-        self.live = false;
-        self.sounding = None;
-        self.drift.clear();
+        self.calibrate_with(calibration::kept());
         self.mode = Mode::Finding;
     }
 
@@ -238,104 +214,28 @@ impl PositionFinder {
 
     fn finish_calibration(&mut self, calibration: Calibration) {
         calibration::keep(&calibration);
-        self.calibration = Some(calibration);
-        self.drift.clear();
-        self.outcome = None;
-        self.live = false;
-        self.sounding = None;
+        self.calibrate_with(Some(calibration));
         self.mode = Mode::Finding;
     }
 
+    /// A note with nothing to place it from leaves the previous answer up, so a pitch never
+    /// shows without its place.
     fn hear(&mut self, heard: Heard, fit: Option<Fit>) {
-        let Heard::Pitch(detection) = heard else {
-            self.settle();
-            self.sounding = None;
-            self.live = false;
-            return;
-        };
-
-        let Some((pitch, _)) = Pitch::nearest(detection.hz()) else {
-            return;
-        };
-
-        if self
-            .sounding
-            .as_ref()
-            .is_none_or(|sounding| sounding.pitch != pitch)
-        {
-            self.settle();
-            self.live = false;
-            self.sounding = Some(Sounding {
-                pitch,
-                slid: false,
-                fits: Vec::new(),
-                refused: false,
-                settled: false,
-            });
-        }
-
-        let uncalibrated = self.calibration.is_none();
-        let Some(sounding) = self.sounding.as_mut() else {
-            return;
-        };
-
-        sounding.slid |= detection.arrived_by_sliding();
-        match fit {
-            Some(Ok(measured)) => sounding.fits.push(measured.coefficient()),
-            Some(Err(_)) => sounding.refused = true,
-            None => {}
-        }
-
-        // a slide and a missing calibration decide the answer without any fit
-        let ready = sounding.slid || uncalibrated || sounding.fits.len() >= FITS_PER_NOTE;
-        if ready && !sounding.settled {
-            self.settle();
-            self.live = true;
-        }
-    }
-
-    /// Answers the sounding note, once, from whatever it has gathered. A note with nothing
-    /// to answer from leaves the previous answer up, so a pitch never shows without its place.
-    fn settle(&mut self) {
-        let Some(sounding) = self.sounding.as_mut() else {
-            return;
-        };
-
-        let decided = sounding.slid
-            || self.calibration.is_none()
-            || sounding.refused
-            || !sounding.fits.is_empty();
-        if sounding.settled || !decided {
-            return;
-        }
-        sounding.settled = true;
-
-        let pitch = sounding.pitch;
-        let (estimate, declined) = match (&self.calibration, median(&sounding.fits)) {
-            _ if sounding.slid => (Estimate::Unnamed, Some(Declined::Slid)),
-            (None, _) => (Estimate::Unnamed, Some(Declined::Uncalibrated)),
-            (Some(_), None) => (Estimate::Unnamed, Some(Declined::Unreadable)),
-            (Some(kept), Some(coefficient)) => {
-                if let Some(missed) = miss(pitch, coefficient, kept, &DRILL_NECK) {
-                    self.drift.record(missed);
-                }
-                (estimate(pitch, coefficient, Some(kept), &DRILL_NECK), None)
+        for placement in self.placer.hear(heard, fit) {
+            if let Placement::Placed {
+                pitch, coefficient, ..
+            } = placement
+                && let Some(missed) = self
+                    .calibration()
+                    .and_then(|kept| miss(pitch, coefficient, kept, &DRILL_NECK))
+            {
+                self.drift.record(missed);
             }
-        };
+            self.outcome = Some(placement);
+        }
 
-        self.outcome = Some(Outcome {
-            pitch,
-            estimate,
-            declined,
-        });
+        self.live = self.placer.has_placed_sounding();
     }
-}
-
-/// The middle reading, or `None` with nothing to take it from.
-fn median(values: &[f32]) -> Option<f32> {
-    let mut sorted = values.to_vec();
-    sorted.sort_unstable_by(f32::total_cmp);
-    sorted.get(sorted.len() / 2).copied()
 }
 
 fn pitch_name(pitch: Pitch) -> String {
@@ -380,23 +280,22 @@ fn markers(finder: &PositionFinder) -> Vec<NoteMarker> {
         }];
     }
 
-    let lit: Vec<Position> = match finder.outcome.as_ref().map(|outcome| &outcome.estimate) {
-        Some(Estimate::Named(position)) => vec![*position],
-        Some(Estimate::Narrowed(positions)) => positions.clone(),
-        Some(Estimate::Unnamed) | None => Vec::new(),
-    };
+    let lit = finder
+        .outcome
+        .as_ref()
+        .map_or(&[][..], Placement::positions);
 
     let lit_label = finder
         .outcome
         .as_ref()
-        .map(|outcome| label(outcome.pitch))
+        .map(|outcome| label(outcome.pitch()))
         .unwrap_or_default();
     let colour = if finder.live { INK } else { MUTE };
 
     let shown_groups = finder
         .showing_groups
         .then_some(())
-        .and(finder.calibration.as_ref());
+        .and(finder.calibration());
     let grouped = shown_groups
         .map(|kept| groups(kept, &DRILL_NECK))
         .unwrap_or_default();
@@ -430,17 +329,24 @@ fn answer_line(finder: &PositionFinder) -> String {
         return String::new();
     };
 
-    let answer = match (&outcome.estimate, outcome.declined) {
-        (Estimate::Named(position), _) => place_name(*position),
-        (Estimate::Narrowed(positions), _) => {
-            format!("{} — it cannot tell them apart", strings_phrase(positions))
-        }
-        (Estimate::Unnamed, Some(Declined::Uncalibrated)) => "not placed — no calibration".into(),
-        (Estimate::Unnamed, Some(Declined::Slid)) => "bent or slid into — not placed".into(),
-        (Estimate::Unnamed, Some(Declined::Unreadable)) => {
-            "not placed — the strings did not read cleanly".into()
-        }
-        (Estimate::Unnamed, None) => "could not tell which string".into(),
+    let answer = match outcome {
+        Placement::Placed {
+            estimate: Estimate::Named(position),
+            ..
+        } => place_name(*position),
+        Placement::Placed {
+            estimate: Estimate::Narrowed(positions),
+            ..
+        } => format!("{} — it cannot tell them apart", strings_phrase(positions)),
+        Placement::Placed {
+            estimate: Estimate::Unnamed,
+            ..
+        } => "could not tell which string".into(),
+        Placement::Declined { why, .. } => match why {
+            Declined::Uncalibrated => "not placed — no calibration".into(),
+            Declined::Slid => "bent or slid into — not placed".into(),
+            Declined::Unreadable => "not placed — the strings did not read cleanly".into(),
+        },
     };
 
     if finder.live {
@@ -463,7 +369,7 @@ fn status_line(finder: &PositionFinder) -> &'static str {
 
 /// What the screen has to say about its calibration, most pressing first.
 fn notices(finder: &PositionFinder) -> Vec<String> {
-    let Some(kept) = &finder.calibration else {
+    let Some(kept) = finder.calibration() else {
         return vec!["positions need a calibration — press c to capture one".into()];
     };
 
@@ -485,7 +391,7 @@ fn notices(finder: &PositionFinder) -> Vec<String> {
 
 /// What the groups key shows in words beside the neck.
 fn group_lines(finder: &PositionFinder) -> Vec<String> {
-    let Some(kept) = &finder.calibration else {
+    let Some(kept) = finder.calibration() else {
         return Vec::new();
     };
 
@@ -552,11 +458,11 @@ fn ui_finding(finder: &PositionFinder, focused: FocusTarget) -> Element<'static,
     let name: Element<'static, Message> = match &finder.outcome {
         Some(outcome) => row![
             note_label(
-                Spelling::Sharps.spell(outcome.pitch.pitch_class()),
+                Spelling::Sharps.spell(outcome.pitch().pitch_class()),
                 NAME_SIZE,
                 colour
             ),
-            text(outcome.pitch.octave().to_string())
+            text(outcome.pitch().octave().to_string())
                 .size(OCTAVE_SIZE)
                 .color(colour),
         ]
@@ -653,7 +559,7 @@ fn ui_walk(
         None => String::new(),
     };
 
-    let leaving = if finder.calibration.is_some() {
+    let leaving = if finder.calibration().is_some() {
         "Esc leaves the walk and keeps the calibration already kept"
     } else {
         "Esc leaves the walk without a calibration"
@@ -683,7 +589,7 @@ mod tests {
     use super::*;
     use crate::audio::detect::Detection;
     use crate::audio::inharmonicity::{Inharmonicity, Refusal};
-    use crate::ui::calibration::tests::spike_guitar;
+    use crate::ui::calibration::tests::{grouping_guitar, spike_guitar};
     use crate::ui::keys::{Fires, accelerators_for};
     use crate::ui::neck::STANDARD_TUNING;
     use crate::ui::tests::{press_into, press_named};
@@ -703,16 +609,10 @@ mod tests {
         STANDARD_TUNING[1].transpose(12).expect("A3")
     }
 
-    /// The spike guitar with its D string opening low enough that D@7 and G@2 share a group.
-    fn grouping_guitar() -> Calibration {
-        let open = [-12.2f32, -13.0, -13.6, -13.09, -14.57, -16.0].map(f32::exp2);
-        Calibration::from_readings(open.map(Some), open.map(|b| Some(4.0 * b))).expect("complete")
-    }
-
     fn finder_with(calibration: Option<Calibration>) -> App {
         let (mut app, _) = App::new();
         let _ = app.update(Message::Navigate(Screen::PositionFinder));
-        app.position_finder.calibration = calibration;
+        app.position_finder.calibrate_with(calibration);
         app
     }
 
@@ -738,10 +638,13 @@ mod tests {
     }
 
     fn outcome(app: &App) -> Option<(Pitch, Estimate)> {
-        app.position_finder
-            .outcome
-            .as_ref()
-            .map(|outcome| (outcome.pitch, outcome.estimate.clone()))
+        app.position_finder.outcome.as_ref().map(|outcome| {
+            let estimate = match outcome {
+                Placement::Placed { estimate, .. } => estimate.clone(),
+                Placement::Declined { .. } => Estimate::Unnamed,
+            };
+            (outcome.pitch(), estimate)
+        })
     }
 
     // ---- Reaching it ----
@@ -899,13 +802,13 @@ mod tests {
             let _ = app.update(Message::Fitted(bent, measured(g_at_7)));
         }
         assert_eq!(outcome(&app), Some((d_sharp_4, Estimate::Unnamed)));
-        assert_eq!(
-            app.position_finder
-                .outcome
-                .as_ref()
-                .and_then(|o| o.declined),
-            Some(Declined::Slid)
-        );
+        assert!(matches!(
+            app.position_finder.outcome,
+            Some(Placement::Declined {
+                why: Declined::Slid,
+                ..
+            })
+        ));
 
         let _ = app.update(Message::Heard(Heard::Silence));
         play(&mut app, d_sharp_4, g_at_8);
@@ -1082,7 +985,7 @@ mod tests {
             "the walk did not end"
         );
         assert_eq!(
-            app.position_finder.calibration,
+            app.position_finder.calibration().cloned(),
             Calibration::from_readings(open.map(Some), open.map(|b| Some(4.0 * b)))
         );
     }
@@ -1147,7 +1050,7 @@ mod tests {
             "Esc left the screen too"
         );
         assert!(!app.position_finder.is_calibrating());
-        assert_eq!(app.position_finder.calibration, Some(kept));
+        assert_eq!(app.position_finder.calibration(), Some(&kept));
 
         press_named(&mut app, Named::Escape);
         assert_eq!(app.screen, Screen::Home);

@@ -37,7 +37,11 @@ scale.
 drag the root, and the screen names one degree at a time and walks the scale in order,
 refusing to move on until that degree is found. Nothing is lit while it asks: a neck with every degree
 marked carries the answer to every element of the sequence. What has been found so far stays
-lit, labelled with the degree it satisfied, so the shape builds up as it is played.
+lit, labelled with the degree it satisfied, so the shape builds up as it is played. Played on
+a guitar calibrated on the Position Finder, each found degree is marked where it was played —
+the shape builds up where the hand made it. A note it cannot place is marked where its pitch
+sounds — the octave is heard even when the string is not — and only one pressed on the neck
+is marked at every position carrying its pitch class.
 
 A screen of its own rather than a mode of the Scale Trainer, for the reason Play the Interval
 is a screen rather than a mode of the Interval Trainer — a reference and a drill are two
@@ -81,6 +85,19 @@ the cursor to a position carrying it. A right answer lights green and a wrong on
 the next prompt follows a second later. `d` swaps the direction, `a` widens the pool from
 the seven naturals to all twelve pitch classes, `r` skips the current prompt.
 
+`m` swaps pressing for playing, as on Walk the Scale, and back. Playing asks the one thing a
+guitarist most needs from this drill and pitch alone cannot check — *where is this note on
+this string* — so its prompt names a note and a string, "C on the G string", and lights
+nothing, since the lit place would be the answer. Play it on the guitar: it is right when the
+note is the one asked for and the screen places it on that string, and wrong when it is
+another note or placed only on other strings, drawn where it was played either way. A note it
+cannot place — slid into, or one whose strings did not read cleanly — is neither: the screen
+says why and keeps the prompt, so it is played again rather than costing the streak. It places
+notes with the calibration kept on the Position Finder and asks nothing without one; it never
+asks for a note and string that calibration cannot tell from another place on the neck, nor
+for a string it flags. The streak survives the swap and the direction is kept for coming back.
+While playing, `d` opens the input list, as on every screen that listens.
+
 **Interval Trainer** — the same two directions, with nothing on screen named. A lit position
 stands in for the tonal center instead of a key, and no note name appears anywhere, so a
 prompt is answerable by measuring the distance between two marks and by nothing else. *Name
@@ -95,8 +112,13 @@ guitar instead of with a click. A lit position stands for the root, an interval 
 the screen waits to hear it. Plug in, play the note, and it is judged by the pitch class it
 sounds — so the interval is correct in any octave and at any position carrying it, which is the
 rule *Find it* already applies to a press. Nothing is named here either: what it heard is drawn
-as marks on every position carrying it, never as a note name, because a screen that printed
-"you played C♯" could be answered by hunting for a name rather than by measuring a distance.
+as marks where it was played, never as a note name, because a screen that printed "you played
+C♯" could be answered by hunting for a name rather than by measuring a distance. With a
+calibration kept on the Position Finder, an answer is marked at the position it was placed at,
+or at the few it cannot be told apart from; without one, or for a note slid into, it is marked
+at every position sounding that pitch — two or three places, since the octave is heard even
+when the string is not. Judging does not wait for that — the mark narrows a moment after the
+answer is judged.
 
 A note is judged once it settles, and once only. The detector refuses to release anything until
 it is both confident and stable, so a fumbled fret on the way to the answer produces nothing to
@@ -207,9 +229,12 @@ cleanly or that was the wrong note. `Esc` leaves the walk and keeps whatever was
 it; only a completed walk replaces it. Without a calibration the screen still names every pitch
 it hears and says what it lacks. It needs a clean signal, too: distortion turns the partial
 series into intermodulation and no gate can recover it. A bent or slid note is declined rather
-than placed, since it sounds the pitch of one fret with the inharmonicity of another. The drills
-still judge by pitch class — this screen answers rather than asks, and the drills adopt
-position judging, if ever, once it has been watched on real guitars for a while.
+than placed, since it sounds the pitch of one fret with the inharmonicity of another.
+
+The drills place notes by the same rule. Play the Interval and Walk the Scale still judge by
+pitch class and use a placement only to draw an answer where it was played; the Note
+Trainer's playing mode is the first, and so far the only, drill that judges by position, in a
+mode of its own so pressing is untouched by it.
 
 ## Installing
 
@@ -321,7 +346,9 @@ Per-screen accelerators are declared in one table alongside the label the `?` ov
 for them, so a new accelerator documents itself. A key not claimed by the current screen is
 inert there — and one claimed by two screens is free to mean different things on each: `d`
 swaps a trainer's direction, picks the library's degrees, and opens the input list on every
-screen that listens. `r` is the one key that means the same thing everywhere it is bound —
+screen that listens — including the Note Trainer while it is played, where a note and a string
+have no direction for it to swap. `m` swaps pressing and playing wherever a drill can be
+answered both ways, and the overlay says which is in force: `answer: press` or `answer: play`. `r` is the one key that means the same thing everywhere it is bound —
 replace what is on screen — including on Walk the Scale, where it picks another scale to
 drill. That screen's `[` and `]` step its root down and up from wherever the ring is standing;
 they are brackets rather than `← →` because the arrows belong to the ring, which still has
@@ -390,6 +417,8 @@ src/
                          the twelfth fret — instrument knowledge measured, not tabulated
     position.rs          which of the positions carrying a pitch was played, from its
                          inharmonicity and the calibration — named, narrowed, or not named
+    placement.rs         one sounding note followed until it can be placed, and placed
+                         once — the rule every screen that places notes shares
     drill.rs             which way a drill runs, and the twelve nameable distances both
                          interval drills ask for
     focus.rs             FocusTarget, each screen's focus grid, and how the ring steps
@@ -417,7 +446,7 @@ src/
     tuner.rs             the Tuner's spelling and correction, and the dial as a canvas — one
                          Dial places the arc the canvas draws and the name stacked over it
     position_finder.rs   the Position Finder's state machine and the screen that draws it —
-                         one answer per note, and the calibration walk as a mode of it
+                         its answer line, drift, and the calibration walk as a mode of it
 ```
 
 The split is load-bearing: `music/` never imports iced, and the UI holds no music theory of
@@ -442,9 +471,13 @@ major triad and a `C♯` minor one.
 
 The position estimator sits beside `neck.rs` in `ui/` because it chooses among the positions
 `Neck` already holds, and like the tuning it is instrument knowledge — neither theory, nor
-audio, nor any one screen's. `neck.rs`, `shapes.rs`, `calibration.rs` and `position.rs` are
-now four files of that kind under `ui/`; whether they earn an `instrument/` module of their own
-is a later question, deferred because moving them changes no behaviour.
+audio, nor any one screen's. `placement.rs` sits with it for the same reason, and because it
+needs `Pitch`, `Calibration` and `Neck`, none of which `audio/` may import: it is the part of
+placing a note that follows the note over time, taken out of the Position Finder once the
+drills placed notes too, so four screens place by one rule rather than by copies of it.
+`neck.rs`, `shapes.rs`, `calibration.rs`, `position.rs` and `placement.rs` are now five files of
+that kind under `ui/`; whether they earn an `instrument/` module of their own is a later
+question, deferred because moving them changes no behaviour.
 
 A calibration belongs to one guitar and one set of strings. A string's inharmonicity follows
 its core, its tension and its length, so a string change, a string retuned — dropping the low E

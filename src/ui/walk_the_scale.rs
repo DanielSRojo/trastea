@@ -8,16 +8,19 @@ use iced::mouse::ScrollDelta;
 use iced::widget::canvas::{self, Canvas};
 use iced::{Color, Element, Length, Padding, Point, Rectangle, Renderer, Size, Theme};
 
+use super::calibration;
 use super::focus::{Direction, FocusTarget, kind_row_spans};
 use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
 use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS, Position};
+use super::placement::{Placed, Placement, Placer};
 use super::style::{
     BODY, CONTROL_SIZE, DANGER, INK, LINK, MUSIC_FONT, MUTE, SUCCESS, card_container,
     control_button, control_label, control_shuffle,
 };
 use super::{Message, note_label, scale_kind_row};
 use crate::audio::detect::Heard;
+use crate::audio::inharmonicity::Fit;
 use crate::music::intervals::Interval;
 use crate::music::notes::PitchClass;
 use crate::music::pitch::Pitch;
@@ -39,6 +42,13 @@ enum Gate {
     Listening,
 }
 
+/// What an answer was judged, which says where its place is kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Judged {
+    Found,
+    Wrong,
+}
+
 /// One run of the drill, so nothing from it survives into the ended state.
 struct Run {
     /// How far through the sequence. The degrees are read from the scale, never stored.
@@ -56,6 +66,9 @@ struct Run {
     /// sequence, not per element.
     flashing: Option<PitchClass>,
     gate: Gate,
+    /// Where the sequence's found degrees were played, and the current element's wrong answers.
+    found_at: Placed,
+    wrong_at: Placed,
     /// Stored rather than a countdown, which would drift if a tick were missed.
     started: Instant,
     /// `None` for an untimed run.
@@ -87,6 +100,7 @@ pub(super) struct WalkTheScale {
     scroll: f32,
     /// The capture device, held only while a run is listening.
     listener: Option<Listener>,
+    placer: Placer,
     mode: Mode,
 }
 
@@ -109,6 +123,8 @@ impl Run {
             wrong: Vec::new(),
             flashing: None,
             gate,
+            found_at: Placed::default(),
+            wrong_at: Placed::default(),
             started: Instant::now(),
             duration,
             cursor: CURSOR_HOME,
@@ -133,6 +149,15 @@ impl Run {
         self.answered.clear();
         self.wrong.clear();
         self.flashing = None;
+        self.found_at.clear();
+        self.wrong_at.clear();
+    }
+
+    /// Narrows whichever answer this placement is the note of.
+    fn place(&mut self, placement: &Placement) {
+        if !self.found_at.place(placement) {
+            self.wrong_at.place(placement);
+        }
     }
 
     fn remaining(&self) -> Option<Duration> {
@@ -155,6 +180,7 @@ impl WalkTheScale {
             drag: None,
             scroll: 0.0,
             listener: None,
+            placer: Placer::default(),
             mode: Mode::Running(Run::new(None, Gate::Listening)),
         }
     }
@@ -301,8 +327,7 @@ impl WalkTheScale {
 
     fn begin(&mut self, duration: Option<Duration>) {
         if matches!(self.answering, Answering::Playing { .. }) {
-            let listener = self.listener.get_or_insert_with(Listener::new);
-            listener.listen();
+            self.claim();
         }
 
         // armed off the device so a run begun over a ringing string waits for it to stop
@@ -325,6 +350,13 @@ impl WalkTheScale {
         self.release();
     }
 
+    /// Opens the device, fitting what it hears so a played answer can be placed.
+    fn claim(&mut self) {
+        self.listener
+            .get_or_insert_with(|| Listener::new().fitting())
+            .listen();
+    }
+
     fn release(&mut self) {
         if let Some(listener) = self.listener.as_mut() {
             listener.stop();
@@ -332,10 +364,18 @@ impl WalkTheScale {
         self.listener = None;
     }
 
-    /// Opening the screen: the scale is kept, the run is fresh, the best streak persists.
+    /// Opening the screen: the scale is kept, the run is fresh, the best streak persists, and
+    /// the kept calibration is read again.
     pub(super) fn enter(&mut self) {
+        self.placer = Placer::new(calibration::kept());
         self.release();
         self.begin(None);
+    }
+
+    /// Stands in for the kept calibration, which no test may read.
+    #[cfg(test)]
+    pub(super) fn calibrate_with(&mut self, calibration: Option<calibration::Calibration>) {
+        self.placer = Placer::new(calibration);
     }
 
     /// The selection changed under a running sequence, so the sequence starts again.
@@ -352,10 +392,7 @@ impl WalkTheScale {
         };
 
         match self.answering {
-            Answering::Playing { .. } if self.is_running() => {
-                let listener = self.listener.get_or_insert_with(Listener::new);
-                listener.listen();
-            }
+            Answering::Playing { .. } if self.is_running() => self.claim(),
             _ => self.release(),
         }
     }
@@ -385,13 +422,24 @@ impl WalkTheScale {
         }
     }
 
-    /// A released reading, folded in and judged. A non-pitch reading only re-arms the gate,
-    /// so silence and a fumble cost nothing.
-    pub(super) fn apply(&mut self, heard: Heard) {
+    /// A released reading and its fit, folded in. Judging does not wait for the fit: a
+    /// placement only narrows where an answer already judged is drawn.
+    pub(super) fn apply(&mut self, heard: Heard, fit: Option<Fit>) {
         if !matches!(self.answering, Answering::Playing { .. }) {
             return;
         }
 
+        self.gate(heard);
+
+        for placement in self.placer.hear(heard, fit) {
+            if let Mode::Running(run) = &mut self.mode {
+                run.place(&placement);
+            }
+        }
+    }
+
+    /// A non-pitch reading only re-arms the gate, so silence and a fumble cost nothing.
+    fn gate(&mut self, heard: Heard) {
         let Heard::Pitch(detection) = heard else {
             if let Mode::Running(run) = &mut self.mode {
                 run.gate = Gate::Listening;
@@ -411,32 +459,36 @@ impl WalkTheScale {
         };
 
         // a held string confirms the same reading every poll; this makes one note one answer
+        let judged = self.judge(pitch.pitch_class());
         if let Mode::Running(run) = &mut self.mode {
             run.gate = Gate::Deaf;
+            match judged {
+                Some(Judged::Found) => run.found_at.expect(pitch),
+                Some(Judged::Wrong) => run.wrong_at.expect(pitch),
+                None => {}
+            }
         }
-        self.judge(pitch.pitch_class());
     }
 
     /// Scores a pitch class against the element being asked for. The octave is ignored, so a
     /// walked scale need not ascend.
     ///
     /// Not `drill::Score`: the streak counts clean sequences and the best outlives each run.
-    fn judge(&mut self, played: PitchClass) {
+    fn judge(&mut self, played: PitchClass) -> Option<Judged> {
         let scale = self.scale;
-        let streak = {
+        let (streak, judged) = {
             let Mode::Running(run) = &mut self.mode else {
-                return;
+                return None;
             };
             if run.flashing.is_some() {
-                return;
+                return None;
             }
-            let Some(target) = run.target(scale) else {
-                return;
-            };
+            let target = run.target(scale)?;
 
-            if played == target {
+            let judged = if played == target {
                 run.answered.push(played);
                 run.wrong.clear();
+                run.wrong_at.clear();
                 run.at += 1;
 
                 // only the completion holds the screen; elements advance as they are judged
@@ -447,18 +499,21 @@ impl WalkTheScale {
                     }
                     run.flashing = Some(played);
                 }
+                Judged::Found
             } else {
                 if !run.wrong.contains(&played) {
                     run.wrong.push(played);
                 }
                 run.clean = false;
                 run.streak = 0;
-            }
+                Judged::Wrong
+            };
 
-            run.streak
+            (run.streak, judged)
         };
 
         self.best_streak = self.best_streak.max(streak);
+        Some(judged)
     }
 
     /// Ends the flash and begins the next sequence. A no-op outside the flash, so a stale
@@ -933,15 +988,23 @@ fn listening_line(listener: &Listener) -> &'static str {
     }
 }
 
-/// What one pitch class is marked as while a drill is running, or `None` if it is not marked.
+/// What one position is marked as while a drill is running, or `None` if it is not marked. An
+/// answer is marked where it was played: where it was placed, where its pitch sounds if it
+/// was not, and wherever its pitch class falls only if it was pressed.
 ///
 /// Priority is flash, then wrong, then answered. Labels are degrees, never note names.
-fn mark_for(run: &Run, scale: Scale, pitch_class: PitchClass) -> Option<(Color, String)> {
-    if run.flashing == Some(pitch_class) {
+fn mark_for(run: &Run, scale: Scale, position: Position) -> Option<(Color, String)> {
+    let pitch_class = position.pitch_class()?;
+    let found_here = run.found_at.shows(pitch_class, position);
+
+    if run.flashing == Some(pitch_class) && found_here {
         return Some((SUCCESS, String::new()));
     }
-    if run.wrong.contains(&pitch_class) {
+    if run.wrong.contains(&pitch_class) && run.wrong_at.shows(pitch_class, position) {
         return Some((DANGER, String::new()));
+    }
+    if !found_here {
+        return None;
     }
 
     let index = run.answered.iter().position(|at| *at == pitch_class)?;
@@ -962,28 +1025,19 @@ fn drill_markers(drill: &WalkTheScale) -> Vec<NoteMarker> {
         return Vec::new();
     };
 
-    let mut markers = Vec::new();
-
-    for string in 0..NECK_STRINGS {
-        for fret in 0..=DRILL_NECK.frets() {
-            let Some(pitch_class) = DRILL_NECK.pitch_class_at(string, fret) else {
-                continue;
-            };
-            let Some((color, label)) = mark_for(run, scale, pitch_class) else {
-                continue;
-            };
-
-            markers.push(NoteMarker {
-                string,
-                fret,
+    (0..NECK_STRINGS)
+        .flat_map(|string| (0..=DRILL_NECK.frets()).map(move |fret| Position { string, fret }))
+        .filter_map(|position| {
+            let (color, label) = mark_for(run, scale, position)?;
+            Some(NoteMarker {
+                string: position.string,
+                fret: position.fret,
                 label,
                 color,
                 style: MarkerStyle::Filled,
-            });
-        }
-    }
-
-    markers
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -993,6 +1047,11 @@ mod tests {
     use super::*;
     use crate::audio::detect::Detection;
     use crate::ui::KIND_BUTTON_SIZE;
+    use crate::ui::calibration::Calibration;
+    use crate::ui::calibration::tests::spike_guitar;
+    use crate::ui::placement::FITS_PER_NOTE;
+    use crate::ui::placement::tests::{measured, pluck};
+    use crate::ui::position::{Estimate, estimate};
     // `as _` brings `Program` into scope for `update` without binding the name
     use iced::keyboard;
     use iced::widget::canvas::Program as _;
@@ -1779,6 +1838,127 @@ mod tests {
 
         assert_eq!(app.walk_the_scale.progress(), Some((0, 7)));
         assert!(drill_markers(&app.walk_the_scale).is_empty());
+    }
+
+    // ---- Where a played answer is drawn ----
+
+    /// A drill answered by playing, placing what it hears with `calibration`.
+    fn playing_app(kind: ScaleKind, calibration: Option<Calibration>) -> App {
+        let mut app = drill_app(0, kind);
+        app.walk_the_scale.calibrate_with(calibration);
+        let _ = app.update(Message::ToggleScaleAnswering);
+        app
+    }
+
+    /// A position carrying `pitch_class` that this calibration places alone.
+    fn named_position(guitar: &Calibration, pitch_class: PitchClass) -> Position {
+        super::super::neck::neck()
+            .into_iter()
+            .filter(|&(_, at)| at == pitch_class)
+            .map(|(position, _)| position)
+            .find(|&position| {
+                let (pitch, log2) = pluck(guitar, position);
+                estimate(pitch, log2.exp2(), Some(guitar), &DRILL_NECK) == Estimate::Named(position)
+            })
+            .expect("the spike guitar names some position of every pitch class")
+    }
+
+    /// A clean pluck of `position`, held long enough to be placed, and let go.
+    fn plucks(app: &mut App, guitar: &Calibration, position: Position) {
+        let (pitch, log2) = pluck(guitar, position);
+        for _ in 0..FITS_PER_NOTE {
+            let _ = app.update(Message::Fitted(
+                Heard::Pitch(Detection::synthesized(pitch.frequency(), 0.99)),
+                measured(log2),
+            ));
+        }
+        stops(app);
+    }
+
+    fn marked_in(app: &App, color: Color) -> Vec<(Position, String)> {
+        drill_markers(&app.walk_the_scale)
+            .into_iter()
+            .filter(|marker| marker.color == color)
+            .map(|marker| {
+                (
+                    Position {
+                        string: marker.string,
+                        fret: marker.fret,
+                    },
+                    marker.label,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_playing_device_fits_what_it_hears() {
+        let app = playing_app(ScaleKind::Ionian, None);
+        assert!(
+            app.walk_the_scale
+                .listener()
+                .is_some_and(Listener::is_fitting)
+        );
+    }
+
+    #[test]
+    fn a_walked_scale_builds_up_where_it_was_played() {
+        let guitar = spike_guitar();
+        let mut app = playing_app(ScaleKind::Ionian, Some(guitar.clone()));
+
+        let mut played = Vec::new();
+        for degree in &ScaleKind::Ionian.intervals()[..4] {
+            let position = named_position(&guitar, target(&app));
+            plucks(&mut app, &guitar, position);
+            played.push((position, degree.to_string()));
+        }
+
+        let mut marked = marked_in(&app, LINK);
+        marked.sort_by_key(|(position, _)| (position.string, position.fret));
+        played.sort_by_key(|(position, _)| (position.string, position.fret));
+        assert_eq!(marked, played);
+    }
+
+    #[test]
+    fn an_unplaced_degree_is_marked_where_its_pitch_sounds() {
+        let mut app = playing_app(ScaleKind::Ionian, None);
+        let note = sounding(target(&app));
+
+        plays(&mut app, note);
+
+        let marked: Vec<Position> = marked_in(&app, LINK)
+            .into_iter()
+            .map(|(position, _)| position)
+            .collect();
+        let sounds: Vec<Position> = DRILL_NECK.positions_of(note).collect();
+        assert_eq!(marked, sounds);
+    }
+
+    #[test]
+    fn a_placed_wrong_note_is_marked_where_it_was_played() {
+        let guitar = spike_guitar();
+        let mut app = playing_app(ScaleKind::Ionian, Some(guitar.clone()));
+        let position = named_position(&guitar, target(&app).transpose(1));
+
+        plucks(&mut app, &guitar, position);
+
+        assert_eq!(app.walk_the_scale.progress(), Some((0, 7)));
+        assert_eq!(marked_in(&app, DANGER), vec![(position, String::new())]);
+    }
+
+    #[test]
+    fn pressing_still_marks_everywhere_with_a_calibration_kept() {
+        let mut app = drill_app(0, ScaleKind::Ionian);
+        app.walk_the_scale.calibrate_with(Some(spike_guitar()));
+        let root = target(&app);
+
+        answers(&mut app);
+
+        let everywhere = super::super::neck::neck()
+            .into_iter()
+            .filter(|&(_, at)| at == root)
+            .count();
+        assert_eq!(marked_in(&app, LINK).len(), everywhere);
     }
 
     // ---- The device ----
