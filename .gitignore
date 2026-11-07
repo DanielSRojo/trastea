@@ -5,7 +5,7 @@ target/
 .direnv/
 .env*
 .omo/
-CLAUDE.md
+AGENTS.md
 DESIGN.md
 THIRD-PARTY-NOTICES.txt
 RELEASE_NOTES.md
