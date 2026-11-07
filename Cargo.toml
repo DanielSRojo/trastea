@@ -19,6 +19,15 @@ publish = ["crates-io"]
 cpal = "0.18.2"
 iced = { version = "0.14", features = ["canvas", "smol"] }
 
+# Unoptimised, the pitch detector alone needs more than a core to keep up with the tuner,
+# because iterator chains only become tight loops once they are inlined. The dependencies
+# compile once and are cached, so they take the higher level.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
 # The flags for the binary the release workflow packages, kept here rather than in
 # release.yaml for the same reason build-release's flags live in the justfile.
 #
