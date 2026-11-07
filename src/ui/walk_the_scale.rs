@@ -1005,7 +1005,7 @@ fn sequence_text(drill: &WalkTheScale) -> iced::widget::Row<'static, Message> {
 /// in the middle, which says one thing and says it large.
 fn drill_panel(drill: &WalkTheScale, focused: FocusTarget) -> Element<'static, Message> {
     use iced::Length;
-    use iced::widget::{Space, column, row, text};
+    use iced::widget::{column, row, text};
 
     // `r` is the first control here, as the shuffle is on the Scale Trainer and the CAGED
     // window: replace what is on screen, which here is the scale being drilled.
@@ -1070,6 +1070,9 @@ fn drill_panel(drill: &WalkTheScale, focused: FocusTarget) -> Element<'static, M
         ]
         .spacing(4)
         .into(),
+        // Shrink-wide rather than pushing the time to the far edge, so the column can centre
+        // it; the time is only pushed when there is one, so an untimed run is not off-centre
+        // by a spacing's width.
         None => row![
             text(format!(
                 "streak {} · best {}",
@@ -1078,18 +1081,21 @@ fn drill_panel(drill: &WalkTheScale, focused: FocusTarget) -> Element<'static, M
             ))
             .size(CONTROL_SIZE)
             .color(BODY),
-            Space::new().width(Length::Fill),
-            text(match drill.remaining() {
-                Some(left) => super::keys::duration_label(Some(left)),
-                None => String::new(),
-            })
-            .size(CONTROL_SIZE)
-            .color(MUTE),
         ]
+        .push(drill.remaining().map(|left| {
+            text(super::keys::duration_label(Some(left)))
+                .size(CONTROL_SIZE)
+                .color(MUTE)
+        }))
+        .spacing(16)
         .into(),
     };
 
-    let mut panel = column![controls, readout].spacing(12);
+    // Centred under the kind card, which is the column's one other occupant.
+    let mut panel = column![controls, readout]
+        .spacing(12)
+        .align_x(iced::Alignment::Center)
+        .width(Length::Fill);
 
     // Only while playing: a screen answered with a press has nothing to say about a device
     // it is not holding.
