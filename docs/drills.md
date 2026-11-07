@@ -1,0 +1,320 @@
+# Drills
+
+## The shared vocabulary in `drill`
+
+`drill::ANSWERS` is `Interval::ALL` with each distance that has two spellings collapsed into
+one entry: the tritone, and the two chord degrees the library added to `Interval`. It lives in
+`ui/` and not in `music/intervals.rs` because merging two spellings is a statement about what a
+fretboard can tell apart with no key established, and `music/` holds no instrument. It sits in
+`drill` rather than in either screen because both interval drills mean the same twelve
+distances by it.
+
+- One table feeds the grid, the focus rows and the prompt pool, the way `HOME_MENU` feeds the
+  menu's buttons, focus cells and digit keys. Twelve happens to divide evenly into
+  `ANSWER_ROW_WIDTH`, which the Interval Trainer's grid relies on and the played drill does
+  not; the table is a vocabulary, not a layout.
+- The twin is carried as an `Interval`, not as a written label, so a button's text cannot drift
+  from the interval it stands for.
+- `App` reaches the table through `drill::ANSWER_COUNT` and `drill::choice_for`, which keeps
+  `AnswerChoice` and its twin private. `choice_for` falls back to a twinless entry instead of
+  returning an `Option`, since neither drill can produce an interval outside the table and no
+  caller could act on the failure.
+- The test that the table holds twelve entries at twelve distinct distances is the twin
+  decision stated as an invariant. Judging compares semitones, so two buttons for one distance
+  would be two spellings of one answer with no way to say which the drill meant. Covering
+  `0..=11` exactly means no prompt can be left without a button.
+
+`drill::Drill` is transient: it tells `draw_prompt` which kind of prompt to make and is never
+stored. The stored direction is the `Prompt` variant.
+
+## Scoring in `drill::Score`
+
+`Score<A>` is generic over the answer rather than a trait the drills implement, because it
+never asks an answer anything except whether it is the same one. `Copy + PartialEq` is the
+whole contract, and each drill keeps its own judging. The three trainers score through it;
+Walk the Scale does not (see below).
+
+- `wrong` is a `Vec` because the learner may keep trying, and keeping only the last wrong
+  answer would un-mark the earlier ones.
+- `correct: Option<A>` is the paused state. One `Option` instead of a flag beside the answer
+  means "paused" cannot be set with nothing to mark.
+- `Default` is written by hand because `#[derive(Default)]` would demand `A: Default`, which no
+  answer type has and none needs.
+- `mark` ignores answers while one is lit. Those are the tail of the press that scored — a held
+  key, a double click — and counting them would inflate the streak or mark the learner wrong
+  for a question already answered. A right answer does not replace the prompt; it stands, lit,
+  until the drill's `advance` retires it.
+- A skip and a settings change zero the streak for the same reason a wrong answer does: a
+  streak that counted across them would not measure recall. The session best survives.
+
+## Prompts and answers in the two trainers
+
+In `note_trainer` and `interval_trainer` the `Prompt` variant *is* the direction; there is no
+separate `direction` field. Two encodings of one fact could disagree, and a `FindIt` prompt on
+screen beside a field saying `NameIt` is a state the view would render as nonsense. The
+directions also carry different payloads — *Name it* knows a position and wants a pitch
+class, *Find it* the reverse — which is the other half of why this is an enum and not a
+struct with a tag.
+
+- `interval_trainer::Prompt::NameIt` stores no interval. The two positions already imply it,
+  and a stored `MajorThird` beside two positions four semitones apart would be a state the view
+  renders as a lie; judging recomputes the distance from what is on the neck. `FindIt` has to
+  store its interval, since no target is drawn, and its target pitch class is derived from root
+  and interval for the same one-encoding reason.
+- The distance is measured upward and modulo the octave, so a target below the root still reads
+  as the interval it is above the root's pitch class. The drill asks about pitch classes, not
+  fret counts.
+- `Answer` mirrors `Prompt` because the two answer surfaces mirror the two directions. A
+  mismatched pair is a wiring bug the user cannot produce, and judging returns `false` rather
+  than panicking, so the symptom is "every answer is wrong" instead of a crash.
+- `Answer`, `Prompt` and `note_trainer::Pool` stay private: the `pub(super)` methods take a
+  pitch class or a position and build the `Answer` themselves. `answer_position` also moves the
+  cursor, because a press is a move-then-answer and two calls would leave the caller an
+  assignment to forget.
+- `is_flashing` returns a `bool` and not the `Option`, since the subscription only needs to know
+  the pause is on.
+
+The `Rng` is passed into `new` and everything that redraws, because it lives on `App` beside
+the drill and `&mut self.note_trainer` plus `&mut self.rng` are two mutable borrows of one
+`App`. A generator owned by the drill would mean a second seed. There is no `Default`: a
+constant first prompt would open every launch on the same note.
+
+## Drawing a prompt
+
+`draw_prompt` is a rejection loop that never repeats the prompt on screen. It terminates only
+because every pool holds at least two distinct prompts — seven naturals at the smallest — so
+its `debug_assert!` is load-bearing. A future "drill one note" setting, or one pinning the
+interval root to a single position, would turn it into a hang.
+
+The interval prompts (`interval_trainer` and `play_the_interval`) are generated forward: root
+and interval first, target derived. Lighting two positions and asking what lies between them
+could land on a distance the vocabulary has no button for. A unison excludes the root's own
+position and lights an octave elsewhere, since two rings on one dot show no distance to
+measure; every pitch class occurs at least six times within twelve frets, so something is
+always left.
+
+The Note Trainer's pool starts on the naturals because it is the smaller map and has to be
+automatic before the accidentals between its notes mean anything. All twelve answer buttons
+show under either pool: narrowing them would make a wrong answer unreachable, and a drill you
+cannot fail teaches nothing. The trainer keeps its own `Spelling`, separate from the Scale
+Trainer's, and it is the one purely cosmetic toggle — judging compares pitch classes, so it
+cannot change whether an answer is right.
+
+## The flash
+
+A correct answer holds the prompt for `ANSWER_FLASH`, one second, then the trainer's own tick
+calls `advance`.
+
+- `advance` is a no-op outside the flash, so a tick that crossed a skip or arrived after the
+  screen was left cannot retire a prompt the learner is still reading.
+- Each trainer has its own advance message because both can be mid-flash at once; the Note
+  Trainer's tick must not reach the Interval Trainer.
+- Every skip and toggle goes through `draw_prompt`, which clears both kinds of feedback, so
+  anything that retires a prompt also ends its flash.
+- The right answer joins the wrong marks instead of clearing them, so for the length of the
+  flash the learner sees what they tried and what it turned out to be.
+- The tick is the clock, not the user, so it does not dismiss the help overlay the way a
+  keypress would.
+
+## Marks on the neck
+
+Across the drills a fill means "you put this here" and a ring means a question. The prompt is
+an unfilled ring because a solid dot read as an answer already placed; guesses are filled in
+the danger or success colour. The Interval Trainer tells root from target by colour, the way
+red and green discs are already told apart, not by shape.
+
+- Prompt marks are unlabelled: in the Note Trainer a label would print the answer inside the
+  question, and in the interval drills it would name a note, which is the thing they exist to
+  avoid.
+- The right answer is drawn last, so on a fret pressed twice the green, the newer news, is on
+  top. In an answer button the same rule holds: right beats wrong should both ever apply.
+- Guesses from the other direction are filtered out rather than treated as errors; both lists
+  clear on every advance, so they never mix.
+- In *Find it* the root ring stays on the neck as the anchor while the cursor moves.
+- The header labels each control with the mode it is in, not what pressing it would do, so the
+  row is also the only status line saying which way the drill runs.
+- `interval_trainer::ANSWER_BUTTON_WIDTH` is 76 against the 50-pixel square `ROOT_BUTTON_SIZE`
+  because the twinned labels are twice as long, and columns that changed width with their
+  contents would stop reading as a grid.
+- The cursor stops at the neck's edges rather than wrapping, as the focus ring does at a grid's
+  edge. Up is towards the nut, since the nut is drawn at the top.
+
+## Play the Interval
+
+`play_the_interval::Prompt` is a struct, not an enum: there is one direction. A learner cannot
+name an interval by playing one, because what is played is the answer rather than a
+description of it. For the same reason the header has one control, skip.
+
+`Gate` is two states, not a timer. A debounce was the alternative, and its duration is a
+number nobody can pick: shorter than the ring of an open low E and the previous answer answers
+the next prompt, longer and a learner on a run waits.
+
+- A fresh prompt arms the gate off what the device is hearing now rather than setting it to
+  `Deaf` flat. Entering the screen in silence arms at once; a prompt drawn over a ringing answer
+  waits. A flat `Deaf` would behave the same in the running app, with the next poll 10 ms
+  away, and be a lie for those 10 ms.
+- `apply` is asymmetric: a reading that is not a pitch only re-arms. That is what makes
+  silence, a strum and a fumble on the way to the answer free.
+- During the flash, what is sounding is the tail of the note that scored and is ignored.
+- A held string confirms the same reading every 10 ms poll; fifty polls is half a second of
+  ringing and still one answer. Re-plucking the same note is a second answer, because the
+  silence between re-arms the gate. A slide needs no silence: `Tracker` releases a non-pitch
+  reading once the pitch moves past its tolerance.
+
+The octave is ignored on purpose. A root at the third fret of the low E asked for a minor
+seventh has no answer above it, inside one octave, that the hand can reach from where it sits,
+and an octave-exact rule would drill where the octave is — the Note Trainer's knowledge — on top
+of the interval. The cost is that an octave error is never caught, the trade *Find it* already
+makes.
+
+- A heard pitch class is marked at every position carrying it: those are all the places the
+  drill would have accepted.
+- The root's position wins any collision, so playing the root back, or answering a unison,
+  cannot repaint the anchor as an answer. The other positions of that pitch class still take
+  the answer's colour.
+- The live reading is drawn only when it was heard while the gate was deaf, since judging is
+  immediate; that is the previous answer ringing into a new prompt, drawn as heard and not as
+  scored.
+- The neck has no press handler, as on the CAGED window.
+- `heard_line` returns the words apart from the widgets so the tests can assert that the four
+  listener states read differently and that no string names a note — the claim the screen rests
+  on, and one a widget tree cannot be asked about.
+- The cents value has `+ 0.0` added because rounding keeps the sign it rounded away, and a hair
+  flat would print "-0 cents", which reads as a fault.
+
+Tests reach the screen with `navigate_to` rather than `open`, so no capture device is claimed
+and `Message::Heard` delivers readings directly. A test's reading is a `Pitch`, not a
+frequency, and its clarity is already above the gate: this is the released seam, and whether a
+strum gets that far is tested in `audio::detect` against real waveforms.
+
+## Walk the Scale
+
+`walk_the_scale::Gate` is a copy of `play_the_interval::Gate`, deliberately. The two agree
+today, and the Changes Trainer — walking a progression, where the chord under an element moves
+as well as the degree — is the screen that will show whether this is one abstraction or two.
+`shapes.rs` and `listener.rs` moved out when a second screen wanted them, not when a first
+author guessed, and this copy waits for the same signal. It names its twin so the extraction
+has both sites to read.
+
+The scoring does not use `drill::Score`: the streak counts clean sequences rather than
+answers, and the best streak outlives each run.
+
+### State
+
+- `Mode` has two states. Entering the screen starts a run, so there is no display state to fall
+  back to, and a finished run's summary is a state of its own rather than the absence of one,
+  which is why it is not an `Option<Run>`.
+- Everything belonging to one run sits in `Run`, behind one `Mode` variant, so nothing from the
+  last run survives into the summary.
+- `Run::at` is all that is stored about the sequence; the degrees are read from
+  `scale.kind().intervals()`. A stored sequence would be free to disagree with the scale, the
+  argument the CAGED window's derived cycle makes. `Run::degree` uses `get` because a kind
+  change could leave `at` past a shorter kind's degrees — Diminished has eight, Minor
+  Pentatonic five — and changing the root or kind restarts the sequence so that never shows.
+- A sequence is clean until it is answered wrongly, and only a clean one raises the streak.
+  Elements advance as they are judged; only the completion flashes, since a flash per degree
+  would cost seven seconds to walk a seven-note scale.
+- `neck_hidden` lives inside `Answering::Playing`. In pressing mode the neck is the answer
+  surface, so "pressing with the neck hidden" has no answer; putting the flag in the variant
+  makes it unwriteable, and swapping to `Pressing` drops the flag, which is the whole
+  implementation of "swapping back shows the neck".
+- `Answering` is a preference that survives leaving the drill. The `Listener` is not inside it:
+  a device living in `Playing` would stay open after the run ended. It is opened and released
+  explicitly, and leaving the screen ends the run and releases it, so a duration is never spent
+  behind a screen nobody is looking at.
+- On entry the scale is what it was left on — the CAGED window's rule, not the Scale Trainer's,
+  since a learner comes back to the scale they were working on — the run is fresh and the best
+  streak persists. The screen opens playing; the device is claimed by `enter`, not at
+  construction.
+- After a completion the next sequence's gate is armed off the device, because the completing
+  note is still ringing and would otherwise answer the first element.
+- A press on the neck is inert in playing mode, where it would be a second way to answer.
+
+### Timing
+
+`Run` stores when it started, not a countdown: a `remaining` decremented on a tick drifts, and
+lies outright if ticks are missed while the window is not drawn. The test jumps the start back
+three minutes in one step, where a countdown would still read 3:00. `DURATIONS` is none, 3, 5
+and 10 minutes, with `None` first so the first press of `t` steps into timing. An untimed run
+is `None` rather than a flag, so "no duration" and "runs until you leave" are one fact.
+Cycling the duration restarts the run, since a duration applied part-way would count from the
+old run's start.
+
+### The root gesture
+
+The root glyph is set by drag or wheel at `STEP_DISTANCE`, 40 pixels a semitone: wide enough
+that a slip on the glyph does not walk the scale, narrow enough that all twelve are one gesture
+(480 pixels back to the same root). Nothing in the geometry reads it.
+
+- The drag anchor is an `Option<f32>`, so "dragging from nowhere" cannot be written. Whole steps
+  are consumed off the anchor rather than measured from the press point, so the drill never
+  remembers the starting root and the pointer has to return to undo a step.
+- Wheel travel short of a step is kept between gestures, so a nudge and a nudge back cancel.
+  Without the remainder a trackpad, whose deltas arrive in pixels far short of a step, would
+  never move the root. The wheel is ignored mid-drag: one gesture owns the root at a time.
+- `ScrollDelta::Lines` comes from a notched wheel and is one step per notch; `Pixels` from a
+  trackpad or high-resolution wheel is worth what a drag pixel is worth, so the wheel needs no
+  constant of its own. Only the vertical axis counts, or a diagonal flick would step twice.
+- The surface is a canvas rather than a `mouse_area` because a canvas's `update` sees every
+  event wherever the pointer is, which lets a drag continue past the glyph. The press is the
+  one moment the pointer must be on the glyph; it carries the window's x, because
+  `position_in` is `None` as soon as the pointer leaves. A wheel event over the glyph is
+  captured whether or not it stepped, which keeps anything else from scrolling.
+- Whether a drag is under way is read off the drill, not kept in a widget `State`, so
+  `App::update` owns the gesture and the view cannot go stale.
+- The canvas draws nothing. The glyph is a widget stacked over it because a `Frame` cannot
+  measure text and the letter and accidental are in two fonts — the reason the Tuner's name
+  sits over its dial. `ROOT_ROW_HEIGHT` is fixed so the canvas, and its arrows, do not move
+  with the window.
+- The grab box is one struct read by the press, the wheel and the pointer shape. Its half-width
+  is fixed at 80 — half a letter and accidental at the 120-point `ROOT_DISPLAY_SIZE` — and not
+  measured per note, so the box does not change size under the hand mid-drag. It is clamped to
+  the canvas so it cannot claim presses on what is drawn beside it.
+
+### Layout figures
+
+- `NECK_COLUMN_WIDTH` is fixed at 340 because the fretboard canvas caps its own width off its
+  height to keep a twelve-fret neck's aspect ratio; a share of the window would leave the slack
+  beside the neck. The number is what the neck draws at this window height plus its padding.
+- `SELECTOR_COLUMN_WIDTH` is 470, the widest `kind_row_spans` row — `Spanish Gypsy`,
+  `Whole Tone` and `Diminished` — plus the card's padding. A narrower column drew that row past
+  the card's edge. `the_widest_kind_row_fits_the_selector_column` guards it with a deliberately
+  generous estimate of 0.58 em per glyph, since no font is available to measure in a test; the
+  Scale Trainer never hits this because its kind card is half the window wide.
+- The middle column has no card, since a card is a boundary and the root is the one thing the
+  screen is saying. Root and sequence are centred together with free space split two above to
+  three below, which puts the pair a tenth of the column's free height above its middle, nearer where the eye
+  reads the neck.
+- The sequence is the progress readout: found degrees lit, the current one bright, the rest
+  muted. A `2 of 5` beside it would be a second description of the same fact, and the drill
+  panel does not repeat the degree being asked for for the same reason.
+- `press`/`play` are words, so they are not set with `control_glyph`, which pins its content
+  to one glyph's width and centres anything longer off-centre. The remaining time is only
+  pushed to the edge when there is one, so an untimed run stays centred.
+- Marks take priority flash, then wrong, then answered, because the completing note is also the
+  last one answered. Answered marks are labelled with the degree, never the note.
+- The focus ring walks Back, the sixteen kinds in row order, then the controls. A two-band split
+  left from the old root-card layout walked the first three columns of every kind row before
+  coming back for the rest, which nothing but that test would notice.
+- Once a run has ended, `p` is the only key the screen claims; the settings keys have nothing
+  to report about a summary.
+
+## Scale Trainer
+
+`scale_trainer` is split from `mod.rs` on size alone — four hundred lines of view nothing else
+calls. It keeps no state: the `Scale` and `Notation` live on `App` because three screens read
+them and none of them can put the pair into a bad state.
+
+- The header shows the degree as `♭3`, not `1♭3`. The longer form was tried for reading less
+  like an instruction to flatten the third, and crowded a line shared by three buttons and the
+  root label.
+- `spell` stays the membership test in both notation modes, so the mode can change text and
+  never make a dot disappear; the degree lookup is an `expect` because
+  `degree_and_spell_agree_on_membership` in `scales.rs` proves a spelled pitch class has one.
+- Markers ask `DRILL_NECK` for its extent rather than pairing the tuning with a literal twelve
+  that agreed with it by coincidence.
+- The root is highlighted on `PitchClass` equality with `scale.root()`. `Note` equality would
+  colour the same today, but only while two invariants in `scales.rs` hold — distinct pitch
+  classes within one scale, and `notes()[0] == root_note()`.
+- With the ♯/♭ toggle gone, the check that a naming choice never moves a marker lives in
+  `naming_never_moves_the_scale` in `music/scales.rs`, over all 192 root-and-kind combinations.
