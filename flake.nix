@@ -60,6 +60,8 @@
               pkgs.just
               pkgs.pkg-config
               pkgs.cargo-deny
+              pkgs.cargo-about
+              pkgs.git-cliff
             ]
             # cpal's Linux backend, found by alsa-sys through pkg-config at build time
             ++ lib.optionals stdenv.hostPlatform.isLinux [ pkgs.alsa-lib ];
