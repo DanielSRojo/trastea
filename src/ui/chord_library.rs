@@ -16,7 +16,7 @@ use super::style::{
     SMUFL_CSYM_DIMINISHED, SMUFL_CSYM_HALF_DIMINISHED, SMUFL_CSYM_MAJOR_SEVENTH, SMUFL_SHARP,
     SUCCESS, card_container, focus_ring, ghost_button, hairline_rule,
 };
-use super::{Message, Notation, intervalic_text, notation_pills, note_label};
+use super::{Message, Notation, intervalic_text, notation_pills, note_label, note_label_in};
 
 /// The library's state: what has been typed and what is picked.
 pub(super) struct ChordLibrary {
@@ -482,15 +482,19 @@ fn root_header(root: PitchClass, after_a_group: bool) -> iced::Element<'static, 
     let sharp = Spelling::Sharps.spell(root);
     let flat = Spelling::Flats.spell(root);
 
+    let bold = iced::Font {
+        weight: iced::font::Weight::Bold,
+        ..iced::Font::DEFAULT
+    };
     let name = if sharp == flat {
-        row![note_label(sharp, 13, MUTE)]
+        row![note_label_in(sharp, HEADER_SIZE, MUTE, bold)]
     } else {
         row![
-            note_label(sharp, 13, MUTE),
-            text("/").size(13).color(HAIRLINE_INK),
-            note_label(flat, 13, MUTE),
+            note_label_in(sharp, HEADER_SIZE, MUTE, bold),
+            text("/").size(HEADER_SIZE).color(HAIRLINE_INK),
+            note_label_in(flat, HEADER_SIZE, MUTE, bold),
         ]
-        .spacing(5)
+        .spacing(6)
     };
 
     container(
@@ -514,6 +518,9 @@ fn root_header(root: PitchClass, after_a_group: bool) -> iced::Element<'static, 
 
 /// The magnifier in the search box, drawn because no embedded font carries `⌕`.
 struct SearchIcon;
+
+/// Above the 17px rows, so a root group reads as a heading rather than another chord.
+const HEADER_SIZE: f32 = 20.0;
 
 const SEARCH_ICON: f32 = 14.0;
 

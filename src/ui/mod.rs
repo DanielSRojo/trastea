@@ -1191,11 +1191,27 @@ fn note_label(
     size: impl Into<Pixels>,
     color: Color,
 ) -> iced::widget::Row<'static, Message> {
+    note_label_in(note, size, color, iced::Font::DEFAULT)
+}
+
+/// A `note_label` whose letter is set in `font`; the accidental stays in `MUSIC_FONT`.
+fn note_label_in(
+    note: Note,
+    size: impl Into<Pixels>,
+    color: Color,
+    font: iced::Font,
+) -> iced::widget::Row<'static, Message> {
     use iced::widget::{row, text};
 
     // resolved once because `impl Into<Pixels>` would be moved by the first `size`
     let size = size.into();
-    let label = row![text(note.letter.to_string()).size(size).color(color)].spacing(0);
+    let label = row![
+        text(note.letter.to_string())
+            .size(size)
+            .font(font)
+            .color(color)
+    ]
+    .spacing(0);
 
     match accidental_glyph(note.accidental) {
         Some(glyph) => label.push(
