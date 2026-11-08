@@ -492,6 +492,35 @@ const SHAPES: &[Shape] = &[
         base: ChordQuality::Dominant7,
         root_string: 2,
     },
+    Shape {
+        caged: CagedShape::C,
+        reduction: None,
+        strings: [
+            Muted,
+            Sounded {
+                offset: 3,
+                degree: 1,
+            },
+            Sounded {
+                offset: 2,
+                degree: 3,
+            },
+            Sounded {
+                offset: 3,
+                degree: 7,
+            },
+            Sounded {
+                offset: 1,
+                degree: 1,
+            },
+            Sounded {
+                offset: 0,
+                degree: 3,
+            },
+        ],
+        base: ChordQuality::Dominant7,
+        root_string: 1,
+    },
     // Reduced shapes: the six-string ones above only stay fingerable near the nut, and
     // dropping a string or two makes most alterations placeable again.
     Shape {
@@ -907,7 +936,22 @@ impl Shape {
         theirs.sort_unstable();
         ours.sort_unstable();
 
+        // A degree the shape leaves out can only stay out while `kind` keeps it unaltered:
+        // C7♯5 without its ♯5 is a C7.
         theirs == ours
+            && self
+                .omitted()
+                .all(|degree| self.shift(degree, kind) == Some(0))
+    }
+
+    /// The degrees of `base` that no string sounds.
+    fn omitted(&self) -> impl Iterator<Item = u8> {
+        self.base.degrees().filter(|&degree| {
+            !self
+                .strings
+                .iter()
+                .any(|role| matches!(*role, Sounded { degree: sounded, .. } if sounded == degree))
+        })
     }
 
     /// How far a degree moves when the shape's base quality becomes `kind`.
@@ -1045,6 +1089,7 @@ mod tests {
             "E shape",
             "A shape",
             "D shape",
+            "C shape",
             "E shape, four strings",
             "A shape, three strings",
             "E shape, four strings",
@@ -1104,25 +1149,49 @@ mod tests {
 
     #[test]
     fn every_shape_carries_the_degrees_its_base_quality_names() {
+        // The fifth is the one degree a guitarist leaves out; open C7 is `x 3 2 3 1 0`.
         for shape in SHAPES {
-            let mut sounded: Vec<u8> = shape
-                .strings
-                .iter()
-                .filter_map(|role| match role {
-                    Sounded { degree, .. } => Some(*degree),
-                    Muted => None,
-                })
-                .collect();
-            sounded.sort_unstable();
-            sounded.dedup();
+            let declared: Vec<u8> = shape.base.degrees().collect();
 
-            let mut declared: Vec<u8> = shape.base.degrees().collect();
-            declared.sort_unstable();
+            for role in shape.strings {
+                if let Sounded { degree, .. } = role {
+                    assert!(
+                        declared.contains(&degree),
+                        "{:?} on {:?} sounds degree {degree}, which it does not name",
+                        shape.caged,
+                        shape.base
+                    );
+                }
+            }
+
+            let omitted: Vec<u8> = shape.omitted().collect();
+            assert!(
+                omitted.iter().all(|&degree| degree == 5),
+                "{:?} on {:?} leaves out {omitted:?}",
+                shape.caged,
+                shape.base
+            );
+        }
+    }
+
+    #[test]
+    fn a_shape_without_its_fifth_refuses_a_quality_that_alters_it() {
+        let c_seventh = SHAPES
+            .iter()
+            .find(|shape| shape.omitted().next().is_some())
+            .expect("the C7 shape leaves out its fifth");
+
+        for &kind in ChordQuality::ALL {
+            let keeps_fifth = kind
+                .intervals()
+                .iter()
+                .any(|interval| interval.number() == 5 && interval.semitones() == 7);
+            let shares_degrees = c_seventh.base.degrees().eq(kind.degrees());
 
             assert_eq!(
-                sounded, declared,
-                "{:?} on {:?} covers the wrong degrees",
-                shape.caged, shape.base
+                c_seventh.carries(kind),
+                shares_degrees && keeps_fifth,
+                "{kind:?}"
             );
         }
     }
@@ -1258,6 +1327,12 @@ mod tests {
                 ChordQuality::Dominant7,
                 "D shape",
                 &[None, None, Some(0), Some(2), Some(1), Some(2)],
+            ),
+            (
+                0,
+                ChordQuality::Dominant7,
+                "C shape",
+                &[None, Some(3), Some(2), Some(3), Some(1), Some(0)],
             ),
         ];
 
@@ -1574,6 +1649,13 @@ mod tests {
                 "D shape",
                 [None, None, None, Some(1), Some(2), Some(3)],
             ),
+            // x 3 2 3 1 0 — C major's fingers, with the little finger added for the seventh.
+            (
+                0,
+                ChordQuality::Dominant7,
+                "C shape",
+                [None, Some(3), Some(2), Some(4), Some(1), None],
+            ),
         ];
 
         for &(root, kind, shape, expected) in cases {
@@ -1801,7 +1883,7 @@ mod tests {
             .map(|(root, kind)| voicings(Chord::new(root, kind), &DRILL_NECK).len())
             .sum();
 
-        assert_eq!(total, 670);
+        assert_eq!(total, 674);
     }
 
     #[test]

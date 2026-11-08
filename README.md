@@ -20,7 +20,7 @@ from the keyboard — the mouse is optional.
 > **Status: early.** The four drills, the scale trainer, the chord library, the CAGED
 > window and the tuner all work. The library's shape table is the part still worth growing: five CAGED shapes and a handful of
 > reduced ones cover the fifteen qualities, and every chord it offers is one a hand can hold.
-> The CAGED window is a major-triad screen for the same reason — E, A and D are the only letters
+> The CAGED window is a major-triad screen for the same reason — E, A, D and C are the only letters
 > the table carries for the sevenths.
 
 ## Screens
