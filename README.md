@@ -342,6 +342,7 @@ The focus ring is a 2-D grid rather than a flat tab order, so `↑ ↓ ← →` 
 | --- | --- |
 | `⇥` / `⇤` | next / previous |
 | `↑ ↓ ← →`, `k j h l` | move the focus ring |
+| `Ctrl+K` `Ctrl+J`, `Ctrl+P` `Ctrl+N` | `↑ ↓`, anywhere the arrows work — the search box included |
 | `Enter`, `Space` | activate |
 | `Esc`, `Backspace` | back |
 | `?` | list the keys that work on this screen |
@@ -383,13 +384,14 @@ list, which claims `↑ ↓` for the same reason while it is open, on whichever 
 Tab is the way out of the first three, and `Esc` closes the fourth without leaving the screen —
 the same thing it does to the library's search box.
 
-The Chord Library adds the one modal thing in the app: a search box, opened with `/` or
-`Ctrl+K` and focused already when the screen opens, since looking something up starts with
-typing. While it holds the keyboard almost everything is text — `j` types a `j`, `?` types a
-`?` — because `n`, `d`, `f` and `g` are all note names and a search has to be able to begin
-with one. `↑ ↓` still pick a chord while typing, so type-then-choose is one gesture; `Enter`
-finishes and hands the keyboard to the shapes, where `← →` walk them. `Esc` leaves the box
-without clearing it, and `gg` and `G` reach the ends of the list.
+The Chord Library adds the one modal thing in the app: a search box, opened with `/` and
+focused already when the screen opens, since looking something up starts with typing. While it
+holds the keyboard almost everything is text — `j` types a `j`, `?` types a `?` — because `n`,
+`d`, `f` and `g` are all note names and a search has to be able to begin with one. `↑ ↓` still
+pick a chord while typing, so type-then-choose is one gesture, and so do the `Ctrl` chords,
+which is what they are for: a hand on the home row can walk the list without leaving the box.
+`Enter` finishes and hands the keyboard to the shapes, where `← →` walk them. `Esc` leaves the
+box without clearing it, and `gg` and `G` reach the ends of the list.
 
 `/` and `?` are the same physical key, which is the whole arrangement: search, and shift for
 help.

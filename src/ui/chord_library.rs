@@ -265,7 +265,7 @@ impl ChordLibrary {
                 self.set_query(next.into_iter().collect());
                 self.caret = at + typed;
             }
-            // Declined, so `Ctrl+K` from inside the box still reaches the app.
+            // declined, so a command chord from inside the box still reaches the app
             _ => return KeyOutcome::Ignored,
         }
 
@@ -1104,12 +1104,11 @@ mod tests {
 
     #[test]
     fn a_command_modified_key_falls_through_to_the_app() {
-        // `Ctrl+K` has to keep working from inside the box, so the box must decline it.
         let mut library = ChordLibrary::new();
         library.focus_search();
 
         let outcome = library.handle_key(
-            &keyboard::Key::Character("k".into()),
+            &keyboard::Key::Character("r".into()),
             keyboard::Modifiers::CTRL,
         );
 

@@ -35,13 +35,25 @@ pub(super) fn translate_key(key: keyboard::Key, modifiers: keyboard::Modifiers) 
         keyboard::Key::Character("?") if !modifiers.intersects(COMMAND_MODIFIERS) => {
             Some(Message::ToggleHelp)
         }
-        // the one key carved out of `COMMAND_MODIFIERS`
-        keyboard::Key::Character("k") if modifiers.contains(keyboard::Modifiers::CTRL) => {
-            Some(Message::OpenSearch)
-        }
         keyboard::Key::Character(c) if !modifiers.intersects(COMMAND_MODIFIERS) => character_key(c),
         _ => None,
     }
+}
+
+/// Rewrites `Ctrl` with `k`/`p` into `↑` and with `j`/`n` into `↓`, so every widget that claims
+/// the arrows takes these as well — the search box included, where a bare `j` has to type.
+pub(super) fn ctrl_motion(
+    key: keyboard::Key,
+    modifiers: keyboard::Modifiers,
+) -> (keyboard::Key, keyboard::Modifiers) {
+    let arrow = match key.as_ref() {
+        _ if modifiers != keyboard::Modifiers::CTRL => return (key, modifiers),
+        keyboard::Key::Character("k" | "p") => Named::ArrowUp,
+        keyboard::Key::Character("j" | "n") => Named::ArrowDown,
+        _ => return (key, modifiers),
+    };
+
+    (keyboard::Key::Named(arrow), keyboard::Modifiers::empty())
 }
 
 /// Maps an unmodified character key onto a message.
@@ -518,10 +530,38 @@ mod tests {
             keyboard::Modifiers::ALT,
         ] {
             assert!(press("r", modifiers).is_none(), "{modifiers:?}+r");
-            // `k` named so the Ctrl exception cannot silently widen to the whole key
-            if modifiers != keyboard::Modifiers::CTRL {
-                assert!(press("k", modifiers).is_none(), "{modifiers:?}+k");
-            }
+        }
+    }
+
+    #[test]
+    fn ctrl_motions_become_the_vertical_arrows() {
+        let ctrl = keyboard::Modifiers::CTRL;
+        let up = keyboard::Key::Named(Named::ArrowUp);
+        let down = keyboard::Key::Named(Named::ArrowDown);
+
+        for (c, arrow) in [("k", &up), ("p", &up), ("j", &down), ("n", &down)] {
+            let (key, modifiers) = ctrl_motion(keyboard::Key::Character(c.into()), ctrl);
+            assert_eq!(
+                (&key, modifiers),
+                (arrow, keyboard::Modifiers::empty()),
+                "Ctrl+{c}"
+            );
+        }
+
+        // only Ctrl alone, and only those four letters
+        for (c, modifiers) in [
+            ("h", ctrl),
+            ("l", ctrl),
+            ("k", keyboard::Modifiers::ALT),
+            ("k", keyboard::Modifiers::empty()),
+            ("k", ctrl | keyboard::Modifiers::SHIFT),
+        ] {
+            let key = keyboard::Key::Character(c.into());
+            assert_eq!(
+                ctrl_motion(key.clone(), modifiers),
+                (key, modifiers),
+                "{modifiers:?}+{c}"
+            );
         }
     }
 

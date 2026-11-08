@@ -52,10 +52,12 @@ no-op once the prompt has moved on, and a tick only reaches the trainer its vari
 The audio messages are the exception and are routed by the screen on show. That is sound only
 because one screen can hold the device at a time (see the listener below).
 
-`Message::OpenSearch` is not an `Accelerate`: `Ctrl+K` is carved out of `COMMAND_MODIFIERS`
-by name, and both of its keys have to reach one target rather than whichever focusable a
-screen lists. The guard scoping it to the library is what keeps `Ctrl+K` on another screen
-from focusing a box nobody can see.
+`Ctrl` with `k`/`p` and `j`/`n` is rewritten into `↑`/`↓` at the top of `dispatch`, before
+the search box or `translate_key` sees the key, rather than mapped to `FocusUp`/`FocusDown`
+in `translate_key`. Every widget that claims the arrows does it on the raw key — the box
+walks chords on `ArrowDown` and types a bare `j` — so only a rewrite at the key level gives
+the chords the arrows' meaning everywhere at once. It cost `Ctrl+K` its old job of opening
+the search, which `/` already did.
 
 ### `update` ordering
 
@@ -259,9 +261,8 @@ changed".
 
 The `?` arm sits before the general character arm, whose guard would otherwise swallow it
 without the compiler warning about shadowing. It lives there rather than in a screen's table
-because it has to work on screens that declare no accelerators. `Ctrl+K` is the mirror case: the
-one character admitted under a command modifier, with `k` named so the exception cannot widen to
-the whole key.
+because it has to work on screens that declare no accelerators. No character survives a command
+modifier into `translate_key`; the `Ctrl` motions have already become arrows by then.
 
 `keys::Fires` has two cases, a widget and a message, because a widget target is what lets
 the table be checked against the focus grid; the check walks every notation, since the

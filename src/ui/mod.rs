@@ -246,7 +246,7 @@ pub enum Message {
     Key(keyboard::Key, keyboard::Modifiers),
     /// A character key that may be an accelerator on the current screen; `update` resolves it.
     Accelerate(char),
-    /// Puts the cursor in a screen's search box. Sent by `/` and by `Ctrl+K`.
+    /// Puts the cursor in the library's search box. Sent by a click on it; `/` goes through the accelerator table.
     OpenSearch,
     ToggleHelp,
     FocusNext,
@@ -308,6 +308,8 @@ impl App {
     fn dispatch(&mut self, message: Message) -> Task<Message> {
         // `translate_key` never yields another `Key`, so this recurses exactly once
         if let Message::Key(key, modifiers) = message {
+            let (key, modifiers) = keys::ctrl_motion(key, modifiers);
+
             // while the search box has focus almost every key is text, so it must not reach
             // `translate_key`; what the box declines falls through
             if self.screen == Screen::ChordLibrary && self.chord_library.search_focused() {
@@ -475,7 +477,7 @@ impl App {
             Message::SetCagedNotation(index) => self.activate(FocusTarget::CagedNotation(index)),
             Message::RerollCagedRoot => self.reroll_caged_root(),
             Message::Accelerate(c) => return self.accelerate(c),
-            // only the library has a box, and `Ctrl+K` arrives from any screen
+            // only the library has a box
             Message::OpenSearch => {
                 if self.screen == Screen::ChordLibrary {
                     self.chord_library.focus_search();
@@ -1805,19 +1807,17 @@ mod tests {
         }
     }
 
-    /// The one character key admitted while a command modifier is held.
     #[test]
-    fn ctrl_k_is_the_only_hole_in_the_command_modifiers() {
-        assert!(matches!(
-            press("k", keyboard::Modifiers::CTRL),
-            Some(Message::OpenSearch)
-        ));
-
-        // Neither neighbouring letter, and not `k` under the other two modifiers.
-        assert!(press("j", keyboard::Modifiers::CTRL).is_none());
-        assert!(press("l", keyboard::Modifiers::CTRL).is_none());
-        assert!(press("k", keyboard::Modifiers::ALT).is_none());
-        assert!(press("k", keyboard::Modifiers::LOGO).is_none());
+    fn no_character_key_survives_a_command_modifier() {
+        for c in ["k", "j", "p", "n", "/"] {
+            for modifiers in [
+                keyboard::Modifiers::CTRL,
+                keyboard::Modifiers::ALT,
+                keyboard::Modifiers::LOGO,
+            ] {
+                assert!(press(c, modifiers).is_none(), "{modifiers:?}+{c}");
+            }
+        }
     }
 
     #[test]
@@ -1996,22 +1996,52 @@ mod tests {
     }
 
     #[test]
-    fn slash_and_ctrl_k_both_open_the_search() {
-        for open in ["/", "k"] {
-            let mut app = app_on(Screen::ChordLibrary);
-            let modifiers = if open == "k" {
-                keyboard::Modifiers::CTRL
-            } else {
-                keyboard::Modifiers::empty()
-            };
+    fn slash_opens_the_search() {
+        let mut app = app_on(Screen::ChordLibrary);
+        press_into(&mut app, "/", keyboard::Modifiers::empty());
 
-            press_into(&mut app, open, modifiers);
+        assert!(app.chord_library.search_focused());
+        assert_eq!(app.chord_library.query(), "", "the slash typed itself");
+    }
 
-            assert!(
-                app.chord_library.search_focused(),
-                "{open:?} did not open the box"
+    #[test]
+    fn ctrl_motions_walk_the_chords_from_inside_the_box() {
+        let mut app = app_with_seed(0xc71);
+        app.open(Screen::ChordLibrary);
+        let top = app.chord_library.selected_row();
+
+        for (c, row) in [("j", top + 1), ("n", top + 2), ("k", top + 1), ("p", top)] {
+            press_into(&mut app, c, keyboard::Modifiers::CTRL);
+            assert_eq!(app.chord_library.selected_row(), row, "Ctrl+{c}");
+        }
+
+        assert!(app.chord_library.search_focused(), "a chord left the box");
+        assert_eq!(app.chord_library.query(), "", "a chord typed itself");
+    }
+
+    #[test]
+    fn ctrl_motions_move_the_ring_like_the_arrows() {
+        for (c, arrow) in [
+            ("j", Named::ArrowDown),
+            ("n", Named::ArrowDown),
+            ("k", Named::ArrowUp),
+            ("p", Named::ArrowUp),
+        ] {
+            let mut by_chord = app_with_seed(0x41);
+            let mut by_arrow = app_with_seed(0x41);
+            // start one row down, so up has somewhere to go
+            press_named(&mut by_chord, Named::ArrowDown);
+            press_named(&mut by_arrow, Named::ArrowDown);
+
+            let before = by_arrow.focused;
+            press_into(&mut by_chord, c, keyboard::Modifiers::CTRL);
+            press_named(&mut by_arrow, arrow);
+
+            assert_ne!(
+                by_arrow.focused, before,
+                "{arrow:?} went nowhere to compare"
             );
-            assert_eq!(app.chord_library.query(), "", "{open:?} typed itself");
+            assert_eq!(by_chord.focused, by_arrow.focused, "Ctrl+{c}");
         }
     }
 
@@ -2027,7 +2057,6 @@ mod tests {
 
             let before = snapshot(&app);
             press_into(&mut app, "/", keyboard::Modifiers::empty());
-            press_into(&mut app, "k", keyboard::Modifiers::CTRL);
 
             assert_eq!(
                 snapshot(&app),
