@@ -394,7 +394,7 @@ impl Query {
 
 /// A root and whatever follows it: a letter in either case, then accidentals taken
 /// greedily, so `Cb` is always C flat.
-fn parse_root(input: &str) -> Option<(PitchClass, &str)> {
+pub fn parse_root(input: &str) -> Option<(PitchClass, &str)> {
     let mut chars = input.chars();
     let letter = letter_from_char(chars.next()?)?;
     let mut rest = chars.as_str();

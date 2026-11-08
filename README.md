@@ -149,7 +149,8 @@ roots by fifteen qualities, grouped under the root they are built on; typing nar
 `f♯` keeps that root, `m7♭5` keeps that quality on every root, `f♯m7♭5` keeps the one chord.
 A typed symbol is parsed rather than fuzzy-matched, so `cm7` is a minor seventh and never the
 major seventh it happens to be a subsequence of; approximate matching is the fallback for
-input the grammar cannot read, where `cmj7` still finds `Cmaj7`.
+input the grammar cannot read, where `cmj7` still finds `Cmaj7` and a spoken name such as
+`dominant` or `c minor` finds the chords it names.
 
 Picking a chord shows its name said aloud, its notes, its degrees, and the ways to play it,
 drawn as chord diagrams — a four-fret window with a position label, muted and open strings

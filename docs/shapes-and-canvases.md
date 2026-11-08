@@ -123,6 +123,10 @@ Search:
 - Only a query the grammar cannot read falls back to subsequence matching, so `cmj7` still
   reaches `Cmaj7`. The hazard of subsequences — `cm7` scoring against `Cmaj7` — cannot arise,
   because `cm7` parses. Scoring never competes with an exact hit.
+- The fallback also matches the quality said aloud, so `dominant`, `suspended` and `c minor`
+  find their chords: a learner who knows the name before the notation is still searching. The
+  spoken name is matched without its root, so every root's `dominant` scores alike and the rows
+  keep library order; a leading root is split off with `chords::parse_root` and must agree.
 - `gg` is the one two-key gesture in the app; any other key clears the pending `g`, so a
   half-typed motion never changes what the next key does.
 - `Esc` backs out and leaves the ring where it was; `Enter` means the chord is found, so the ring

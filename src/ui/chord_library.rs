@@ -4,7 +4,7 @@
 use iced::keyboard;
 use iced::widget::canvas;
 
-use crate::music::chords::{Chord, ChordQuality, Query};
+use crate::music::chords::{Chord, ChordQuality, Query, parse_root};
 use crate::music::notes::{PitchClass, Spelling};
 
 use super::chord_diagram::{ChordDiagram, FEATURE, STRIP, StringMark, chord_diagram};
@@ -95,15 +95,16 @@ impl ChordLibrary {
         }
     }
 
-    /// Rows for a query the grammar could not read: the chords whose symbol contains the
-    /// query's characters in order, nearest match first. `cm7` parses, so it never reaches here.
+    /// Rows for a query the grammar could not read: the chords whose symbol or spoken name
+    /// contains the query's characters in order, nearest match first. `cm7` parses, so it
+    /// never reaches here.
     fn approximate_rows(&self) -> Vec<Chord> {
         let needle = self.query.trim().to_lowercase();
         // The library's own order is the last tiebreak.
         let mut scored: Vec<(usize, usize, usize, Chord)> = every_chord()
             .enumerate()
             .filter_map(|(order, chord)| {
-                let (start, span) = subsequence(&needle, &chord.to_string().to_lowercase())?;
+                let (start, span) = approximate_match(&needle, chord)?;
 
                 Some((start, span, order, chord))
             })
@@ -299,6 +300,25 @@ fn every_chord() -> impl Iterator<Item = Chord> {
             .iter()
             .map(move |&kind| Chord::new(root, kind))
     })
+}
+
+/// The best of `needle` against the chord's symbol, its quality said aloud, or its root
+/// followed by that quality, so `cmj7`, `dominant` and `c dominant` all land.
+fn approximate_match(needle: &str, chord: Chord) -> Option<(usize, usize)> {
+    // Matched without the root, so every root's `dominant` scores alike and keeps library order.
+    let spoken = chord.kind().spoken();
+    let rooted = parse_root(needle)
+        .filter(|&(root, _)| root == chord.root())
+        .and_then(|(_, rest)| subsequence(rest.trim_start(), spoken));
+
+    [
+        subsequence(needle, &chord.to_string().to_lowercase()),
+        subsequence(needle, spoken),
+        rooted,
+    ]
+    .into_iter()
+    .flatten()
+    .min()
 }
 
 /// Where `needle`'s characters appear in `haystack`, in order, as `(start, span)`.
@@ -923,6 +943,57 @@ mod tests {
         assert_eq!(
             library.rows().first().map(|c| c.to_string()),
             Some("Cmaj7".into())
+        );
+    }
+
+    #[test]
+    fn a_quality_said_aloud_finds_that_quality_on_every_root() {
+        let kinds = |query: &str| {
+            typed(query)
+                .rows()
+                .iter()
+                .map(|chord| chord.kind())
+                .collect::<Vec<_>>()
+        };
+
+        let dominant = kinds("dominant");
+        assert_eq!(dominant.len(), 12);
+        assert!(dominant.iter().all(|&kind| kind == ChordQuality::Dominant7));
+
+        let suspended = kinds("suspended");
+        assert_eq!(suspended.len(), 24);
+        assert!(
+            suspended
+                .iter()
+                .all(|&kind| matches!(kind, ChordQuality::Sus2 | ChordQuality::Sus4))
+        );
+
+        // `half-diminished` matches too, but further in, so it ranks after the plain ones.
+        let diminished = kinds("diminished");
+        assert_eq!(diminished.len(), 36);
+        assert!(
+            diminished[..24]
+                .iter()
+                .all(|&kind| matches!(kind, ChordQuality::Diminished | ChordQuality::Diminished7))
+        );
+        assert!(
+            diminished[24..]
+                .iter()
+                .all(|&kind| kind == ChordQuality::HalfDiminished7)
+        );
+
+        assert!(kinds("minor").contains(&ChordQuality::MinorMajor7));
+    }
+
+    #[test]
+    fn a_root_then_a_quality_said_aloud_finds_that_chord() {
+        assert_eq!(
+            typed("c dominant").selected_chord().map(|c| c.to_string()),
+            Some("C7".into())
+        );
+        assert_eq!(
+            typed("f# minor").selected_chord().map(|c| c.to_string()),
+            Some("F#m".into())
         );
     }
 
