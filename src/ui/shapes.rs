@@ -466,6 +466,32 @@ const SHAPES: &[Shape] = &[
         base: ChordQuality::Dominant7,
         root_string: 1,
     },
+    Shape {
+        caged: CagedShape::D,
+        reduction: None,
+        strings: [
+            Muted,
+            Muted,
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+            Sounded {
+                offset: 2,
+                degree: 5,
+            },
+            Sounded {
+                offset: 1,
+                degree: 7,
+            },
+            Sounded {
+                offset: 2,
+                degree: 3,
+            },
+        ],
+        base: ChordQuality::Dominant7,
+        root_string: 2,
+    },
     // Reduced shapes: the six-string ones above only stay fingerable near the nut, and
     // dropping a string or two makes most alterations placeable again.
     Shape {
@@ -1018,6 +1044,7 @@ mod tests {
             "A shape",
             "E shape",
             "A shape",
+            "D shape",
             "E shape, four strings",
             "A shape, three strings",
             "E shape, four strings",
@@ -1225,6 +1252,12 @@ mod tests {
                 ChordQuality::Dominant7,
                 "A shape",
                 &[None, Some(0), Some(2), Some(0), Some(2), Some(0)],
+            ),
+            (
+                2,
+                ChordQuality::Dominant7,
+                "D shape",
+                &[None, None, Some(0), Some(2), Some(1), Some(2)],
             ),
         ];
 
@@ -1526,6 +1559,21 @@ mod tests {
                 "D shape",
                 [None, None, None, Some(2), Some(3), Some(1)],
             ),
+            // x x 0 2 1 2 — index on the seventh, middle and ring either side of it.
+            (
+                2,
+                ChordQuality::Dominant7,
+                "D shape",
+                [None, None, None, Some(2), Some(1), Some(3)],
+            ),
+            // x x 0 2 2 2 — the seventh rises to meet its neighbours, so the fingers run in
+            // string order rather than keeping D7's index on the B string.
+            (
+                2,
+                ChordQuality::Major7,
+                "D shape",
+                [None, None, None, Some(1), Some(2), Some(3)],
+            ),
         ];
 
         for &(root, kind, shape, expected) in cases {
@@ -1753,7 +1801,7 @@ mod tests {
             .map(|(root, kind)| voicings(Chord::new(root, kind), &DRILL_NECK).len())
             .sum();
 
-        assert_eq!(total, 592);
+        assert_eq!(total, 670);
     }
 
     #[test]
