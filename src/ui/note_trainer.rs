@@ -10,6 +10,7 @@ use super::listener::{Listener, State, ui_device_line, ui_device_picker};
 use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS, Position, neck, string_name};
 use super::placement::{Declined, Placed, Placement, Placer};
 use super::position::{Group, groups};
+use super::root_stage::{root_column, selector_column, stage, still_root_glyph};
 use super::style::{
     BODY, CANVAS, CONTROL_SIZE, DANGER, INK, LINK, MUTE, SUCCESS, card_container,
     control_accidental, control_button, control_label, control_shuffle, correct_answer_button,
@@ -529,45 +530,68 @@ pub(super) fn ui_note_trainer(
         },
     };
 
-    let question: Element<'static, Message> = match trainer.prompt {
-        Prompt::NameIt { .. } => column![
-            text("What note is this?").size(32).color(INK),
-            text("Name the lit fret").size(16).color(MUTE),
-        ]
-        .spacing(6)
-        .into(),
-        Prompt::FindIt(pitch_class) => column![
-            row![
-                text("Find").size(26).color(BODY),
-                note_label(trainer.spelling.spell(pitch_class), 40, INK),
+    match trainer.prompt {
+        Prompt::NameIt { .. } => ui_pressing(
+            trainer,
+            neck,
+            column![
+                text("What note is this?").size(32).color(INK),
+                text("Name the lit fret").size(16).color(MUTE),
             ]
-            .spacing(12),
-            text("Press any fret that plays it").size(16).color(MUTE),
-        ]
-        .spacing(6)
-        .into(),
-        Prompt::PlayIt { pitch_class, .. } => column![
-            row![
-                text("Play").size(26).color(BODY),
-                note_label(trainer.spelling.spell(pitch_class), 40, INK),
+            .spacing(6),
+            Some(note_answer_card(trainer, focused)),
+            focused,
+        ),
+        Prompt::FindIt(pitch_class) => ui_pressing(
+            trainer,
+            neck,
+            column![
+                row![
+                    text("Find").size(26).color(BODY),
+                    note_label(trainer.spelling.spell(pitch_class), 40, INK),
+                ]
+                .spacing(12),
+                text("Press any fret that plays it").size(16).color(MUTE),
+            ]
+            .spacing(6),
+            None,
+            focused,
+        ),
+        Prompt::PlayIt { pitch_class, .. } => ui_playing(
+            trainer,
+            neck,
+            still_root_glyph(trainer.spelling.spell(pitch_class)),
+            column![
                 text(string_line(trainer)).size(26).color(BODY),
-            ]
-            .spacing(12)
-            .align_y(iced::Alignment::Center),
-            text("on that string, anywhere along it")
-                .size(16)
-                .color(MUTE),
-        ]
-        .spacing(6)
-        .into(),
-        Prompt::Unaskable => column![text("Nothing to ask").size(26).color(BODY)]
-            .spacing(6)
-            .into(),
-    };
+                text("anywhere along it").size(16).color(MUTE),
+            ],
+            focused,
+        ),
+        Prompt::Unaskable => ui_playing(
+            trainer,
+            neck,
+            Space::new().into(),
+            column![text("nothing to ask").size(26).color(BODY)],
+            focused,
+        ),
+    }
+}
 
-    let mut prompt_body = column![
+/// Pressing: the question and the controls in a card beside the neck, and the answers under it
+/// in *Name it*.
+fn ui_pressing(
+    trainer: &NoteTrainer,
+    neck: Fretboard<Message>,
+    question: impl Into<Element<'static, Message>>,
+    answers: Option<Element<'static, Message>>,
+    focused: FocusTarget,
+) -> Element<'static, Message> {
+    use iced::Length;
+    use iced::widget::{Space, column, container, row};
+
+    let prompt_body = column![
         row![
-            question,
+            question.into(),
             Space::new().width(Length::Fill),
             streak_readout(trainer.score.streak(), trainer.score.best()),
         ],
@@ -575,27 +599,16 @@ pub(super) fn ui_note_trainer(
     ]
     .spacing(20);
 
-    if let Some(listener) = trainer.listener() {
-        prompt_body = prompt_body
-            .push(text(notice_line(trainer)).size(14).color(BODY))
-            .push(Space::new().height(Length::Fill))
-            .push(text(listening_line(listener)).size(13).color(MUTE))
-            .push(ui_device_line(listener, focused));
-    }
-
     let prompt_card = container(prompt_body)
         .width(Length::Fill)
         .height(Length::Fixed(SUMMARY_CARD_HEIGHT))
         .padding(32)
         .style(card_container);
 
-    // Only *Name it* has a second card; elsewhere the neck or the guitar is the answer surface.
-    let details = match trainer.prompt {
-        Prompt::NameIt { .. } => column![prompt_card, note_answer_card(trainer, focused)],
-        Prompt::FindIt(_) | Prompt::PlayIt { .. } | Prompt::Unaskable => column![prompt_card],
-    }
-    .width(Length::Fill)
-    .spacing(16);
+    let details = column![prompt_card]
+        .push(answers)
+        .width(Length::Fill)
+        .spacing(16);
 
     container(row![fretboard(neck), details].spacing(32))
         .width(Length::Fill)
@@ -608,6 +621,47 @@ pub(super) fn ui_note_trainer(
         })
         .center_y(Length::Fill)
         .into()
+}
+
+/// Playing: the asked note stands as the big root with its string under it, as Play the
+/// Interval's root does, and the controls and the device sit at the right column's foot.
+fn ui_playing(
+    trainer: &NoteTrainer,
+    neck: Fretboard<Message>,
+    glyph: Element<'static, Message>,
+    question: iced::widget::Column<'static, Message>,
+    focused: FocusTarget,
+) -> Element<'static, Message> {
+    use iced::Length;
+    use iced::widget::{Space, column, container, text};
+
+    let below = question
+        .push(text(notice_line(trainer)).size(14).color(BODY))
+        .spacing(6)
+        .align_x(iced::Alignment::Center);
+
+    let centre = root_column(glyph, below, None);
+
+    let mut foot = column![
+        note_trainer_controls(trainer, focused),
+        streak_readout(trainer.score.streak(), trainer.score.best()),
+    ]
+    .spacing(12)
+    .align_x(iced::Alignment::Center);
+
+    if let Some(listener) = trainer.listener() {
+        foot = foot
+            .push(text(listening_line(listener)).size(13).color(MUTE))
+            .push(ui_device_line(listener, focused));
+    }
+
+    // the guitar is the answer surface, so nothing sits on the root's line in this column
+    let selector = selector_column(
+        Space::new(),
+        container(foot).width(Length::Fill).center_x(Length::Fill),
+    );
+
+    stage(fretboard(neck), centre, selector)
 }
 
 /// The string a playing prompt names, as a guitarist says it: "on the low E string".

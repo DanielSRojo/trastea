@@ -59,7 +59,7 @@ the focus ring to say something it has already said, so the drill spends neither
 Back, the sixteen kinds, and the run's controls. The drill was the first screen built this way;
 the Scale Trainer and the CAGED window followed, so all three share one stage — the neck, the
 root, and a card level with it — and the two interval drills stand on it too, with a root the
-drill chooses rather than one you drag.
+drill chooses rather than one you drag, as does the Note Trainer while it is played.
 
 Completing the last degree is what scores, and only that — a flash after every note would cost
 seven seconds to walk a seven-note scale. A degree is judged by the pitch class it sounds, so
@@ -99,7 +99,9 @@ cannot place — slid into, or one whose strings did not read cleanly — is nei
 says why and keeps the prompt, so it is played again rather than costing the streak. It places
 notes with the calibration kept on the Position Finder and asks nothing without one; it never
 asks for a note and string that calibration cannot tell from another place on the neck, nor
-for a string it flags. The streak survives the swap and the direction is kept for coming back.
+for a string it flags. The asked note stands in 120-point type with its string under it, as the
+root does on the interval drills. The streak survives the swap and the direction is kept for
+coming back.
 While playing, `d` opens the input list, as on every screen that listens.
 
 **Interval Trainer** — the same two directions, measured rather than named. A lit position
@@ -435,7 +437,7 @@ src/
     keys.rs              key translation, the per-screen accelerator table, and the `?`
                          overlay drawn from that table
     root_stage.rs        the big root: the glyph a drag or the wheel steps, the gesture
-                         behind it, and the neck–root–card stage five screens stand on
+                         behind it, and the neck–root–card stage six screens stand on
     scale_trainer.rs     the Scale Trainer: the lit neck, its root, and the kinds that choose it
     walk_the_scale.rs    the scale drill's state machine and the screen that draws it —
                          its own scale, its sequence, and the gate that decides when a

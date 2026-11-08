@@ -187,6 +187,11 @@ a playing prompt has none and the pressing one has to survive it.
 - A pool of one is not drawn from, since `draw_other_than` could never return.
 - The gate is a third copy of the played drills' `Gate`. The Changes Trainer is still the
   screen expected to settle whether it is one abstraction, and the copy names its twins.
+- Playing stands on `root_stage`, as Play the Interval does: the asked note in
+  `still_root_glyph`, its string and any notice under it, and the controls, streak and device at
+  the right column's foot. A named note is the question here rather than its answer, so it can
+  be set large the way *Name it* could never set it. Pressing keeps its cards: there the right
+  column holds twelve answers, and *Find it*'s note is small beside a neck that is the answer.
 - The header grows a fifth control, the answering toggle, and loses direction while playing.
   Answers played are kept as `Answer::Played(PitchClass)` in `Score` and their places in two
   `Placed`s — right and wrong apart, since the asked note can be wrong on one string and then
