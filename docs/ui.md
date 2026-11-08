@@ -219,6 +219,10 @@ list and the CAGED pills joined later on the same terms, so walking the list or 
 gesture rather than focus-then-activate. The pills are a column, so they claim up and down, and
 only while the cycle goes further: at either end the arrow moves the ring as anywhere else, to
 Back above or the controls below, which a claim at the ends would have made Tab-only.
+Left and right pick the quality outright, from the quality row or from a shape, so stepping
+through qualities while watching one shape never means climbing back to the row. From a shape
+the ring stays on the selection; the column has nothing beside it, so claiming them costs no
+stop. The qualities stop at either end rather than wrapping, as the cycle does.
 
 The Home menu claims all four, for a different reason. It is two columns — the categories, and
 beside them the entries of whichever category is open — and the open one is simply the one the

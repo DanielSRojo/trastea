@@ -148,6 +148,24 @@ impl Caged {
         moved
     }
 
+    /// Where the selected quality's pill sits in the row.
+    pub(super) fn quality_index(&self) -> usize {
+        // `quality` is always one of `QUALITIES`, so the default is never reached
+        QUALITIES
+            .iter()
+            .position(|&q| q == self.quality)
+            .unwrap_or_default()
+    }
+
+    /// Steps along `QUALITIES`, stopping at the ends as the cycle does.
+    pub(super) fn move_quality(&mut self, delta: isize) {
+        let next = self
+            .quality_index()
+            .saturating_add_signed(delta)
+            .min(QUALITIES.len() - 1);
+        self.select_quality(QUALITIES[next]);
+    }
+
     /// Called when the screen opens; the root and selection survive leaving it.
     pub(super) fn enter(&mut self) {
         self.clamp();

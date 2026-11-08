@@ -377,7 +377,7 @@ Four widgets claim the motion keys rather than letting them move the focus ring:
 neck, which walks its cursor — Walk the Scale's does too, while it is being answered by
 pressing; the CAGED window's shape column, where `↑ ↓` change the selection
 outright so walking the cycle is one gesture rather than focus-then-activate, and hand the ring
-on once the cycle ends; the library's
+on once the cycle ends, while `← →` there and on the quality row pick the quality the same way; the library's
 chord list, where `↑ ↓` walk the chords and `← →` the selected chord's voicings; and the input
 list, which claims `↑ ↓` for the same reason while it is open, on whichever screen opened it.
 Tab is the way out of the first three, and `Esc` closes the fourth without leaving the screen —

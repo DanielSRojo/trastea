@@ -851,6 +851,25 @@ impl App {
             return;
         }
 
+        // left and right pick the quality outright from the quality row or the shape column; a
+        // shape keeps the ring, since its column has nothing beside it to move to
+        if let FocusTarget::CagedQuality(_) | FocusTarget::CagedShape(_) = self.focused {
+            let delta = match direction {
+                Direction::Left => Some(-1),
+                Direction::Right => Some(1),
+                Direction::Up | Direction::Down => None,
+            };
+
+            if let Some(delta) = delta {
+                self.caged.move_quality(delta);
+                self.focused = match self.focused {
+                    FocusTarget::CagedShape(_) => FocusTarget::CagedShape(self.caged.selected()),
+                    _ => FocusTarget::CagedQuality(self.caged.quality_index()),
+                };
+                return;
+            }
+        }
+
         // the stacked pills claim up and down until the cycle ends, where the ring moves on
         if let FocusTarget::CagedShape(_) = self.focused {
             let delta = match direction {
@@ -1507,11 +1526,8 @@ mod tests {
         let _ = app.update(Message::SelectCagedQuality(ChordQuality::Minor7));
         assert_eq!(app.caged.quality(), ChordQuality::Minor7);
 
-        // the ring walks the row, and Enter picks what it sits on
-        app.focused = FocusTarget::CagedQuality(0);
-        press_named(&mut app, Named::ArrowRight);
-        press_named(&mut app, Named::ArrowRight);
-        assert_eq!(app.focused, FocusTarget::CagedQuality(2));
+        // Enter picks the pill the ring sits on
+        app.focused = FocusTarget::CagedQuality(2);
         press_named(&mut app, Named::Enter);
         assert_eq!(app.caged.quality(), CAGED_QUALITIES[2]);
 
@@ -1519,6 +1535,33 @@ mod tests {
         let _ = app.update(Message::GoBack);
         app.open(Screen::Caged);
         assert_eq!(app.caged.quality(), CAGED_QUALITIES[2]);
+    }
+
+    #[test]
+    fn left_and_right_pick_the_caged_quality_from_the_row_or_a_shape() {
+        let mut app = app_with_seed(0xca6);
+        app.open(Screen::Caged);
+        let last = CAGED_QUALITIES.len() - 1;
+
+        app.focused = FocusTarget::CagedQuality(0);
+        for (index, &quality) in CAGED_QUALITIES.iter().enumerate().skip(1) {
+            press_into(&mut app, "l", keyboard::Modifiers::empty());
+            assert_eq!(app.caged.quality(), quality);
+            assert_eq!(app.focused, FocusTarget::CagedQuality(index));
+        }
+
+        // the row stops at its end rather than wrapping, as the cycle does
+        press_named(&mut app, Named::ArrowRight);
+        assert_eq!(app.caged.quality(), CAGED_QUALITIES[last]);
+
+        // from a shape the quality moves and the ring stays on the selected shape
+        app.caged.select_shape(1);
+        app.focused = FocusTarget::CagedShape(1);
+        press_into(&mut app, "h", keyboard::Modifiers::empty());
+        assert_eq!(app.caged.quality(), CAGED_QUALITIES[last - 1]);
+        assert_eq!(app.focused, FocusTarget::CagedShape(app.caged.selected()));
+        press_named(&mut app, Named::ArrowLeft);
+        assert_eq!(app.caged.quality(), CAGED_QUALITIES[last - 2]);
     }
 
     #[test]
