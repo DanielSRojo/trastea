@@ -5,6 +5,7 @@ use std::ops::Range;
 
 use crate::music::notes::PitchClass;
 
+use super::caged::QUALITIES as CAGED_QUALITIES;
 use super::drill::{ANSWER_COUNT, Drill};
 use super::home::{self, Category};
 use super::{App, Screen};
@@ -65,6 +66,8 @@ pub enum FocusTarget {
     ScaleFretboard,
     /// One shape pill in the CAGED window. Claims up and down while the cycle goes further.
     CagedShape(usize),
+    /// One quality pill in the CAGED window, indexed into `caged::QUALITIES`.
+    CagedQuality(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,9 +132,15 @@ impl App {
             ],
             // drawn and hit-tested by this grid, but the arrows go through `home::step`
             Screen::Home => home::focus_grid(self.focused),
-            // the pills are stacked as the shapes sit up the neck, and the controls sit under them
+            // the qualities in a row above the shape pills, which are stacked as the shapes sit up
+            // the neck, and the controls under them
             Screen::Caged => {
-                let mut grid: Vec<FocusRow> = vec![vec![Some(FocusTarget::Back)]];
+                let mut grid: Vec<FocusRow> = vec![
+                    vec![Some(FocusTarget::Back)],
+                    (0..CAGED_QUALITIES.len())
+                        .map(|i| Some(FocusTarget::CagedQuality(i)))
+                        .collect(),
+                ];
                 grid.extend(
                     (0..self.caged.shapes().len()).map(|i| vec![Some(FocusTarget::CagedShape(i))]),
                 );

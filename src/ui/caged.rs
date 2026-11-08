@@ -1,4 +1,4 @@
-//! The CAGED window: one root's five shapes tiled along one neck, the root set on its glyph.
+//! The CAGED window: one chord's shapes tiled along one neck, the root set on its glyph.
 //! Holds no shape data; it shows `super::shapes::voicings` filtered and ordered.
 
 use crate::music::chords::{Chord, ChordQuality};
@@ -22,28 +22,38 @@ use super::{Message, Notation, marker_label, note_label};
 use crate::music::intervals::Interval;
 use crate::music::notes::Note;
 
-/// Major, because it is the only quality whose shapes form a cycle.
-const QUALITY: ChordQuality = ChordQuality::Major;
+/// The qualities offered, in pill order: the ones that keep at least three shapes at every root.
+pub(super) const QUALITIES: [ChordQuality; 5] = [
+    ChordQuality::Major,
+    ChordQuality::Minor,
+    ChordQuality::Dominant7,
+    ChordQuality::Major7,
+    ChordQuality::Minor7,
+];
 
 /// Named so the fit test budgets the shape card against what it draws.
 const SHAPE_PILL_SIZE: f32 = 16.0;
 const COUNT_SIZE: f32 = 14.0;
 const SHAPE_CARD_SPACING: f32 = 10.0;
+const QUALITY_PILL_PADDING_X: f32 = 12.0;
+const QUALITY_ROW_SPACING: f32 = 8.0;
 
-/// Which root is shown and which of its shapes is picked.
-/// The cycle is derived from `root` rather than cached, so it cannot disagree with it.
+/// Which chord is shown and which of its shapes is picked.
+/// The cycle is derived from the chord rather than cached, so it cannot disagree with it.
 pub(super) struct Caged {
     root: PitchClass,
+    /// Always one of `QUALITIES`.
+    quality: ChordQuality,
     /// An index into the derived cycle, whose length depends on the quality.
     selected: usize,
 }
 
-/// The shapes for `root`, one per letter at its lowest fret, ordered by fret.
+/// The shapes for `chord`, one per letter at its lowest fret, ordered by fret.
 /// Nothing here says C-A-G-E-D; the order falls out of the placement arithmetic.
-fn cycle(root: PitchClass) -> Vec<Voicing> {
+fn cycle(chord: Chord) -> Vec<Voicing> {
     let mut found: Vec<Voicing> = Vec::new();
 
-    for voicing in voicings(Chord::new(root, QUALITY), &CAGED_NECK) {
+    for voicing in voicings(chord, &CAGED_NECK) {
         if voicing.is_caged() && !found.iter().any(|seen| seen.caged() == voicing.caged()) {
             found.push(voicing);
         }
@@ -56,6 +66,7 @@ impl Caged {
     pub(super) fn new() -> Self {
         Self {
             root: PitchClass::new(0),
+            quality: ChordQuality::Major,
             selected: 0,
         }
     }
@@ -64,12 +75,20 @@ impl Caged {
         self.root
     }
 
+    pub(super) fn quality(&self) -> ChordQuality {
+        self.quality
+    }
+
+    pub(super) fn chord(&self) -> Chord {
+        Chord::new(self.root, self.quality)
+    }
+
     pub(super) fn selected(&self) -> usize {
         self.selected
     }
 
     pub(super) fn shapes(&self) -> Vec<Voicing> {
-        cycle(self.root)
+        cycle(self.chord())
     }
 
     pub(super) fn selected_shape(&self) -> Option<Voicing> {
@@ -80,6 +99,15 @@ impl Caged {
     pub(super) fn select_root(&mut self, root: PitchClass) {
         self.root = root;
         self.clamp();
+    }
+
+    /// Picks a quality, keeping the selection's place as a new root does. One not offered is
+    /// ignored, so the screen never shows a chord with no pill lit.
+    pub(super) fn select_quality(&mut self, quality: ChordQuality) {
+        if QUALITIES.contains(&quality) {
+            self.quality = quality;
+            self.clamp();
+        }
     }
 
     /// Steps the root `steps` semitones, wrapping in both directions.
@@ -187,7 +215,7 @@ fn claims(shapes: &[Voicing], selected: usize) -> Vec<Claimed> {
 
 /// The dots the neck draws for what is on show.
 fn caged_markers(caged: &Caged, notation: Notation) -> Vec<NoteMarker> {
-    let chord = Chord::new(caged.root(), QUALITY);
+    let chord = caged.chord();
     let shapes = caged.shapes();
 
     claims(&shapes, caged.selected())
@@ -209,7 +237,7 @@ fn caged_markers(caged: &Caged, notation: Notation) -> Vec<NoteMarker> {
                 fret: at.fret,
                 label: marker_label(notation, note, degree),
                 color: claim.color(),
-                // The root filled, the third and the fifth ringed.
+                // The root filled, every other degree ringed.
                 style: if degree.number() == 1 {
                     MarkerStyle::Filled
                 } else {
@@ -235,7 +263,7 @@ fn root_string(chord: Chord, shape: Voicing) -> Option<usize> {
 
 /// How the selected shape reads: which one it is, where it sits, and which string roots it.
 fn shape_caption(caged: &Caged) -> String {
-    let chord = Chord::new(caged.root(), QUALITY);
+    let chord = caged.chord();
 
     match caged.selected_shape() {
         Some(shape) => {
@@ -265,7 +293,15 @@ fn count_caption(shapes: &[Voicing]) -> String {
     }
 }
 
-/// What the line under the root spells the triad with: whatever the markers say.
+/// How a quality's pill reads: its suffix, and `maj` for the major triad, whose suffix is empty.
+fn quality_label(quality: ChordQuality) -> &'static str {
+    match quality.suffix() {
+        "" => "maj",
+        suffix => suffix,
+    }
+}
+
+/// What the line under the root spells the chord with: whatever the markers say.
 #[derive(Debug, PartialEq)]
 enum Spelled {
     Notes(Vec<Note>),
@@ -275,7 +311,7 @@ enum Spelled {
 fn spelled(chord: Chord, notation: Notation) -> Spelled {
     match notation {
         Notation::Notes => Spelled::Notes(chord.notes()),
-        // a triad has no fingering of its own here, so this never holds `Fingers`
+        // a chord has no fingering of its own here, so this never holds `Fingers`
         Notation::Intervals | Notation::Fingers => Spelled::Degrees(chord.degrees()),
     }
 }
@@ -289,7 +325,7 @@ pub(super) fn ui_caged(
     use iced::Length;
     use iced::widget::{button, column, container, row};
 
-    let chord = Chord::new(caged.root(), QUALITY);
+    let chord = caged.chord();
     let shapes = caged.shapes();
 
     // Display only: no press handler, so the fretboard's hit-testing goes unused.
@@ -299,7 +335,7 @@ pub(super) fn ui_caged(
         ..Fretboard::default()
     };
 
-    let triad: Element<'static, Message> = match spelled(chord, notation) {
+    let spelling: Element<'static, Message> = match spelled(chord, notation) {
         Spelled::Notes(notes) => notes
             .into_iter()
             .fold(row![].spacing(14), |tokens, note| {
@@ -309,16 +345,36 @@ pub(super) fn ui_caged(
         Spelled::Degrees(degrees) => formula(degrees, |_| INK).into(),
     };
 
-    let below = column![triad, text(shape_caption(caged)).size(16).color(BODY),]
+    let below = column![spelling, text(shape_caption(caged)).size(16).color(BODY),]
         .spacing(12)
         .align_x(iced::Alignment::Center);
 
     let centre = root_column(root_glyph(chord.root_note(), dragging), below, None);
 
+    let qualities = QUALITIES.iter().enumerate().fold(
+        row![].spacing(QUALITY_ROW_SPACING),
+        |pills, (index, &quality)| {
+            pills.push(focus_ring(
+                button(text(quality_label(quality)).size(SHAPE_PILL_SIZE))
+                    .padding([8.0, QUALITY_PILL_PADDING_X])
+                    .style(if quality == caged.quality() {
+                        selected_root_button
+                    } else {
+                        ghost_button
+                    })
+                    .on_press(Message::SelectCagedQuality(quality)),
+                focused == FocusTarget::CagedQuality(index),
+            ))
+        },
+    );
+
     // stacked in cycle order, so the pills run the way the shapes sit down the neck
     let pills = shapes.iter().enumerate().fold(
-        column![text(count_caption(&shapes)).size(COUNT_SIZE).color(MUTE)]
-            .spacing(SHAPE_CARD_SPACING),
+        column![
+            qualities,
+            text(count_caption(&shapes)).size(COUNT_SIZE).color(MUTE)
+        ]
+        .spacing(SHAPE_CARD_SPACING),
         |pills, (index, shape)| {
             let chosen = index == caged.selected();
 
@@ -378,8 +434,21 @@ mod tests {
 
     use crate::ui::shapes::CagedShape;
 
-    fn letters(root: PitchClass) -> Vec<CagedShape> {
-        cycle(root).into_iter().map(Voicing::caged).collect()
+    fn letters(chord: Chord) -> Vec<CagedShape> {
+        cycle(chord).into_iter().map(Voicing::caged).collect()
+    }
+
+    fn major(root: PitchClass) -> Chord {
+        Chord::new(root, ChordQuality::Major)
+    }
+
+    /// Every chord the screen can show.
+    fn offered() -> impl Iterator<Item = Chord> {
+        QUALITIES.into_iter().flat_map(|quality| {
+            PitchClass::ALL
+                .into_iter()
+                .map(move |root| Chord::new(root, quality))
+        })
     }
 
     /// Nothing in `cycle` names an order, and the one that comes out is C-A-G-E-D.
@@ -405,7 +474,7 @@ mod tests {
             .collect();
 
         for root in PitchClass::ALL {
-            let found = letters(root);
+            let found = letters(major(root));
 
             assert_eq!(found.len(), 5, "{root:?} yields {found:?}");
             assert!(rotations.contains(&found), "{root:?} yields {found:?}");
@@ -415,7 +484,7 @@ mod tests {
     #[test]
     fn the_rotation_starts_where_the_root_sits_lowest() {
         assert_eq!(
-            letters(PitchClass::new(0)),
+            letters(major(PitchClass::new(0))),
             [
                 CagedShape::C,
                 CagedShape::A,
@@ -424,26 +493,54 @@ mod tests {
                 CagedShape::D
             ]
         );
-        assert_eq!(letters(PitchClass::new(9))[0], CagedShape::A);
-        assert_eq!(letters(PitchClass::new(4))[0], CagedShape::E);
+        assert_eq!(letters(major(PitchClass::new(9)))[0], CagedShape::A);
+        assert_eq!(letters(major(PitchClass::new(4)))[0], CagedShape::E);
+    }
+
+    #[test]
+    fn every_offered_quality_keeps_three_shapes_at_every_root() {
+        for chord in offered() {
+            let found = letters(chord);
+
+            assert!(found.len() >= 3, "{chord} yields {found:?}");
+        }
+    }
+
+    #[test]
+    fn c7_is_the_one_seventh_that_completes_the_cycle() {
+        // The C shape's seventh is only fingerable at the nut, so only C itself reaches it.
+        let c7 = Chord::new(PitchClass::new(0), ChordQuality::Dominant7);
+        assert_eq!(
+            letters(c7),
+            [
+                CagedShape::C,
+                CagedShape::A,
+                CagedShape::G,
+                CagedShape::E,
+                CagedShape::D
+            ]
+        );
+
+        let d7 = Chord::new(PitchClass::new(2), ChordQuality::Dominant7);
+        assert!(!letters(d7).contains(&CagedShape::C), "{:?}", letters(d7));
     }
 
     #[test]
     fn the_cycle_is_ordered_up_the_neck_and_holds_one_placement_each() {
-        for root in PitchClass::ALL {
-            let shapes = cycle(root);
+        for chord in offered() {
+            let shapes = cycle(chord);
             let frets: Vec<u8> = shapes.iter().map(|v| v.index_fret()).collect();
 
             assert!(
                 frets.windows(2).all(|pair| pair[0] < pair[1]),
-                "{root:?} is out of order: {frets:?}"
+                "{chord} is out of order: {frets:?}"
             );
 
             // One window per letter, though `voicings` also offers octave repeats.
             let mut seen = shapes.iter().map(|v| v.caged()).collect::<Vec<_>>();
             let before = seen.len();
             seen.dedup();
-            assert_eq!(seen.len(), before, "{root:?} repeats a letter");
+            assert_eq!(seen.len(), before, "{chord} repeats a letter");
         }
     }
 
@@ -456,7 +553,7 @@ mod tests {
 
     fn c_major_on(shape: CagedShape) -> Caged {
         let mut caged = Caged::new();
-        let at = letters(caged.root())
+        let at = letters(caged.chord())
             .into_iter()
             .position(|found| found == shape)
             .expect("C major offers all five shapes");
@@ -523,10 +620,10 @@ mod tests {
     #[test]
     fn a_root_is_filled_and_every_other_degree_is_ringed() {
         for notation in [Notation::Notes, Notation::Intervals] {
-            for root in PitchClass::ALL {
+            for chord in offered() {
                 let mut caged = Caged::new();
-                caged.select_root(root);
-                let chord = Chord::new(root, QUALITY);
+                caged.select_root(chord.root());
+                caged.select_quality(chord.kind());
 
                 for (string, fret, _, style) in markers_at(&caged, notation) {
                     let degree = CAGED_NECK
@@ -540,7 +637,7 @@ mod tests {
                         MarkerStyle::Outlined
                     };
 
-                    assert_eq!(style, expected, "{root:?} {degree} at {string}:{fret}");
+                    assert_eq!(style, expected, "{chord} {degree} at {string}:{fret}");
                 }
             }
         }
@@ -654,30 +751,114 @@ mod tests {
 
     #[test]
     fn the_shape_card_fits_the_root_band() {
-        // iced's default line height, and a pill's `.padding([8, 14])` inside its 3px `focus_ring`
+        // iced's default line height, and a pill's 8px vertical padding inside its 3px
+        // `focus_ring`; the quality row is one more pill tall
         const TEXT_LINE_HEIGHT: f32 = 1.3;
         const BUTTON_PADDING_Y: f32 = 8.0;
         const FOCUS_RING_PADDING: f32 = 3.0;
 
-        for root in PitchClass::ALL {
-            let shapes = cycle(root).len() as f32;
-            let pill = SHAPE_PILL_SIZE * TEXT_LINE_HEIGHT
-                + 2.0 * BUTTON_PADDING_Y
-                + 2.0 * FOCUS_RING_PADDING;
-            let needed = COUNT_SIZE * TEXT_LINE_HEIGHT
+        let pill =
+            SHAPE_PILL_SIZE * TEXT_LINE_HEIGHT + 2.0 * BUTTON_PADDING_Y + 2.0 * FOCUS_RING_PADDING;
+
+        for chord in offered() {
+            let shapes = cycle(chord).len() as f32;
+            let needed = pill
+                + SHAPE_CARD_SPACING
+                + COUNT_SIZE * TEXT_LINE_HEIGHT
                 + shapes * (pill + SHAPE_CARD_SPACING)
                 + 2.0 * CARD_PADDING;
 
             assert!(
                 crate::ui::root_stage::ROOT_BAND_HEIGHT >= needed,
-                "{root:?}'s shape card needs {needed}, more than the root band holds"
+                "{chord}'s shape card needs {needed}, more than the root band holds"
             );
         }
     }
 
+    /// The glyph width is the kind card's generous estimate, since there is no font to measure.
+    #[test]
+    fn the_quality_row_fits_the_selector_column() {
+        const EM_PER_GLYPH: f32 = 0.58;
+        const FOCUS_RING_PADDING: f32 = 3.0;
+
+        let text: f32 = QUALITIES
+            .iter()
+            .map(|&quality| {
+                quality_label(quality).chars().count() as f32 * EM_PER_GLYPH * SHAPE_PILL_SIZE
+            })
+            .sum();
+        let pills = QUALITIES.len() as f32;
+        let needed = text
+            + pills * 2.0 * (QUALITY_PILL_PADDING_X + FOCUS_RING_PADDING)
+            + (pills - 1.0) * QUALITY_ROW_SPACING;
+        let available = crate::ui::root_stage::SELECTOR_COLUMN_WIDTH - 2.0 * CARD_PADDING;
+
+        assert!(
+            available >= needed,
+            "the quality row needs {needed} of the {available} the card leaves"
+        );
+    }
+
+    #[test]
+    fn every_quality_pill_has_a_label() {
+        let labels: Vec<&str> = QUALITIES.into_iter().map(quality_label).collect();
+
+        assert_eq!(labels, ["maj", "m", "7", "maj7", "m7"]);
+    }
+
+    #[test]
+    fn a_new_quality_keeps_the_selection_where_the_cycle_is_long_enough() {
+        let mut caged = Caged::new();
+        caged.select_root(PitchClass::new(2));
+        caged.select_shape(4);
+        assert_eq!(caged.selected(), 4);
+
+        // D minor holds three shapes, so the fifth pill has nowhere to stay.
+        caged.select_quality(ChordQuality::Minor);
+        assert_eq!(caged.shapes().len(), 3);
+        assert_eq!(caged.selected(), 2);
+
+        caged.select_shape(1);
+        caged.select_quality(ChordQuality::Dominant7);
+        assert_eq!(caged.quality(), ChordQuality::Dominant7);
+        assert_eq!(caged.selected(), 1);
+    }
+
+    #[test]
+    fn a_quality_the_screen_does_not_offer_is_ignored() {
+        let mut caged = Caged::new();
+        caged.select_quality(ChordQuality::Diminished7);
+
+        assert_eq!(caged.quality(), ChordQuality::Major);
+    }
+
+    #[test]
+    fn a_seventh_rings_its_seventh() {
+        let mut caged = Caged::new();
+        caged.select_quality(ChordQuality::Dominant7);
+        let chord = caged.chord();
+
+        let sevenths = markers_at(&caged, Notation::Intervals)
+            .into_iter()
+            .filter(|&(string, fret, _, _)| {
+                CAGED_NECK
+                    .pitch_class_at(string, fret)
+                    .and_then(|pitch_class| chord.degree(pitch_class))
+                    .is_some_and(|degree| degree.number() == 7)
+            })
+            .collect::<Vec<_>>();
+
+        assert!(!sevenths.is_empty());
+        assert!(
+            sevenths
+                .iter()
+                .all(|&(.., style)| style == MarkerStyle::Outlined)
+        );
+    }
+
     #[test]
     fn the_line_under_the_root_follows_the_notation() {
-        let chord = Chord::new(PitchClass::new(2), QUALITY);
+        let chord = major(PitchClass::new(2));
 
         let Spelled::Notes(notes) = spelled(chord, Notation::Notes) else {
             panic!("notes notation spelled degrees");

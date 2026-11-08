@@ -176,10 +176,21 @@ Smaller decisions:
 
 ## CAGED
 
-The window shows major triads only, because major is the only quality whose shapes form a
-cycle: minor yields three, the diminished and augmented triads one or two. The screen is written
-against a `Chord`, so admitting the others is a selector rather than a rewrite, and the count
-caption is computed for the same reason.
+The window offers `caged::QUALITIES` — major, minor, 7, maj7 and m7 — because those keep at
+least three shapes at every root on `CAGED_NECK`, and a test holds them to it. Major yields five
+everywhere; 7 and maj7 four, and five at C alone, because the C-shape seventh is fingerable only
+at the nut; minor and m7 three or four. The diminished, augmented, suspended and sixth chords
+place one or two, which the library already shows better as diagrams. The screen was written
+against a `Chord` from the start, so admitting these was a selector rather than a rewrite.
+
+- The quality is a `ChordQuality` checked against `QUALITIES` on the way in, rather than an enum
+  of its own: a second enum would restate five variants for one `contains`, and the message
+  carries the quality the way `SelectDrillKind` carries a scale kind. A quality not offered is
+  ignored, so no pill can be unlit while its chord is on show.
+- The quality pills sit in a row above the shape pills, inside the shape card, as the scale
+  screens' kinds sit above their controls. They read as chord-symbol suffixes, with `maj` for the
+  major triad because its suffix is empty; the root is already set large beside them.
+- A new quality keeps the selection's index, clamped, as a new root does.
 
 - The selection is an index into the derived cycle rather than a `CagedShape`, since the cycle's
   length depends on the quality and an index into what was found cannot name a shape that is
@@ -193,11 +204,11 @@ caption is computed for the same reason.
 - Colour carries the claim and `MarkerStyle` carries the root — the two dimensions
   `fretboard::NoteMarker` already had, which kept `fretboard.rs` and its round-trip test out of
   the change.
-- The root is filled and the third and fifth ringed, because finding the root inside a shape is
+- The root is filled and every other degree ringed, because finding the root inside a shape is
   the skill CAGED teaches and it should not wait on reading a label.
 - The neck is display-only; shapes are walked with the pills and the arrows. The pills are a
   column in cycle order, which is the order the shapes sit down the vertical neck beside it.
-- The root is set on the glyph shared with the Scale Trainer and Walk the Scale. The triad under
+- The root is set on the glyph shared with the Scale Trainer and Walk the Scale. The chord under
   it follows the notation the dots do, notes or degrees, so `i` changes everything that names
   a note at once; a formula fixed in degrees beside dots in note names read as a second setting.
 

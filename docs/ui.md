@@ -190,8 +190,9 @@ cards. The cost is that Right from Back walks nowhere; Tab and Down still reach 
   header row above it is five while pressing and four while playing, where direction is not
   drawn; a vertical move clamps to the nearer row's last widget as on any ragged grid. While
   playing a third row holds the input device, as on Walk the Scale.
-- The CAGED shapes are one per row, as many as the cycle holds, which may be fewer than five;
-  the two controls sit in a row under them.
+- The CAGED window's five qualities are one row, above the shapes; the shapes are one per row,
+  as many as the cycle holds, which may be fewer than five; the two controls sit in a row under
+  them. Up from the first shape lands on the first quality.
 - Walk the Scale's last row holds only the controls the run currently shows, so Tab never stops
   on nothing. No root screen has a root row: the root is set on the glyph.
 - Rows are built by zipping rather than indexing, so a narrower `ROOT_ROW_WIDTH` drops buttons

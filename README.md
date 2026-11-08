@@ -20,8 +20,6 @@ from the keyboard — the mouse is optional.
 > **Status: early.** The four drills, the scale trainer, the chord library, the CAGED
 > window and the tuner all work. The library's shape table is the part still worth growing: five CAGED shapes and a handful of
 > reduced ones cover the fifteen qualities, and every chord it offers is one a hand can hold.
-> The CAGED window is still a major-triad screen: the table carries a seventh on all five letters,
-> but the screen does not ask for one yet.
 
 ## Screens
 
@@ -170,15 +168,20 @@ only the strings whose degrees that quality alters — so an open E and a barred
 of the same entry. A placement that would fall below the nut, outrun a hand, run off the neck
 or need a fifth finger is refused rather than shown.
 
-**CAGED** — one root's five shapes tiled along a single neck, rather than five separate
-diagrams. Set a root on its glyph and the screen places every CAGED shape of its major triad, orders them
-up the neck, and draws them together: the selected one in blue, its neighbours grey, and the
+**CAGED** — one chord's shapes tiled along a single neck, rather than five separate
+diagrams. Set a root on its glyph, pick major, minor, 7, maj7 or m7 above the shapes, and the
+screen places every CAGED shape of that chord, orders them up the neck, and draws them together: the selected one in blue, its neighbours grey, and the
 frets where two of them meet in orange, because a note that belongs to both shapes is the
-thing worth seeing. Roots are filled and thirds and fifths ringed, since finding the root
-inside a shape is the skill the system is for. The triad is spelled under the root, in notes or
+thing worth seeing. Roots are filled and every other degree ringed, since finding the root
+inside a shape is the skill the system is for. The chord is spelled under the root, in notes or
 degrees as the dots are. `↑ ↓` walk the cycle down a column of shapes ordered as they sit on the
-neck, `[ ]` step the root, `r` picks another root and `i` switches the dots and the triad between
+neck, `[ ]` step the root, `r` picks another root and `i` switches the dots and the chord between
 note names and degrees.
+
+Those five qualities are the ones that keep at least three shapes at every root; the rest of the
+library's fifteen mostly place one or two, which is a voicing rather than a cycle. The sevenths
+are four shapes at every root but C: the C shape's seventh, open C7, needs the nut, so C7 is the
+one seventh that completes the cycle.
 
 Nothing here is tabulated. The screen asks the same placement arithmetic the chord library
 asks, keeps the lowest placement of each shape, and orders them by fret — and the letters come

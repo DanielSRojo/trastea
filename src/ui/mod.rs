@@ -23,7 +23,7 @@ mod tuner;
 mod walk_the_scale;
 use std::time::Duration;
 
-use caged::{Caged, ui_caged};
+use caged::{Caged, QUALITIES as CAGED_QUALITIES, ui_caged};
 use home::{Category, ui_home};
 use interval_trainer::{IntervalTrainer, ui_interval_trainer};
 use listener::Listener;
@@ -44,6 +44,7 @@ use crate::audio::detect::Heard;
 #[cfg(test)]
 use crate::audio::inharmonicity::Fit;
 use crate::music::{
+    chords::ChordQuality,
     intervals::Interval,
     notes::{Accidental, Note, PitchClass},
     scales::Scale,
@@ -165,6 +166,7 @@ pub enum Message {
     SetNotation(usize),
     /// Picks one shape of the CAGED cycle, by its place in the derived order.
     SelectCagedShape(usize),
+    SelectCagedQuality(ChordQuality),
     /// A different root for the CAGED window, without touching the Scale Trainer's scale.
     RerollCagedRoot,
     /// One tick of the audio poll, routed by `App::listener` to the screen holding the device.
@@ -446,6 +448,7 @@ impl App {
             Message::SelectVoicing(index) => self.chord_library.select_voicing(index),
             Message::SetNotation(index) => self.activate(FocusTarget::NotationChoice(index)),
             Message::SelectCagedShape(index) => self.caged.select_shape(index),
+            Message::SelectCagedQuality(quality) => self.caged.select_quality(quality),
             Message::RerollCagedRoot => self.reroll_caged_root(),
             Message::Accelerate(c) => return self.accelerate(c),
             // only the library has a box, and `Ctrl+K` arrives from any screen
@@ -889,6 +892,11 @@ impl App {
                 }
             }
             FocusTarget::CagedShape(index) => self.caged.select_shape(index),
+            FocusTarget::CagedQuality(index) => {
+                if let Some(&quality) = CAGED_QUALITIES.get(index) {
+                    self.caged.select_quality(quality);
+                }
+            }
             FocusTarget::RerollCagedRoot => self.reroll_caged_root(),
             FocusTarget::DrillKind(index) => {
                 if let Some(&kind) = ScaleKind::ALL.get(index) {
@@ -1437,9 +1445,31 @@ mod tests {
         press_named(&mut app, Named::ArrowUp);
         assert_eq!(
             app.focused,
-            FocusTarget::Back,
-            "up from the first shape stayed put"
+            FocusTarget::CagedQuality(0),
+            "up from the first shape missed the qualities above it"
         );
+    }
+
+    #[test]
+    fn a_caged_quality_is_picked_by_its_pill_or_its_message() {
+        let mut app = app_with_seed(0xca6);
+        app.open(Screen::Caged);
+
+        let _ = app.update(Message::SelectCagedQuality(ChordQuality::Minor7));
+        assert_eq!(app.caged.quality(), ChordQuality::Minor7);
+
+        // the ring walks the row, and Enter picks what it sits on
+        app.focused = FocusTarget::CagedQuality(0);
+        press_named(&mut app, Named::ArrowRight);
+        press_named(&mut app, Named::ArrowRight);
+        assert_eq!(app.focused, FocusTarget::CagedQuality(2));
+        press_named(&mut app, Named::Enter);
+        assert_eq!(app.caged.quality(), CAGED_QUALITIES[2]);
+
+        // the quality survives leaving the screen, as the root does
+        let _ = app.update(Message::GoBack);
+        app.open(Screen::Caged);
+        assert_eq!(app.caged.quality(), CAGED_QUALITIES[2]);
     }
 
     #[test]
