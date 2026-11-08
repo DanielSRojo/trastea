@@ -255,6 +255,10 @@ while being a filled dot that read as an answer already placed.
 - The cursor is a ring, not a dot — a second filled circle would read as a second lit note — and
   it is drawn last so no marker buries it. The caller owns it, since the app runs its own focus
   system and the canvas cannot know whether it is focused.
+- `lit_string` colours a whole string for a prompt that names a string but no fret, as the Note
+  Trainer's playing prompt does. It is a string rather than a marker on every fret of it, since
+  twelve dots would read as twelve answers. Widened to 2.5 px to match the outlined marker, so
+  it reads as the prompt in `LINK` rather than as a recoloured hairline.
 - `on_press` is a plain `fn` pointer: every caller passes a bare enum constructor, and a
   `Box<dyn Fn>` would buy capture nobody uses at the cost of an allocation and `Copy`.
   `Default` is hand-written because the derive would demand `Message: Default`.

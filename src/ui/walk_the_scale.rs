@@ -575,6 +575,7 @@ pub(super) fn ui_walk_the_scale(
             .then(|| drill.cursor())
             .flatten(),
         on_press: Some(Message::ChooseScalePosition),
+        ..Fretboard::default()
     };
 
     let neck: Element<'static, Message> = if drill.neck_hidden() {

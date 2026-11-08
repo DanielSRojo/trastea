@@ -250,6 +250,7 @@ pub(super) fn ui_interval_trainer(
                 .collect(),
             cursor: Some(trainer.cursor),
             on_press: Some(Message::ChooseIntervalPosition),
+            ..Fretboard::default()
         },
     };
 

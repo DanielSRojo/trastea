@@ -5,7 +5,7 @@ use iced::{Color, Element, Padding};
 use super::calibration;
 use super::drill::{Drill, Score};
 use super::focus::{ANSWER_ROW_WIDTH, Direction, FocusTarget};
-use super::fretboard::{Fretboard, MarkerStyle, NoteMarker, fretboard};
+use super::fretboard::{Fretboard, LitString, MarkerStyle, NoteMarker, fretboard};
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
 use super::neck::{CURSOR_HOME, DRILL_NECK, NECK_STRINGS, Position, neck, string_name};
 use super::placement::{Declined, Placed, Placement, Placer};
@@ -521,11 +521,13 @@ pub(super) fn ui_note_trainer(
             highlighted: position_markers(trainer),
             cursor: Some(trainer.cursor),
             on_press: Some(Message::ChooseNotePosition),
+            ..Fretboard::default()
         },
-        // Nothing lit until it is answered, since the lit place would be the answer.
+        // No fret lit until it is answered, since the lit place would be the answer.
         Prompt::PlayIt { .. } | Prompt::Unaskable => Fretboard {
             num_frets: DRILL_NECK.frets(),
             highlighted: played_markers(trainer),
+            lit_string: asked_string(trainer),
             ..Fretboard::default()
         },
     };
@@ -726,6 +728,17 @@ fn prompt_marker(trainer: &NoteTrainer) -> Vec<NoteMarker> {
             style: MarkerStyle::Outlined,
         }],
         Prompt::FindIt(_) | Prompt::PlayIt { .. } | Prompt::Unaskable => Vec::new(),
+    }
+}
+
+/// The string a playing prompt names, in the prompt's colour.
+fn asked_string(trainer: &NoteTrainer) -> Option<LitString> {
+    match trainer.prompt {
+        Prompt::PlayIt { string, .. } => Some(LitString {
+            string,
+            color: LINK,
+        }),
+        Prompt::NameIt { .. } | Prompt::FindIt(_) | Prompt::Unaskable => None,
     }
 }
 
@@ -1951,6 +1964,23 @@ mod tests {
         assert_eq!(app.note_trainer.answering(), Answering::Playing);
         assert!(matches!(app.note_trainer.prompt, Prompt::PlayIt { .. }));
         assert_eq!(app.note_trainer.score.streak(), 2);
+    }
+
+    #[test]
+    fn playing_lights_the_asked_string_and_pressing_lights_none() {
+        let mut app = playing_app(0x91d, Some(spike_guitar()));
+        for _ in 0..20 {
+            let _ = app.update(Message::SkipPrompt);
+            let Prompt::PlayIt { string, .. } = app.note_trainer.prompt else {
+                panic!("{:?} is not a playing prompt", app.note_trainer.prompt);
+            };
+
+            let lit = asked_string(&app.note_trainer).expect("a playing prompt lights its string");
+            assert_eq!((lit.string, lit.color), (string, LINK));
+        }
+
+        let _ = app.update(Message::ToggleNoteAnswering);
+        assert!(asked_string(&app.note_trainer).is_none());
     }
 
     #[test]

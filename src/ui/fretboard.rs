@@ -144,10 +144,17 @@ pub struct NoteMarker {
     pub style: MarkerStyle,
 }
 
+/// A whole string drawn in a colour of its own, for a prompt that names a string but no fret.
+pub struct LitString {
+    pub string: usize, // 0 = low E, 5 = high e
+    pub color: Color,
+}
+
 /// The neck, and optionally a way to press it.
 pub struct Fretboard<Message> {
     pub num_frets: usize,
     pub highlighted: Vec<NoteMarker>,
+    pub lit_string: Option<LitString>,
     /// Where the keyboard cursor sits, drawn as a ring. Owned by the caller, which runs the focus system.
     pub cursor: Option<Position>,
     /// What a press on `(string, fret)` means, or `None` for a display-only neck.
@@ -160,6 +167,7 @@ impl<Message> Default for Fretboard<Message> {
         Self {
             num_frets: 12,
             highlighted: Vec::new(),
+            lit_string: None,
             cursor: None,
             on_press: None,
         }
@@ -215,9 +223,15 @@ impl<Message> canvas::Program<Message> for Fretboard<Message> {
         // Strings — thin light-gray vertical lines
         for s in 0..string_count {
             let x = string_x(s);
+            let stroke = match &self.lit_string {
+                Some(lit) if lit.string == s => {
+                    Stroke::default().with_color(lit.color).with_width(2.5)
+                }
+                _ => Stroke::default().with_color(light_gray).with_width(1.0),
+            };
             frame.stroke(
                 &Path::line(Point::new(x, top_y), Point::new(x, bottom_y)),
-                Stroke::default().with_color(light_gray).with_width(1.0),
+                stroke,
             );
         }
 
