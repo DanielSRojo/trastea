@@ -16,11 +16,7 @@ use super::style::{
     SMUFL_CSYM_DIMINISHED, SMUFL_CSYM_HALF_DIMINISHED, SMUFL_CSYM_MAJOR_SEVENTH, SMUFL_SHARP,
     SUCCESS, card_container, focus_ring, ghost_button, hairline_rule,
 };
-use super::{Message, Notation, intervalic_text, note_label};
-
-/// The three notations the library can draw, in the order `i` walks them.
-pub(super) const NOTATIONS: [Notation; 3] =
-    [Notation::Notes, Notation::Intervals, Notation::Fingers];
+use super::{Message, Notation, intervalic_text, notation_pills, note_label};
 
 /// The library's state: what has been typed and what is picked.
 pub(super) struct ChordLibrary {
@@ -57,7 +53,7 @@ impl ChordLibrary {
     }
 
     pub(super) fn set_notation(&mut self, index: usize) {
-        if let Some(&notation) = NOTATIONS.get(index) {
+        if let Some(&notation) = Notation::ALL.get(index) {
             self.notation = notation;
         }
     }
@@ -685,7 +681,7 @@ fn detail_pane(
     focused: FocusTarget,
 ) -> iced::Element<'static, Message> {
     use iced::Length;
-    use iced::widget::{Space, button, column, container, row, scrollable, text};
+    use iced::widget::{Space, column, container, row, scrollable, text};
 
     // Not `note.to_string()`, which is the ASCII the canvas is limited to.
     let notes = chord
@@ -696,33 +692,12 @@ fn detail_pane(
         });
     let degrees = intervalic_text(chord.degrees());
 
-    // Three buttons rather than one that cycles, laid out as pills with the chosen one filled.
-    let notation_buttons =
-        NOTATIONS
-            .iter()
-            .enumerate()
-            .fold(row![].spacing(6), |buttons, (index, &choice)| {
-                let chosen = choice == notation;
-
-                buttons.push(focus_ring(
-                    button(
-                        text(match choice {
-                            Notation::Notes => "notes",
-                            Notation::Intervals => "degrees",
-                            Notation::Fingers => "fingers",
-                        })
-                        .size(14),
-                    )
-                    .padding([6, 14])
-                    .style(if chosen {
-                        super::style::selected_root_button
-                    } else {
-                        ghost_button
-                    })
-                    .on_press(Message::SetNotation(index)),
-                    focused == FocusTarget::NotationChoice(index),
-                ))
-            });
+    let notation_buttons = notation_pills(
+        notation,
+        Message::SetNotation,
+        FocusTarget::NotationChoice,
+        focused,
+    );
 
     let header = container(
         column![

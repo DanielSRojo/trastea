@@ -8,7 +8,7 @@ use crate::music::notes::PitchClass;
 use super::caged::QUALITIES as CAGED_QUALITIES;
 use super::drill::{ANSWER_COUNT, Drill};
 use super::home::{self, Category};
-use super::{App, Screen};
+use super::{App, Notation, Screen};
 use super::{note_trainer, walk_the_scale};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,7 +46,7 @@ pub enum FocusTarget {
     InputDevice,
     SkipPlayPrompt,
     SearchBox,
-    /// One of the notation buttons, indexed into the screen's `Notation::cycle_for`.
+    /// One of the library's notation pills, indexed into `Notation::ALL`.
     NotationChoice(usize),
     /// The Chord Library's chord list. Claims all four motion keys: up and down walk the
     /// chords, left and right the selected chord's voicings.
@@ -68,6 +68,8 @@ pub enum FocusTarget {
     CagedShape(usize),
     /// One quality pill in the CAGED window, indexed into `caged::QUALITIES`.
     CagedQuality(usize),
+    /// One of the CAGED window's notation pills, indexed into `Notation::ALL`.
+    CagedNotation(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,10 +146,12 @@ impl App {
                 grid.extend(
                     (0..self.caged.shapes().len()).map(|i| vec![Some(FocusTarget::CagedShape(i))]),
                 );
-                grid.push(vec![
-                    Some(FocusTarget::NotationToggle),
-                    Some(FocusTarget::RerollCagedRoot),
-                ]);
+                grid.push(
+                    (0..Notation::ALL.len())
+                        .map(|i| Some(FocusTarget::CagedNotation(i)))
+                        .chain([Some(FocusTarget::RerollCagedRoot)])
+                        .collect(),
+                );
                 grid
             }
             // its root is set on the glyph, so the kinds and the controls are all there is

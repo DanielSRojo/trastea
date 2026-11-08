@@ -173,10 +173,12 @@ diagrams. Set a root on its glyph, pick major, minor, 7, maj7 or m7 above the sh
 screen places every CAGED shape of that chord, orders them up the neck, and draws them together: the selected one in blue, its neighbours grey, and the
 frets where two of them meet in orange, because a note that belongs to both shapes is the
 thing worth seeing. Roots are filled and every other degree ringed, since finding the root
-inside a shape is the skill the system is for. The chord is spelled under the root, in notes or
-degrees as the dots are. `↑ ↓` walk the cycle down a column of shapes ordered as they sit on the
-neck, `[ ]` step the root, `r` picks another root and `i` switches the dots and the chord between
-note names and degrees.
+inside a shape is the skill the system is for. `notes`, `degrees` and `fingers` choose what the
+dots say, as in the library; fingers label only the selected shape, since a finger belongs to
+one hand position and a dot two shapes share would need two. The chord is spelled under the
+root in notes or degrees, and in degrees under fingers. `↑ ↓` walk the cycle down a column of
+shapes ordered as they sit on the neck, `[ ]` step the root, `r` picks another root, `n`, `d`
+and `f` pick a notation and `i` walks the three.
 
 Those five qualities are the ones that keep at least three shapes at every root; the rest of the
 library's fifteen mostly place one or two, which is a voicing rather than a cycle. The sevenths
@@ -359,7 +361,7 @@ two read as marks from different families.
 Per-screen accelerators are declared in one table alongside the label the `?` overlay shows
 for them, so a new accelerator documents itself. A key not claimed by the current screen is
 inert there — and one claimed by two screens is free to mean different things on each: `d`
-swaps a trainer's direction, picks the library's degrees, and opens the input list on every
+swaps a trainer's direction, picks degrees in the library and the CAGED window, and opens the input list on every
 screen that listens — including the Note Trainer while it is played, where a note and a string
 have no direction for it to swap. `m` swaps pressing and playing wherever a drill can be
 answered both ways, and the overlay says which is in force: `answer: press` or `answer: play`. `r` is the one key that means the same thing everywhere it is bound —

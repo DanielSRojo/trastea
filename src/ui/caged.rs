@@ -15,10 +15,10 @@ use super::root_stage::{
 };
 use super::shapes::{Voicing, voicings};
 use super::style::{
-    BODY, INK, LINK, MUSIC_FONT, MUTE, ROOT_MARKER, SMUFL_FLAT, card_container, control_button,
-    control_glyph, control_label, control_shuffle, focus_ring, ghost_button, selected_root_button,
+    BODY, INK, LINK, MUTE, ROOT_MARKER, card_container, control_button, control_shuffle,
+    focus_ring, ghost_button, selected_root_button,
 };
-use super::{Message, Notation, marker_label, note_label};
+use super::{Message, Notation, marker_label, notation_pills, note_label};
 use crate::music::intervals::Interval;
 use crate::music::notes::Note;
 
@@ -46,6 +46,8 @@ pub(super) struct Caged {
     quality: ChordQuality,
     /// An index into the derived cycle, whose length depends on the quality.
     selected: usize,
+    /// Its own rather than `App`'s, which the Scale Trainer shares and which never holds `Fingers`.
+    notation: Notation,
 }
 
 /// The shapes for `chord`, one per letter at its lowest fret, ordered by fret.
@@ -68,6 +70,17 @@ impl Caged {
             root: PitchClass::new(0),
             quality: ChordQuality::Major,
             selected: 0,
+            notation: Notation::Notes,
+        }
+    }
+
+    pub(super) fn notation(&self) -> Notation {
+        self.notation
+    }
+
+    pub(super) fn set_notation(&mut self, index: usize) {
+        if let Some(&notation) = Notation::ALL.get(index) {
+            self.notation = notation;
         }
     }
 
@@ -214,9 +227,10 @@ fn claims(shapes: &[Voicing], selected: usize) -> Vec<Claimed> {
 }
 
 /// The dots the neck draws for what is on show.
-fn caged_markers(caged: &Caged, notation: Notation) -> Vec<NoteMarker> {
+fn caged_markers(caged: &Caged) -> Vec<NoteMarker> {
     let chord = caged.chord();
     let shapes = caged.shapes();
+    let fingers = caged.selected_shape().map(Voicing::fingers);
 
     claims(&shapes, caged.selected())
         .into_iter()
@@ -232,10 +246,21 @@ fn caged_markers(caged: &Caged, notation: Notation) -> Vec<NoteMarker> {
                 (false, _) => Claim::Unselected,
             };
 
+            let label = match caged.notation() {
+                // A finger belongs to one hand position, so only the selected shape's dots carry
+                // one; a dot two neighbours share would otherwise need two. An open string has none.
+                Notation::Fingers => fingers
+                    .filter(|_| at.by_selected)
+                    .and_then(|fingers| fingers[at.string])
+                    .map(|finger| finger.to_string())
+                    .unwrap_or_default(),
+                notation => marker_label(notation, note, degree),
+            };
+
             Some(NoteMarker {
                 string: at.string,
                 fret: at.fret,
-                label: marker_label(notation, note, degree),
+                label,
                 color: claim.color(),
                 // The root filled, every other degree ringed.
                 style: if degree.number() == 1 {
@@ -311,14 +336,13 @@ enum Spelled {
 fn spelled(chord: Chord, notation: Notation) -> Spelled {
     match notation {
         Notation::Notes => Spelled::Notes(chord.notes()),
-        // a chord has no fingering of its own here, so this never holds `Fingers`
+        // fingers name no note, and the degrees are what tell a learner which finger holds the root
         Notation::Intervals | Notation::Fingers => Spelled::Degrees(chord.degrees()),
     }
 }
 
 pub(super) fn ui_caged(
     caged: &Caged,
-    notation: Notation,
     dragging: bool,
     focused: FocusTarget,
 ) -> Element<'static, Message> {
@@ -331,11 +355,11 @@ pub(super) fn ui_caged(
     // Display only: no press handler, so the fretboard's hit-testing goes unused.
     let fb = Fretboard {
         num_frets: CAGED_NECK.frets(),
-        highlighted: caged_markers(caged, notation),
+        highlighted: caged_markers(caged),
         ..Fretboard::default()
     };
 
-    let spelling: Element<'static, Message> = match spelled(chord, notation) {
+    let spelling: Element<'static, Message> = match spelled(chord, caged.notation()) {
         Spelled::Notes(notes) => notes
             .into_iter()
             .fold(row![].spacing(14), |tokens, note| {
@@ -399,16 +423,11 @@ pub(super) fn ui_caged(
         .style(card_container);
 
     let controls = row![
-        control_button(
-            control_glyph(
-                row![
-                    control_label(text(SMUFL_FLAT.to_string()).font(MUSIC_FONT), 20.0),
-                    control_label(text("3"), 20.0),
-                ]
-                .spacing(0)
-            ),
-            Message::ToggleNotation,
-            focused == FocusTarget::NotationToggle,
+        notation_pills(
+            caged.notation(),
+            Message::SetCagedNotation,
+            FocusTarget::CagedNotation,
+            focused,
         ),
         control_button(
             control_shuffle(),
@@ -416,7 +435,8 @@ pub(super) fn ui_caged(
             focused == FocusTarget::RerollCagedRoot,
         ),
     ]
-    .spacing(8);
+    .spacing(8)
+    .align_y(iced::Alignment::Center);
 
     let selector = selector_column(
         shape_card,
@@ -544,8 +564,8 @@ mod tests {
         }
     }
 
-    fn markers_at(caged: &Caged, notation: Notation) -> Vec<(usize, usize, Color, MarkerStyle)> {
-        caged_markers(caged, notation)
+    fn markers_at(caged: &Caged) -> Vec<(usize, usize, Color, MarkerStyle)> {
+        caged_markers(caged)
             .into_iter()
             .map(|marker| (marker.string, marker.fret, marker.color, marker.style))
             .collect()
@@ -564,7 +584,7 @@ mod tests {
     #[test]
     fn a_position_two_shapes_claim_is_drawn_once_and_marked_as_shared() {
         let caged = c_major_on(CagedShape::G);
-        let markers = markers_at(&caged, Notation::Notes);
+        let markers = markers_at(&caged);
 
         let shared: Vec<(usize, usize)> = markers
             .iter()
@@ -600,7 +620,7 @@ mod tests {
     #[test]
     fn the_g_shape_meets_the_a_shape_on_the_fifth_fret() {
         let caged = c_major_on(CagedShape::G);
-        let markers = markers_at(&caged, Notation::Notes);
+        let markers = markers_at(&caged);
 
         for string in [2, 3, 4] {
             let found: Vec<&(usize, usize, Color, MarkerStyle)> = markers
@@ -619,13 +639,14 @@ mod tests {
 
     #[test]
     fn a_root_is_filled_and_every_other_degree_is_ringed() {
-        for notation in [Notation::Notes, Notation::Intervals] {
+        for index in 0..Notation::ALL.len() {
             for chord in offered() {
                 let mut caged = Caged::new();
                 caged.select_root(chord.root());
                 caged.select_quality(chord.kind());
+                caged.set_notation(index);
 
-                for (string, fret, _, style) in markers_at(&caged, notation) {
+                for (string, fret, _, style) in markers_at(&caged) {
                     let degree = CAGED_NECK
                         .pitch_class_at(string, fret)
                         .and_then(|pitch_class| chord.degree(pitch_class))
@@ -655,7 +676,7 @@ mod tests {
             wanted.sort_unstable();
             wanted.dedup();
 
-            let mut drawn: Vec<(usize, usize)> = caged_markers(&caged, Notation::Notes)
+            let mut drawn: Vec<(usize, usize)> = caged_markers(&caged)
                 .into_iter()
                 .map(|marker| (marker.string, marker.fret))
                 .collect();
@@ -838,7 +859,7 @@ mod tests {
         caged.select_quality(ChordQuality::Dominant7);
         let chord = caged.chord();
 
-        let sevenths = markers_at(&caged, Notation::Intervals)
+        let sevenths = markers_at(&caged)
             .into_iter()
             .filter(|&(string, fret, _, _)| {
                 CAGED_NECK
@@ -856,6 +877,99 @@ mod tests {
         );
     }
 
+    fn fingers_on(shape: CagedShape) -> Caged {
+        let mut caged = c_major_on(shape);
+        caged.set_notation(2);
+        assert_eq!(caged.notation(), Notation::Fingers);
+        caged
+    }
+
+    fn label_at(caged: &Caged, string: usize, fret: usize) -> Option<String> {
+        caged_markers(caged)
+            .into_iter()
+            .find(|marker| (marker.string, marker.fret) == (string, fret))
+            .map(|marker| marker.label)
+    }
+
+    /// Open C: `x 3 2 0 1 0`, the third finger on the root and the open strings bare.
+    #[test]
+    fn the_c_shape_at_the_nut_names_its_fingers() {
+        let caged = fingers_on(CagedShape::C);
+
+        for (string, fret, finger) in [
+            (1, 3, "3"),
+            (2, 2, "2"),
+            (4, 1, "1"),
+            (3, 0, ""),
+            (5, 0, ""),
+        ] {
+            assert_eq!(
+                label_at(&caged, string, fret).as_deref(),
+                Some(finger),
+                "string {string} fret {fret}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_selected_shape_carries_fingers() {
+        for index in 0..5 {
+            let mut caged = fingers_on(CagedShape::C);
+            caged.select_shape(index);
+            let shape = caged.selected_shape().expect("C major has five shapes");
+            let fingers = shape.fingers();
+
+            for (at, marker) in claims(&caged.shapes(), index)
+                .into_iter()
+                .zip(caged_markers(&caged))
+            {
+                let expected = if at.by_selected {
+                    fingers[at.string]
+                        .map(|finger| finger.to_string())
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+
+                assert_eq!(
+                    marker.label,
+                    expected,
+                    "{} at {}:{}",
+                    shape.shape_name(),
+                    at.string,
+                    at.fret
+                );
+            }
+        }
+    }
+
+    /// A position two shapes share is fingered as the selected one plays it.
+    #[test]
+    fn a_shared_dot_takes_the_selected_shapes_finger() {
+        let on_g = fingers_on(CagedShape::G);
+        let on_a = fingers_on(CagedShape::A);
+
+        let g = on_g
+            .selected_shape()
+            .expect("C major has a G shape")
+            .fingers();
+        let a = on_a
+            .selected_shape()
+            .expect("C major has an A shape")
+            .fingers();
+
+        for string in [2, 3, 4] {
+            assert_eq!(
+                label_at(&on_g, string, 5),
+                g[string].map(|finger| finger.to_string())
+            );
+            assert_eq!(
+                label_at(&on_a, string, 5),
+                a[string].map(|finger| finger.to_string())
+            );
+        }
+    }
+
     #[test]
     fn the_line_under_the_root_follows_the_notation() {
         let chord = major(PitchClass::new(2));
@@ -866,9 +980,8 @@ mod tests {
         let names: Vec<String> = notes.iter().map(Note::to_string).collect();
         assert_eq!(names, ["D", "F#", "A"]);
 
-        assert_eq!(
-            spelled(chord, Notation::Intervals),
-            Spelled::Degrees(chord.degrees())
-        );
+        for notation in [Notation::Intervals, Notation::Fingers] {
+            assert_eq!(spelled(chord, notation), Spelled::Degrees(chord.degrees()));
+        }
     }
 }

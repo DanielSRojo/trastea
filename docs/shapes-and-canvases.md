@@ -211,6 +211,13 @@ against a `Chord` from the start, so admitting these was a selector rather than 
 - The root is set on the glyph shared with the Scale Trainer and Walk the Scale. The chord under
   it follows the notation the dots do, notes or degrees, so `i` changes everything that names
   a note at once; a formula fixed in degrees beside dots in note names read as a second setting.
+  Under fingers it reads in degrees, since a finger names no note and the degrees say which
+  finger holds the root.
+- Fingers label the selected shape's dots only, shared ones included, from `Voicing::fingers`.
+  A finger belongs to one hand position: a neighbour's dot labelled with its own finger reads as
+  part of the hand on show, and a dot two neighbours share would need two numbers. The notation
+  opens on notes, unlike the library's, because the window's question is
+  where the shapes meet rather than how one is held.
 
 `neck::CAGED_NECK` has fifteen frets because on twelve, eight of the twelve roots cannot complete
 the cycle. The four that can are D, E, G and A — the roots of the open shapes themselves.

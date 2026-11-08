@@ -103,8 +103,29 @@ pub struct App {
 enum Notation {
     Notes,
     Intervals,
-    /// Which finger stops a string. Only a chord diagram has one, hence `cycle_for`.
+    /// Which finger stops a string. Only a chord shape has one, so the Scale Trainer never holds it.
     Fingers,
+}
+
+impl Notation {
+    /// Every notation, in the order the chord screens draw their pills and `i` walks them.
+    const ALL: [Notation; 3] = [Notation::Notes, Notation::Intervals, Notation::Fingers];
+
+    fn label(self) -> &'static str {
+        match self {
+            Notation::Notes => "notes",
+            Notation::Intervals => "degrees",
+            Notation::Fingers => "fingers",
+        }
+    }
+
+    /// The index in `ALL` of the notation after this one, wrapping.
+    fn next_index(self) -> usize {
+        Notation::ALL
+            .iter()
+            .position(|&at| at == self)
+            .map_or(0, |at| (at + 1) % Notation::ALL.len())
+    }
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -162,11 +183,13 @@ pub enum Message {
     SelectChordRow(usize),
     /// Selects one of the selected chord's voicings; a press anywhere inside a diagram sends it.
     SelectVoicing(usize),
-    /// Picks a notation outright, by its index in the screen's `Notation::cycle_for`.
+    /// Picks the library's notation outright, by its index in `Notation::ALL`.
     SetNotation(usize),
     /// Picks one shape of the CAGED cycle, by its place in the derived order.
     SelectCagedShape(usize),
     SelectCagedQuality(ChordQuality),
+    /// Picks the CAGED window's notation, by its index in `Notation::ALL`.
+    SetCagedNotation(usize),
     /// A different root for the CAGED window, without touching the Scale Trainer's scale.
     RerollCagedRoot,
     /// One tick of the audio poll, routed by `App::listener` to the screen holding the device.
@@ -449,6 +472,7 @@ impl App {
             Message::SetNotation(index) => self.activate(FocusTarget::NotationChoice(index)),
             Message::SelectCagedShape(index) => self.caged.select_shape(index),
             Message::SelectCagedQuality(quality) => self.caged.select_quality(quality),
+            Message::SetCagedNotation(index) => self.activate(FocusTarget::CagedNotation(index)),
             Message::RerollCagedRoot => self.reroll_caged_root(),
             Message::Accelerate(c) => return self.accelerate(c),
             // only the library has a box, and `Ctrl+K` arrives from any screen
@@ -897,6 +921,7 @@ impl App {
                     self.caged.select_quality(quality);
                 }
             }
+            FocusTarget::CagedNotation(index) => self.caged.set_notation(index),
             FocusTarget::RerollCagedRoot => self.reroll_caged_root(),
             FocusTarget::DrillKind(index) => {
                 if let Some(&kind) = ScaleKind::ALL.get(index) {
@@ -982,12 +1007,7 @@ impl App {
             ),
             Screen::Caged => with_top_bar(
                 "CAGED",
-                ui_caged(
-                    &self.caged,
-                    self.notation,
-                    self.root_dial.is_dragging(),
-                    self.focused,
-                ),
+                ui_caged(&self.caged, self.root_dial.is_dragging(), self.focused),
                 true,
                 self.focused,
             ),
@@ -1216,9 +1236,38 @@ fn intervalic_text(intervals: &'static [Interval]) -> iced::widget::Row<'static,
 fn marker_label(notation: Notation, note: Note, degree: Interval) -> String {
     match notation {
         Notation::Notes => note.to_string(),
-        // unreachable here, since the library keeps its own fingering setting
+        // a position has no finger without a shape; the screens with one label it themselves
         Notation::Intervals | Notation::Fingers => degree.to_string(),
     }
+}
+
+/// One pill per notation with the one in force filled, as both chord screens draw them.
+/// Three pills rather than one that cycles, so the options are visible before any is pressed.
+fn notation_pills(
+    current: Notation,
+    message: fn(usize) -> Message,
+    target: fn(usize) -> FocusTarget,
+    focused: FocusTarget,
+) -> Element<'static, Message> {
+    use iced::widget::{button, row, text};
+
+    Notation::ALL
+        .into_iter()
+        .enumerate()
+        .fold(row![].spacing(6), |pills, (index, choice)| {
+            pills.push(style::focus_ring(
+                button(text(choice.label()).size(14))
+                    .padding([6, 14])
+                    .style(if choice == current {
+                        style::selected_root_button
+                    } else {
+                        style::ghost_button
+                    })
+                    .on_press(message(index)),
+                focused == target(index),
+            ))
+        })
+        .into()
 }
 
 fn trainer_button<'a>(
@@ -1438,7 +1487,7 @@ mod tests {
         // the cycle is over, so the ring moves on to the controls under it
         press_named(&mut app, Named::ArrowDown);
         assert_eq!(app.caged.selected(), last);
-        assert_eq!(app.focused, FocusTarget::NotationToggle);
+        assert_eq!(app.focused, FocusTarget::CagedNotation(0));
 
         app.caged.select_shape(0);
         app.focused = FocusTarget::CagedShape(0);
@@ -1596,7 +1645,7 @@ mod tests {
         assert_ne!(app.focused, FocusTarget::CagedShape(0));
         assert!(matches!(
             app.focused,
-            FocusTarget::CagedShape(_) | FocusTarget::NotationToggle
+            FocusTarget::CagedShape(_) | FocusTarget::CagedNotation(_)
         ));
     }
 
@@ -1611,36 +1660,77 @@ mod tests {
         assert_ne!(app.caged.root(), root, "r left the root alone");
         assert_eq!(app.focused, FocusTarget::Back);
 
-        assert_eq!(app.notation, Notation::Notes);
-        press_into(&mut app, "i", keyboard::Modifiers::empty());
-        assert_eq!(app.notation, Notation::Intervals);
-        assert_eq!(app.focused, FocusTarget::Back);
+        for (key, expected) in [
+            ("f", Notation::Fingers),
+            ("i", Notation::Notes),
+            ("i", Notation::Intervals),
+            ("n", Notation::Notes),
+            ("d", Notation::Intervals),
+            ("i", Notation::Fingers),
+        ] {
+            press_into(&mut app, key, keyboard::Modifiers::empty());
+            assert_eq!(app.caged.notation(), expected, "{key}");
+            assert_eq!(app.focused, FocusTarget::Back, "{key} moved the ring");
+        }
     }
 
     #[test]
-    fn the_caged_window_claims_neither_a_direction_nor_a_pool() {
+    fn the_caged_window_claims_the_notations_but_neither_a_direction_nor_a_pool() {
         let mut app = app_with_seed(0xca6);
         app.open(Screen::Caged);
 
-        let keys: Vec<char> = accelerators_for(
-            &Screen::Caged,
-            app.chord_library.notation(),
-            &WalkTheScale::new(),
-        )
-        .into_iter()
-        .map(|(key, ..)| key)
-        .collect();
+        let keys: Vec<char> = app
+            .accelerators()
+            .into_iter()
+            .map(|(key, ..)| key)
+            .collect();
 
-        assert_eq!(keys, ['r', 'i', '[', ']']);
-        for inert in ["d", "a"] {
-            let before = (app.caged.root(), app.caged.selected(), app.notation);
+        assert_eq!(keys, ['r', 'n', 'd', 'f', 'i', '[', ']']);
+        for inert in ["a", "m"] {
+            let before = (app.caged.root(), app.caged.selected(), app.caged.notation());
             press_into(&mut app, inert, keyboard::Modifiers::empty());
             assert_eq!(
-                (app.caged.root(), app.caged.selected(), app.notation),
+                (app.caged.root(), app.caged.selected(), app.caged.notation()),
                 before,
                 "{inert} did something here"
             );
         }
+    }
+
+    #[test]
+    fn a_caged_notation_pill_picks_that_notation() {
+        let mut app = app_with_seed(0xca6);
+        app.open(Screen::Caged);
+
+        for (index, expected) in Notation::ALL.into_iter().enumerate().rev() {
+            let _ = app.update(Message::SetCagedNotation(index));
+            assert_eq!(app.caged.notation(), expected, "pill {index}");
+        }
+    }
+
+    /// Each chord screen keeps its own notation, and the Scale Trainer never reaches fingers.
+    #[test]
+    fn caged_fingers_reach_neither_the_scale_trainer_nor_the_library() {
+        let mut app = app_with_seed(0xca6);
+        app.chord_library.set_notation(0);
+        app.open(Screen::Caged);
+
+        press_into(&mut app, "f", keyboard::Modifiers::empty());
+        assert_eq!(app.caged.notation(), Notation::Fingers);
+        assert_eq!(app.notation, Notation::Notes, "the scale trainer moved");
+        assert_eq!(
+            app.chord_library.notation(),
+            Notation::Notes,
+            "the library moved"
+        );
+
+        let _ = app.update(Message::GoBack);
+        app.open(Screen::Caged);
+        assert_eq!(
+            app.caged.notation(),
+            Notation::Fingers,
+            "reopening reset it"
+        );
     }
 
     /// Shift+h delivers the capital, not the lowercase letter with a flag set.

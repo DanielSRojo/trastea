@@ -11,9 +11,7 @@ use super::style::{
     BODY, CANVAS, CANVAS_SOFT_2, INK, KEYCAP_ARROWS, KEYCAP_BACKTAB, KEYCAP_FONT, KEYCAP_TAB, MUTE,
     card_container,
 };
-use super::{
-    App, Message, Notation, Screen, WalkTheScale, chord_library, home, note_trainer, walk_the_scale,
-};
+use super::{App, Message, Notation, Screen, WalkTheScale, home, note_trainer, walk_the_scale};
 
 /// The modifiers that suppress a character binding.
 ///
@@ -97,12 +95,38 @@ impl App {
             return note_trainer_accelerators(self.note_trainer.answering());
         }
 
-        accelerators_for(
-            &self.screen,
-            self.chord_library.notation(),
-            &self.walk_the_scale,
-        )
+        // the two chord screens keep their own notation, and `i` names whichever comes next
+        let notation = match self.screen {
+            Screen::Caged => self.caged.notation(),
+            _ => self.chord_library.notation(),
+        };
+
+        accelerators_for(&self.screen, notation, &self.walk_the_scale)
     }
+}
+
+/// One key per notation pill, and `i` for whichever comes after the one in force.
+fn notation_keys(
+    notation: Notation,
+    pill: fn(usize) -> FocusTarget,
+) -> impl Iterator<Item = Accelerator> {
+    let keys = Notation::ALL
+        .into_iter()
+        .enumerate()
+        .map(move |(index, choice)| {
+            let (key, label) = match choice {
+                Notation::Notes => ('n', "note names"),
+                Notation::Intervals => ('d', "degrees"),
+                Notation::Fingers => ('f', "fingers"),
+            };
+            (key, Fires::Widget(pill(index)), label.into())
+        });
+
+    keys.chain([(
+        'i',
+        Fires::Widget(pill(notation.next_index())),
+        "cycle the three".into(),
+    )])
 }
 
 pub(super) fn accelerators_for(
@@ -207,55 +231,23 @@ pub(super) fn accelerators_for(
             ),
         ],
         // `/` is the same physical key as `?`, distinguished by shift
-        Screen::ChordLibrary => {
-            let next = chord_library::NOTATIONS
-                .iter()
-                .position(|&at| at == notation)
-                .map_or(0, |at| (at + 1) % chord_library::NOTATIONS.len());
-
-            vec![
-                ('/', Fires::Widget(FocusTarget::SearchBox), "search".into()),
-                (
-                    'n',
-                    Fires::Widget(FocusTarget::NotationChoice(0)),
-                    "note names".into(),
-                ),
-                (
-                    'd',
-                    Fires::Widget(FocusTarget::NotationChoice(1)),
-                    "degrees".into(),
-                ),
-                (
-                    'f',
-                    Fires::Widget(FocusTarget::NotationChoice(2)),
-                    "fingers".into(),
-                ),
-                (
-                    'i',
-                    Fires::Widget(FocusTarget::NotationChoice(next)),
-                    "cycle the three".into(),
-                ),
-                // overlay only: `accelerate` takes `g` and `G` before this table, since `gg` is two keys
-                (
-                    'G',
-                    Fires::Widget(FocusTarget::ChordList),
-                    "last chord, gg for the first".into(),
-                ),
-            ]
-        }
-        Screen::Caged => [
-            (
-                'r',
-                Fires::Widget(FocusTarget::RerollCagedRoot),
-                "new root".into(),
-            ),
-            (
-                'i',
-                Fires::Widget(FocusTarget::NotationToggle),
-                "interval notation".into(),
-            ),
-        ]
+        Screen::ChordLibrary => [('/', Fires::Widget(FocusTarget::SearchBox), "search".into())]
+            .into_iter()
+            .chain(notation_keys(notation, FocusTarget::NotationChoice))
+            // overlay only: `accelerate` takes `g` and `G` before this table, since `gg` is two keys
+            .chain([(
+                'G',
+                Fires::Widget(FocusTarget::ChordList),
+                "last chord, gg for the first".into(),
+            )])
+            .collect(),
+        Screen::Caged => [(
+            'r',
+            Fires::Widget(FocusTarget::RerollCagedRoot),
+            "new root".into(),
+        )]
         .into_iter()
+        .chain(notation_keys(notation, FocusTarget::CagedNotation))
         .chain(root_steps())
         .collect(),
         Screen::Tuner => vec![
@@ -540,9 +532,10 @@ mod tests {
             let reachable = app_on(screen.clone()).focusables();
 
             // every notation, since the library's `i` names whichever button comes next
-            for (index, &notation) in chord_library::NOTATIONS.iter().enumerate() {
+            for (index, notation) in Notation::ALL.into_iter().enumerate() {
                 let mut app = app_on(screen.clone());
                 app.chord_library.set_notation(index);
+                app.caged.set_notation(index);
 
                 for (key, fires, label) in app.accelerators() {
                     let Fires::Widget(target) = fires else {

@@ -26,8 +26,10 @@ and the rest is carried by `Scale`'s private fields.
 the notes are called, and a name is music. Notation picks which of two true things about an
 already-determined scale gets drawn, so `music/` has no business knowing about it. Keeping it
 off `Scale` also lets it survive a reroll. The Scale Trainer's field never holds `Fingers`; the
-library keeps its own setting, so picking fingers there cannot change what the Scale Trainer's
-markers say. The library's three notation buttons replaced one that cycled: a control that
+library and the CAGED window each keep their own setting, so picking fingers on either cannot
+change what the Scale Trainer's markers say. The CAGED window shared `App`'s field until it
+gained fingers. Both chord screens draw `Notation::ALL` with `notation_pills`, each with its own
+message and focus target, so a pill on one cannot move the other's setting. The library's three notation buttons replaced one that cycled: a control that
 changes what it says each time it is pressed does not look like a control with options, so
 nobody presses it twice to find out. `Message::SetNotation` means "this one" where
 `ToggleNotation` means "the next".
@@ -159,8 +161,8 @@ went before its root grid did: the kind card already says which kind is chosen.
 The focus functions are methods on `App` rather than free functions of `&Screen`, because a
 screen's shape depends on state: the Note Trainer's answer surface depends on which way the
 drill runs, and only the prompt knows. An extra parameter would work today and need another
-the next time. The same holds for `App::accelerators`, where the library's `i` names the next
-notation button.
+the next time. The same holds for `App::accelerators`, where a chord screen's `i` names the next
+notation pill.
 
 Side-by-side cards would share grid rows, and moving vertically searches leftwards only, so a
 shorter row clamps to its own last widget. No screen has two side-by-side cards since the
@@ -267,9 +269,9 @@ a `format!` result owned by the returning function (`E0515`).
 to keep a pending `g`. Its table row exists for the overlay only. Anything between the two
 halves cancels it, so a stale `g` cannot turn the next keystroke into a jump.
 
-The library has one key per notation mode as well as cycling `i`: with all three visible, a
-learner who can see `fingers` should reach it directly, and `i` stays because that is what it
-means on the Scale Trainer. `n`, `d` and `f` are note names, so the focused search box takes
+The library and the CAGED window have one key per notation mode as well as cycling `i`: with
+all three visible, a learner who can see `fingers` should reach it directly, and `i` stays
+because that is what it means on the Scale Trainer. `n`, `d` and `f` are note names, so the focused search box takes
 them as text and the mode keys are reached after `Esc`.
 
 An accelerator fires a widget without walking the ring onto it. An action that stays on screen
