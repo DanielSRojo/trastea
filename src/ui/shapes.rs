@@ -683,15 +683,15 @@ impl Voicing {
         let barre = self.barre_fret();
         let stopped = self.strings.map(|fret| fret.filter(|&fret| fret > 0));
 
-        let mut assigned: Vec<(u8, u8)> = Vec::new();
-        for pair in self.fingering.into_iter().zip(stopped) {
+        let mut assigned: Vec<(u8, u8, usize)> = Vec::new();
+        for (string, pair) in self.fingering.into_iter().zip(stopped).enumerate() {
             match pair {
                 (Some(finger), Some(fret)) => {
                     if usize::from(finger) > FINGERS || (Some(fret) == barre && finger != 1) {
                         return None;
                     }
 
-                    assigned.push((finger, fret));
+                    assigned.push((finger, fret, string));
                 }
                 (None, None) => {}
                 // A stopped string with nobody on it, or a finger on a string nothing stops.
@@ -699,20 +699,25 @@ impl Voicing {
             }
         }
 
-        // Sorted by finger, so the frets beside them may not descend. Two strings may share a
+        // Sorted by finger, so `(fret, string)` beside them must ascend, as the fallback orders
+        // them: at one fret the lower string takes the lower finger. Two strings may share a
         // finger only where the bar covers them both.
         assigned.sort_unstable();
         assigned
             .windows(2)
             .all(|pair| {
-                let &[(finger, fret), (next_finger, next_fret)] = pair else {
+                let &[
+                    (finger, fret, string),
+                    (next_finger, next_fret, next_string),
+                ] = pair
+                else {
                     return true;
                 };
 
                 if finger == next_finger {
                     Some(fret) == barre && Some(next_fret) == barre
                 } else {
-                    fret <= next_fret
+                    (fret, string) < (next_fret, next_string)
                 }
             })
             .then_some(self.fingering)
@@ -1690,20 +1695,28 @@ mod tests {
             for &kind in ChordQuality::ALL {
                 for voicing in voicings(Chord::new(root, kind), &DRILL_NECK) {
                     let fingers = voicing.fingers();
-                    let mut assigned: Vec<(u8, u8)> = (0..6)
-                        .filter_map(|string| Some((fingers[string]?, voicing.strings()[string]?)))
+                    let mut assigned: Vec<(u8, u8, usize)> = (0..6)
+                        .filter_map(|string| {
+                            Some((fingers[string]?, voicing.strings()[string]?, string))
+                        })
                         .collect();
                     assigned.sort_unstable();
 
                     for pair in assigned.windows(2) {
-                        let &[(finger, fret), (next_finger, next_fret)] = pair else {
+                        let &[
+                            (finger, fret, string),
+                            (next_finger, next_fret, next_string),
+                        ] = pair
+                        else {
                             continue;
                         };
 
+                        // One finger on two strings is a barre, which the barre tests cover.
                         assert!(
-                            fret <= next_fret,
-                            "{root:?} {kind:?} puts finger {next_finger} at {next_fret}, \
-                             below finger {finger} at {fret}"
+                            finger == next_finger || (fret, string) < (next_fret, next_string),
+                            "{root:?} {kind:?} puts finger {next_finger} at {next_fret} on \
+                             string {next_string}, below finger {finger} at {fret} on string \
+                             {string}"
                         );
                     }
                 }

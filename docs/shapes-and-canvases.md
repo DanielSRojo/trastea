@@ -75,8 +75,11 @@ index fret would have numbered a dot zero.
 nothing in `0 2 2 0 0 0` says the index was lifted rather than never placed. The carried
 fingering is discarded when an alteration moves a string without asking the shape: a fifth
 finger, a barred string held by something other than the first, one finger on two unbarred
-strings, or a crossing (a higher finger below a lower one). Am is the everyday case: flattening
-the third drops the B string under its neighbours, so the carried fingering would cross.
+strings, or a crossing (a higher finger below a lower one, or above it on a lower string at the
+same fret). Am is the everyday case: flattening the third drops the B string under its
+neighbours, so the carried fingering would cross. C♯m on the C shape is the same-fret case: at
+`x 4 2 1 2 0` the carried numbers put the ring finger on the D string and the middle on the B
+string above it, both at the second fret, so it is fingered in string order instead.
 Without an open string, release does nothing and the carried fingering either agrees with the
 sort or is thrown away, so open strings are the only place the two can differ. A real fingering
 solver is still its own project.
