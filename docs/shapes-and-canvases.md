@@ -20,11 +20,12 @@ offset, and changing a chord's quality moves only the strings whose degrees that
   wanting the five has no other predicate. Matching on it is exhaustive on purpose — a sixth
   shape would make the compiler name every place that has to decide about it.
 - Every entry is a chord a guitarist recognises at the nut — E and A major, Asus2, Esus4, E6 and
-  A6, E7, A7, D7 and C7. That is the check on the arithmetic: placed at the nut, a shape has to come out
+  A6, and E7, A7, D7, C7 and G7. That is the check on the arithmetic: placed at the nut, a shape has to come out
   as the open chord it was drawn from.
 - Sevenths are the largest family: seven of the fifteen qualities share `1 3 5 7`. The D shape
   joined E and A there first because D7 needs no stretch the triad did not; adding it took the
-  library from 592 voicings to 670. C7 followed and took it to 674.
+  library from 592 voicings to 670. C7 and G7 followed and took
+  it to 674 and then 699; G7 counts most because it is the one that barres up the neck.
 
 The reduced shapes exist because the six-string ones only stay fingerable near the nut.
 Altering a quality drags strings apart, and a placement that needs a fifth finger is refused,
@@ -52,7 +53,7 @@ elsewhere.
 
 `shapes::voicings` tries each shape at every fret rather than the first that fits, because a
 shape repeats an octave up and both placements are worth showing. Across every root and quality
-on `DRILL_NECK` the library offers 674 voicings; that count did not change when the module
+on `DRILL_NECK` the library offers 699 voicings; that count did not change when the module
 learned to carry a shape's fingering, since fingerability is a property of the placement and not
 of the numbering.
 

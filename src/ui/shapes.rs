@@ -521,6 +521,38 @@ const SHAPES: &[Shape] = &[
         base: ChordQuality::Dominant7,
         root_string: 1,
     },
+    Shape {
+        caged: CagedShape::G,
+        reduction: None,
+        strings: [
+            Sounded {
+                offset: 3,
+                degree: 1,
+            },
+            Sounded {
+                offset: 2,
+                degree: 3,
+            },
+            Sounded {
+                offset: 0,
+                degree: 5,
+            },
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+            Sounded {
+                offset: 0,
+                degree: 3,
+            },
+            Sounded {
+                offset: 1,
+                degree: 7,
+            },
+        ],
+        base: ChordQuality::Dominant7,
+        root_string: 0,
+    },
     // Reduced shapes: the six-string ones above only stay fingerable near the nut, and
     // dropping a string or two makes most alterations placeable again.
     Shape {
@@ -1090,6 +1122,7 @@ mod tests {
             "A shape",
             "D shape",
             "C shape",
+            "G shape",
             "E shape, four strings",
             "A shape, three strings",
             "E shape, four strings",
@@ -1333,6 +1366,12 @@ mod tests {
                 ChordQuality::Dominant7,
                 "C shape",
                 &[None, Some(3), Some(2), Some(3), Some(1), Some(0)],
+            ),
+            (
+                7,
+                ChordQuality::Dominant7,
+                "G shape",
+                &[Some(3), Some(2), Some(0), Some(0), Some(0), Some(1)],
             ),
         ];
 
@@ -1656,6 +1695,13 @@ mod tests {
                 "C shape",
                 [None, Some(3), Some(2), Some(4), Some(1), None],
             ),
+            // 3 2 0 0 0 1 — the index drops to the seventh, middle and ring below it.
+            (
+                7,
+                ChordQuality::Dominant7,
+                "G shape",
+                [Some(3), Some(2), None, None, None, Some(1)],
+            ),
         ];
 
         for &(root, kind, shape, expected) in cases {
@@ -1883,7 +1929,7 @@ mod tests {
             .map(|(root, kind)| voicings(Chord::new(root, kind), &DRILL_NECK).len())
             .sum();
 
-        assert_eq!(total, 674);
+        assert_eq!(total, 699);
     }
 
     #[test]
