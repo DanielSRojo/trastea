@@ -133,10 +133,13 @@ Per-screen keys worth knowing:
 | `d` | swap direction; on screens that listen, pick the input device |
 | `r` | replace what is on screen, or skip the current prompt |
 | `[` `]` | step the root down and up |
-| `i` | cycle the notation (notes, degrees, fingers) or spelling |
-| `n` | hide the neck; on CAGED, cycle the notation |
-| `t` | set a timer on Walk the Scale |
+| `i` | cycle the notation or toggle the spelling |
+| `n` `d` `f` | on the Chord Library and CAGED, show note names, degrees or fingers |
+| `n` | hide the neck while playing Walk the Scale |
+| `t` / `p` | on Walk the Scale, set a timer / start another run |
+| `a` | include accidentals on the Note Trainer |
 | `/` | open the Chord Library's search box |
+| `gg` / `G` | jump to the Chord Library's first / last chord |
 | `c` / `g` | on Position Finder, walk a calibration / show predicted groups |
 
 A key claimed by two screens may mean different things on each. The `?` overlay is

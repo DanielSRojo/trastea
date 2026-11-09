@@ -14,6 +14,7 @@ categories = ["gui"]
 # crates.io and nowhere else. The list form rather than `true` is deliberate: about.toml
 # names crates-io a private registry, which is what keeps Trastea out of its own notices.
 publish = ["crates-io"]
+exclude = ["assets/screenshots"]
 
 [dependencies]
 cpal = { version = "0.18.2", features = ["pulseaudio"] }
