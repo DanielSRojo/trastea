@@ -15,6 +15,17 @@ audio interface.
 > still worth growing: five CAGED shapes and a handful of reduced ones cover the fifteen
 > qualities, and every chord it offers is one a hand can hold.
 
+## Screenshots
+
+| | |
+| --- | --- |
+| [![Home](assets/screenshots/home.png)](assets/screenshots/home.png) | [![Scale Trainer](assets/screenshots/scale-trainer.png)](assets/screenshots/scale-trainer.png) |
+| **Home** | **Scale Trainer** |
+| [![Walk the Scale](assets/screenshots/walk-the-scale.png)](assets/screenshots/walk-the-scale.png) | [![Chord Library](assets/screenshots/chord-library.png)](assets/screenshots/chord-library.png) |
+| **Walk the Scale** | **Chord Library** |
+| [![CAGED](assets/screenshots/caged.png)](assets/screenshots/caged.png) | [![Interval Trainer](assets/screenshots/interval-trainer.png)](assets/screenshots/interval-trainer.png) |
+| **CAGED** | **Interval Trainer** |
+
 ## Screens
 
 - **Scale Trainer** — every degree of a scale lit on the neck. Sixteen kinds, from the
