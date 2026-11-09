@@ -119,6 +119,33 @@ cannot fail teaches nothing. The trainer keeps its own `Spelling`, separate from
 Trainer's, and it is the one purely cosmetic toggle — judging compares pitch classes, so it
 cannot change whether an answer is right.
 
+## Coming back to a missed prompt
+
+A uniform draw spends most of a session on notes the learner already knows. The Note Trainer's
+*Name it* draws each position in proportion to a weight instead: one for every position, plus a
+debt its misses run up. `drill::Misses<P>` holds the debts and `Rng::weighted` draws by them.
+*Find it* and the playing prompts still draw uniformly; they are the next to adopt it.
+
+- A miss adds four and the debt stops at sixteen. In the naturals pool, about forty-five
+  positions, one miss takes a position from roughly one draw in forty-five to one in ten, and the
+  cap keeps a stubborn one near one in four rather than letting it crowd the pool out.
+- A clean answer halves the debt, so a position is trusted again only after two or three, and
+  the floor of one means a known position still comes up. The floor is also what keeps
+  `draw_prompt`'s rejection loop finite: every position stays drawable.
+- Only the first answer to a prompt moves its weight. A run of wrong buttons is one miss, and the
+  right answer after them is not a recall, because the miss already said what happened. A press
+  during the flash is ignored for the same reason `mark` ignores it.
+- A skip and a settings change leave the weights alone. A skip may mean "I don't know" or just
+  "not this one", and only an answer says which.
+- The key is the position, not the pitch class. The drill trains the map from place to name, and
+  missing the G on the low E says nothing about the G on the D string.
+- `Misses` sits beside `Score` rather than inside it, because they live for different lengths of
+  time: `Score` is the run and the debts outlive it, along with leaving the screen. They do not
+  outlive the process; that would make a format to migrate, and a session is where most of the
+  value is.
+- `weighted` with equal weights replays `below`'s sequence exactly, so a drill with no misses
+  draws what it always drew, and every seeded test kept its prompts.
+
 ## The flash
 
 A correct answer holds the prompt for `ANSWER_FLASH`, one second, then the trainer's own tick

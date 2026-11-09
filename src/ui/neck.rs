@@ -83,7 +83,7 @@ pub(super) fn string_name(string: usize) -> Option<String> {
 }
 
 /// Named fields so a root and target cannot be silently swapped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct Position {
     pub(super) string: usize,
     pub(super) fret: usize,

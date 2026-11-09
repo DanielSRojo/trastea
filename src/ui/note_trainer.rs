@@ -3,7 +3,7 @@
 use iced::{Color, Element, Padding};
 
 use super::calibration;
-use super::drill::{Drill, Score};
+use super::drill::{Drill, Misses, Score};
 use super::focus::{ANSWER_ROW_WIDTH, Direction, FocusTarget};
 use super::fretboard::{Fretboard, LitString, MarkerStyle, NoteMarker, fretboard};
 use super::listener::{Listener, State, ui_device_line, ui_device_picker};
@@ -97,6 +97,8 @@ pub(super) struct NoteTrainer {
     /// Separate from the scale trainer's spelling.
     spelling: Spelling,
     score: Score<Answer>,
+    /// Keyed by the position *Name it* lit; outlives the run, like the best streak.
+    misses: Misses<Position>,
     cursor: Position,
     /// The capture device, held only while playing.
     listener: Option<Listener>,
@@ -120,6 +122,7 @@ impl NoteTrainer {
             pool: Pool::Naturals,
             spelling: Spelling::Sharps,
             score: Score::default(),
+            misses: Misses::default(),
             cursor: CURSOR_HOME,
             listener: None,
             placer: Placer::default(),
@@ -193,9 +196,13 @@ impl NoteTrainer {
                     positions.len() >= 2,
                     "a pool must hold at least two positions or this loop cannot end"
                 );
+                let weights: Vec<u32> = positions
+                    .iter()
+                    .map(|&(string, fret)| self.misses.weight(&Position { string, fret }))
+                    .collect();
 
                 rng.draw_other_than(self.prompt, |rng| {
-                    let (string, fret) = positions[rng.below(positions.len())];
+                    let (string, fret) = positions[rng.weighted(&weights)];
                     Prompt::NameIt { string, fret }
                 })
             }
@@ -257,9 +264,24 @@ impl NoteTrainer {
     /// Takes a pressed answer, unless one is already being marked. Inert while playing,
     /// where a press would be a second way to answer.
     fn answer(&mut self, answer: Answer) {
-        if self.answering == Answering::Pressing {
-            self.score.mark(answer, self.judge(answer));
+        // a press during the flash is ignored by `mark`, and must not count as a second recall
+        if self.answering != Answering::Pressing || self.score.is_flashing() {
+            return;
         }
+
+        let right = self.judge(answer);
+
+        if let Prompt::NameIt { string, fret } = self.prompt {
+            let asked = Position { string, fret };
+            // only the first answer to a prompt moves its weight, so hammering counts once
+            match (right, self.score.wrong().is_empty()) {
+                (true, true) => self.misses.recalled(&asked),
+                (false, true) => self.misses.missed(asked),
+                (_, false) => {}
+            }
+        }
+
+        self.score.mark(answer, right);
     }
 
     /// Answers with a note name — the *Name it* surface.
@@ -1040,6 +1062,108 @@ mod tests {
             b.skip(&mut rng_b);
             assert_eq!(a.prompt, b.prompt);
         }
+    }
+
+    /// The position the current *Name it* prompt lights.
+    fn asked(trainer: &NoteTrainer) -> Position {
+        let Prompt::NameIt { string, fret } = trainer.prompt else {
+            panic!("only Name it lights a position");
+        };
+        at(string, fret)
+    }
+
+    #[test]
+    fn a_wrong_first_answer_weighs_the_position() {
+        let (mut trainer, _) = trainer_with_seed(0x1155);
+        let missed = asked(&trainer);
+
+        trainer.answer(wrong_answer(&trainer));
+
+        assert!(trainer.misses.weight(&missed) > 1);
+    }
+
+    #[test]
+    fn hammering_wrong_answers_counts_as_one_miss() {
+        let (mut once, _) = trainer_with_seed(0x1155);
+        let (mut hammered, _) = trainer_with_seed(0x1155);
+        let missed = asked(&once);
+
+        once.answer(wrong_answer(&once));
+        let actual = prompt_pitch_class(&hammered);
+        PitchClass::ALL
+            .into_iter()
+            .filter(|&pc| pc != actual)
+            .for_each(|pc| hammered.answer_name(pc));
+
+        assert_eq!(hammered.misses.weight(&missed), once.misses.weight(&missed));
+    }
+
+    #[test]
+    fn a_clean_answer_pays_the_miss_down_and_a_late_one_does_not() {
+        let (mut trainer, _) = trainer_with_seed(0x1155);
+        let missed = asked(&trainer);
+        trainer.answer(wrong_answer(&trainer));
+        let owed = trainer.misses.weight(&missed);
+
+        // right after a wrong answer: the miss already counted, so nothing moves
+        trainer.answer(correct_answer(&trainer));
+        assert_eq!(trainer.misses.weight(&missed), owed);
+
+        // the same position asked again and answered first time
+        trainer.score.next_prompt();
+        trainer.answer(correct_answer(&trainer));
+        assert!(trainer.misses.weight(&missed) < owed);
+    }
+
+    #[test]
+    fn a_press_during_the_flash_is_not_a_second_recall() {
+        let (mut trainer, _) = trainer_with_seed(0x1155);
+        let missed = asked(&trainer);
+        trainer.misses.missed(missed);
+        trainer.misses.missed(missed);
+
+        trainer.answer(correct_answer(&trainer));
+        let after_one = trainer.misses.weight(&missed);
+        trainer.answer(correct_answer(&trainer));
+
+        assert_eq!(trainer.misses.weight(&missed), after_one);
+    }
+
+    #[test]
+    fn a_missed_position_comes_back_more_often() {
+        const DRAWS: usize = 3_000;
+        let (mut trainer, mut rng) = trainer_with_seed(0xa9a1);
+        let missed = asked(&trainer);
+        trainer.answer(wrong_answer(&trainer));
+
+        // skips leave the weights alone, so every draw sees the same miss
+        let seen = (0..DRAWS)
+            .filter(|_| {
+                trainer.skip(&mut rng);
+                asked(&trainer) == missed
+            })
+            .count();
+
+        let uniform = DRAWS / trainer.positions().len();
+        assert!(
+            seen > 3 * uniform,
+            "seen {seen} times against {uniform} uniform"
+        );
+    }
+
+    #[test]
+    fn misses_survive_leaving_the_screen() {
+        let mut app = note_trainer_app(0x1155);
+        let missed = asked(&app.note_trainer);
+        let Answer::Name(wrong) = wrong_answer(&app.note_trainer) else {
+            unreachable!("Name it is answered by name");
+        };
+
+        let _ = app.update(Message::AnswerNote(wrong));
+        let _ = app.update(Message::GoBack);
+        let _ = app.update(Message::Navigate(Screen::NoteTrainer));
+
+        assert!(app.note_trainer.misses.weight(&missed) > 1);
     }
 
     /// Answers correctly and lets the flash run its course, as the timer would.

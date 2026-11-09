@@ -1,5 +1,8 @@
 //! What the drills share: direction, scoring, and the twelve interval answers.
 
+use std::collections::HashMap;
+use std::hash::Hash;
+
 use iced::Color;
 
 use crate::music::intervals::Interval;
@@ -224,9 +227,86 @@ impl<A: Copy + PartialEq> Score<A> {
     }
 }
 
+/// What one miss adds to a prompt's weight, on top of the floor of one every prompt has.
+const MISS_DEBT: u32 = 4;
+/// Four misses' worth, so one stubborn prompt cannot crowd the rest of the pool out.
+const MAX_DEBT: u32 = 4 * MISS_DEBT;
+
+/// The prompts the learner has been missing, weighted so the draw comes back to them.
+pub(super) struct Misses<P> {
+    debt: HashMap<P, u32>,
+}
+
+// written out because the derive would require `P: Default`
+impl<P> Default for Misses<P> {
+    fn default() -> Self {
+        Misses {
+            debt: HashMap::new(),
+        }
+    }
+}
+
+impl<P: Eq + Hash> Misses<P> {
+    pub(super) fn missed(&mut self, prompt: P) {
+        let debt = self.debt.entry(prompt).or_default();
+        *debt = (*debt + MISS_DEBT).min(MAX_DEBT);
+    }
+
+    /// Halves the debt, so a prompt is trusted again only after a few clean answers.
+    pub(super) fn recalled(&mut self, prompt: &P) {
+        if let Some(debt) = self.debt.get_mut(prompt) {
+            *debt /= 2;
+        }
+    }
+
+    /// Never zero, so a prompt answered well still comes up and the draw always has a pool.
+    pub(super) fn weight(&self, prompt: &P) -> u32 {
+        1 + self.debt.get(prompt).copied().unwrap_or_default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unmissed_prompt_weighs_one() {
+        assert_eq!(Misses::default().weight(&'a'), 1);
+    }
+
+    #[test]
+    fn a_miss_raises_only_its_own_prompt() {
+        let mut misses = Misses::default();
+        misses.missed('a');
+
+        assert_eq!(misses.weight(&'a'), 1 + MISS_DEBT);
+        assert_eq!(misses.weight(&'b'), 1);
+    }
+
+    #[test]
+    fn the_debt_stops_climbing_at_its_cap() {
+        let mut misses = Misses::default();
+        for _ in 0..10 {
+            misses.missed('a');
+        }
+
+        assert_eq!(misses.weight(&'a'), 1 + MAX_DEBT);
+    }
+
+    #[test]
+    fn clean_answers_pay_the_debt_down_to_the_floor() {
+        let mut misses = Misses::default();
+        misses.missed('a');
+
+        let weights: Vec<u32> = (0..4)
+            .map(|_| {
+                misses.recalled(&'a');
+                misses.weight(&'a')
+            })
+            .collect();
+
+        assert_eq!(weights, [3, 2, 1, 1]);
+    }
 
     #[test]
     fn the_vocabulary_holds_one_button_per_distance() {

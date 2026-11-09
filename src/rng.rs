@@ -49,6 +49,31 @@ impl Rng {
         (self.next_u64() % len as u64) as usize
     }
 
+    /// An index into `weights`, drawn in proportion to them. Equal weights replay `below`'s
+    /// sequence exactly, so weighting a pool changes no seed's draws until a weight moves.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the weights sum to zero.
+    pub fn weighted(&mut self, weights: &[u32]) -> usize {
+        let total: u64 = weights.iter().copied().map(u64::from).sum();
+        assert!(
+            total > 0,
+            "there is nothing to draw from weights summing to zero"
+        );
+
+        let ticket = self.next_u64() % total;
+
+        weights
+            .iter()
+            .scan(0, |end, &weight| {
+                *end += u64::from(weight);
+                Some(*end)
+            })
+            .position(|end| ticket < end)
+            .expect("the ticket is below the total, which is the last running end")
+    }
+
     /// Draws with `draw` until it yields something other than `current`.
     ///
     /// Never returns if `draw` can only produce `current`.
@@ -133,6 +158,42 @@ mod tests {
     #[should_panic(expected = "no index below zero")]
     fn below_zero_panics() {
         Rng::from_seed(1).below(0);
+    }
+
+    #[test]
+    fn equal_weights_replay_below() {
+        let mut weighted = Rng::from_seed(0x5eed);
+        let mut uniform = Rng::from_seed(0x5eed);
+
+        for _ in 0..500 {
+            assert_eq!(weighted.weighted(&[1; 45]), uniform.below(45));
+        }
+    }
+
+    #[test]
+    fn a_zero_weight_is_never_drawn() {
+        let mut rng = Rng::from_seed(11);
+
+        assert!((0..2_000).all(|_| rng.weighted(&[3, 0, 1, 0]).is_multiple_of(2)));
+    }
+
+    #[test]
+    fn draws_follow_the_weights() {
+        let mut rng = Rng::from_seed(0xbeef);
+        let mut counts = [0_u32; 2];
+
+        for _ in 0..4_000 {
+            counts[rng.weighted(&[1, 3])] += 1;
+        }
+
+        // three to one, within a few percent
+        assert!((2.7..3.3).contains(&(f64::from(counts[1]) / f64::from(counts[0]))));
+    }
+
+    #[test]
+    #[should_panic(expected = "weights summing to zero")]
+    fn all_zero_weights_panic() {
+        Rng::from_seed(1).weighted(&[0, 0]);
     }
 
     #[test]
