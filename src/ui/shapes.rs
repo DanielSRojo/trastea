@@ -617,6 +617,104 @@ const SHAPES: &[Shape] = &[
                 degree: 5,
             },
             Muted,
+            Muted,
+            Sounded {
+                offset: 0,
+                degree: 5,
+            },
+            Sounded {
+                offset: 2,
+                degree: 2,
+            },
+        ],
+        base: ChordQuality::Sus2,
+        root_string: 0,
+    },
+    Shape {
+        caged: CagedShape::A,
+        reduction: Some("three strings"),
+        strings: [
+            Muted,
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+            Sounded {
+                offset: 2,
+                degree: 5,
+            },
+            Muted,
+            Sounded {
+                offset: 0,
+                degree: 2,
+            },
+            Muted,
+        ],
+        base: ChordQuality::Sus2,
+        root_string: 1,
+    },
+    Shape {
+        caged: CagedShape::E,
+        reduction: Some("four strings"),
+        strings: [
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+            Muted,
+            Muted,
+            Sounded {
+                offset: 2,
+                degree: 4,
+            },
+            Sounded {
+                offset: 0,
+                degree: 5,
+            },
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+        ],
+        base: ChordQuality::Sus4,
+        root_string: 0,
+    },
+    Shape {
+        caged: CagedShape::A,
+        reduction: Some("three strings"),
+        strings: [
+            Muted,
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+            Sounded {
+                offset: 2,
+                degree: 5,
+            },
+            Muted,
+            Sounded {
+                offset: 3,
+                degree: 4,
+            },
+            Muted,
+        ],
+        base: ChordQuality::Sus4,
+        root_string: 1,
+    },
+    Shape {
+        caged: CagedShape::E,
+        reduction: Some("four strings"),
+        strings: [
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+            Sounded {
+                offset: 2,
+                degree: 5,
+            },
+            Muted,
             Sounded {
                 offset: 1,
                 degree: 3,
@@ -646,6 +744,52 @@ const SHAPES: &[Shape] = &[
                 offset: 2,
                 degree: 5,
             },
+            Muted,
+            Sounded {
+                offset: 2,
+                degree: 3,
+            },
+            Sounded {
+                offset: 2,
+                degree: 6,
+            },
+        ],
+        base: ChordQuality::Major6,
+        root_string: 1,
+    },
+    Shape {
+        caged: CagedShape::E,
+        reduction: Some("three strings"),
+        strings: [
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+            Muted,
+            Muted,
+            Sounded {
+                offset: 1,
+                degree: 3,
+            },
+            Sounded {
+                offset: 2,
+                degree: 6,
+            },
+            Muted,
+        ],
+        base: ChordQuality::Major6,
+        root_string: 0,
+    },
+    Shape {
+        caged: CagedShape::A,
+        reduction: Some("three strings"),
+        strings: [
+            Muted,
+            Sounded {
+                offset: 0,
+                degree: 1,
+            },
+            Muted,
             Muted,
             Sounded {
                 offset: 2,
@@ -1126,7 +1270,13 @@ mod tests {
             "E shape, four strings",
             "A shape, three strings",
             "E shape, four strings",
+            "A shape, three strings",
+            "E shape, four strings",
+            "A shape, three strings",
+            "E shape, four strings",
             "A shape, four strings",
+            "E shape, three strings",
+            "A shape, three strings",
             "E shape, four strings",
             "A shape, four strings",
         ];
@@ -1372,6 +1522,54 @@ mod tests {
                 ChordQuality::Dominant7,
                 "G shape",
                 &[Some(3), Some(2), Some(0), Some(0), Some(0), Some(1)],
+            ),
+            (
+                4,
+                ChordQuality::Sus2,
+                "E shape, four strings",
+                &[Some(0), Some(2), None, None, Some(0), Some(2)],
+            ),
+            (
+                9,
+                ChordQuality::Sus2,
+                "A shape, three strings",
+                &[None, Some(0), Some(2), None, Some(0), None],
+            ),
+            (
+                4,
+                ChordQuality::Sus4,
+                "E shape, four strings",
+                &[Some(0), None, None, Some(2), Some(0), Some(0)],
+            ),
+            (
+                9,
+                ChordQuality::Sus4,
+                "A shape, three strings",
+                &[None, Some(0), Some(2), None, Some(3), None],
+            ),
+            (
+                4,
+                ChordQuality::Major6,
+                "E shape, three strings",
+                &[Some(0), None, None, Some(1), Some(2), None],
+            ),
+            (
+                9,
+                ChordQuality::Major6,
+                "A shape, three strings",
+                &[None, Some(0), None, None, Some(2), Some(2)],
+            ),
+            (
+                4,
+                ChordQuality::Minor6,
+                "E shape, three strings",
+                &[Some(0), None, None, Some(0), Some(2), None],
+            ),
+            (
+                9,
+                ChordQuality::Minor6,
+                "A shape, three strings",
+                &[None, Some(0), None, None, Some(1), Some(2)],
             ),
         ];
 
@@ -1929,7 +2127,7 @@ mod tests {
             .map(|(root, kind)| voicings(Chord::new(root, kind), &DRILL_NECK).len())
             .sum();
 
-        assert_eq!(total, 699);
+        assert_eq!(total, 786);
     }
 
     #[test]

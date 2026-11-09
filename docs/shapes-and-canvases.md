@@ -33,6 +33,15 @@ which left ten of the twelve major sixths with no shape at all. Dropping a strin
 doubled note nobody misses and takes the A-shape sixth from two playable placements to
 twenty-two.
 
+The suspensions and sixths then got reductions too. Every root already had a full sus shape and
+a sixth that fit the hand, so these add voicings that are lighter to finger rather than ones
+that were missing. They follow the major triad's pattern: the E shape on four strings and the A
+shape on three. The E-shape sus2 drops the D string rather than following `1 x x 3 5 1`, because
+the 2 would sit a fret below the root on the G string. The three-string sixths leave out the
+fifth (`0 x x 1 2 x`, `x 0 x x 2 2`), so they keep only root, third and sixth, and one Major6
+entry per shape serves m6 by flattening the third. Together these take the library from 699
+voicings to 786: 22 for sus2, 21 for sus4, and 22 each for 6 and m6.
+
 ## Placement
 
 `Shape::place` refuses a quality missing a degree the shape holds. Altering `3` into `♭3` moves
@@ -53,7 +62,7 @@ elsewhere.
 
 `shapes::voicings` tries each shape at every fret rather than the first that fits, because a
 shape repeats an octave up and both placements are worth showing. Across every root and quality
-on `DRILL_NECK` the library offers 699 voicings; that count did not change when the module
+on `DRILL_NECK` the library offers 786 voicings; the count did not change when the module
 learned to carry a shape's fingering, since fingerability is a property of the placement and not
 of the numbering.
 
